@@ -22,7 +22,7 @@ FREE_MIN = 4 * GB      # 3 ГБ неприкосновенного запаса 
 BANNER_FREE = 3 * GB   # баннер на каталоге
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 EXPIRED_SUBJECT = "appshelf: нужен вход в Apple ID"
-LOW_SPACE_SUBJECT = "appshelf: мало места на debian"
+LOW_SPACE_SUBJECT = f"appshelf: мало места на {notify.HOST}"
 
 
 class LowSpace(Exception):

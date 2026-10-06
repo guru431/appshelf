@@ -1,6 +1,7 @@
 import errno
 import os
 import plistlib
+import socket
 from pathlib import Path
 
 from appshelf import jobs, store
@@ -72,7 +73,7 @@ def test_low_space_fails_job_and_mails_once(ctx, cfg, conn, clock, tmp_path):
     w.tick()
     apps = store.list_apps(conn)
     assert [a.status for a in apps] == ["error", "error"] and "мало места" in apps[0].last_error
-    assert ctx.sent == ["appshelf: мало места на debian"]
+    assert ctx.sent == [f"appshelf: мало места на {socket.gethostname()}"]
     assert all(c[0] != "download" for c in ctx.tool.calls)
     ctx.free["bytes"] = 50 * GB
     ctx.tool.ipas[1] = make_ipa(tmp_path / "a.ipa", item_id=1)

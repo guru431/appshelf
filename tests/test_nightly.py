@@ -1,3 +1,5 @@
+import socket
+
 from appshelf import jobs, nightly, store
 from appshelf.config import GB
 from appshelf.ipatool import SessionExpired
@@ -60,7 +62,7 @@ def test_low_space_skips_download(ctx, cfg, conn, clock):
     assert "ошибок 1" in nightly.run(ctx.env, conn)
     assert store.list_apps(conn)[0].status == "error"
     assert store.current_version(conn, 123)["external_version_id"] == "900"
-    assert ctx.sent == ["appshelf: мало места на debian"]
+    assert ctx.sent == [f"appshelf: мало места на {socket.gethostname()}"]
 
 
 def test_failed_publish_is_retried(ctx, cfg, conn, clock, tmp_path):

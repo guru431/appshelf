@@ -1,13 +1,15 @@
 """Письма владельцу: одно на эпизод (метка в state), через локальный sendmail (exim4)."""
 from __future__ import annotations
 
+import socket
 import subprocess
 import traceback
 from email.message import EmailMessage
 
 from . import store
 
-MAIL_FROM = '"[debian] appshelf" <appshelf@debian>'
+HOST = socket.gethostname()
+MAIL_FROM = f'"[{HOST}] appshelf" <appshelf@{HOST}>'
 EXPIRED_KEY = "expired_mail_sent"
 LOW_SPACE_KEY = "low_space_mail_sent"
 
