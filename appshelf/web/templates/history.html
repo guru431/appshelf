@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block main %}
+<form method="post" action="/history/refresh" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+  <button>Обновить историю</button>
+  <span class="meta">{% if refreshing and session.session != 'ok' %}ждёт входа в Apple ID
+    {%- elif refreshing == 'refresh_history' %}обновляется…
+    {%- elif refreshing == 'check_removed' %}история обновлена, проверяю справочник удалённых…
+    {%- elif refreshed %}обновлено {{ refreshed[:16] | replace('T', ' ') }} UTC{% else %}ещё не загружалась{% endif %}</span>
+</form>
+{% if refresh_error and not refreshing %}<p class="err">Последний раз не удалось обновить ({{ refresh_error_at[:16] | replace('T', ' ') }} UTC): {{ refresh_error }}</p>{% endif %}
+<p class="hint">Удалённых из App Store приложений Apple в истории не показывает — те, что есть у вашего Apple ID,
+добавляются сюда из справочника (метка «удалено из App Store»). Весь справочник и добавление по ссылке —
+на странице <a href="/blocked">«Удалённые»</a>.</p>
+<form method="get" action="/history">
+  <input name="q" value="{{ q }}" placeholder="Поиск по названию, bundle id, vk/max/sber…">
+  <input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}">
+</form>
+<div class="sortbar"><span class="meta">Сортировка:</span>
+  {% for label, url, arrow in sort_links %}<a href="{{ url }}"{% if arrow %} class="on"{% endif %}>{{ label }}{{ arrow }}</a>{% endfor %}
+</div>
+<table>
+{% for r in rows %}
+<tr>
+  <td><b>{{ r['name'] }}</b><div class="meta">
+    {%- if r['version'] %}{{ r['version'] }} · {% endif -%}
+    {%- if r['bundle_id'] %}{{ r['bundle_id'] }}{% if r['purchase_date'] %} · {{ r['purchase_date'][:10] }}{% endif %}
+    {%- else %}<span class="tag">удалено из App Store</span> ID {{ r['app_id'] }}{% endif %}</div></td>
+  <td style="text-align:right">{% if r['published'] %}<span class="meta">в каталоге</span>{% else %}
+    <form method="post" action="/apps/{{ r['app_id'] }}/publish"><button>Опубликовать</button></form>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td class="hint">{{ 'Ничего не найдено' if q else 'История пуста — нажмите «Обновить историю» (нужен вход в Apple ID).' }}</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

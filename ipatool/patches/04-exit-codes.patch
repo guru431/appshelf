@@ -1,0 +1,245 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index 72028c3..f6ea99a 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -1608,8 +1608,13 @@ AppStore::BagOutput AppStore::fetch_bag_impl(const std::string& guid) {
+         fprintf(stderr, "[DEBUG] bag status: %d (%zu bytes)\n",
+                 res.statusCode, res.body.size());
+ 
+-    if (res.statusCode != 200)
++    if (res.statusCode != 200) {
++        // appshelf (04-exit-codes): an empty 204/301/403/404 is Apple's edge refusing this address
++        if (res.body.empty() && (res.statusCode == 204 || res.statusCode == 301
++                                 || res.statusCode == 403 || res.statusCode == 404))
++            throw EdgeRejected(res.statusCode);
+         throw IpaError("bag request failed: " + std::to_string(res.statusCode));
++    }
+ 
+     PlistDict d = decode_plist(res.body);
+ 
+@@ -1841,14 +1846,22 @@ Account AppStore::do_login(const std::string& email,
+             retry = true;
+         } else if (attempt == 1 && failureType == FAILURE_INVALID_CREDENTIALS) {
+             retry = true;
++        } else if (failureType == FAILURE_INVALID_CREDENTIALS) {            // appshelf 04
++            throw InvalidCredentials();
+         } else if (failureType.empty() && authCode.empty()
+                    && customerMessage == CUSTOMER_MSG_BAD_LOGIN) {
+             throw AuthCodeRequired();
++        } else if (failureType.empty() && !authCode.empty()                 // appshelf 04: wrong 2FA code
++                   && customerMessage == CUSTOMER_MSG_BAD_LOGIN) {
++            throw InvalidCredentials();
+         } else if (failureType.empty()
+                    && customerMessage == CUSTOMER_MSG_ACCOUNT_DISABLED) {
+             throw IpaError("account is disabled");
+         } else if (!failureType.empty()) {
+             throw IpaError(!customerMessage.empty() ? customerMessage : "something went wrong");
++        } else if (lastRes.body.empty() && (lastRes.statusCode == 204 || lastRes.statusCode == 301
++                   || lastRes.statusCode == 403 || lastRes.statusCode == 404)) {   // appshelf 04
++            throw EdgeRejected(lastRes.statusCode);
+         } else if (lastRes.statusCode != 200
+                    || dict_str(lastData, "passwordToken").empty()
+                    || dict_str(lastData, "dsPersonId").empty()) {
+diff --git a/ipatool.h b/ipatool.h
+index e763ae3..81d1927 100644
+--- a/ipatool.h
++++ b/ipatool.h
+@@ -113,3 +113,9 @@ struct LicenseRequired     : IpaError { LicenseRequired()     : IpaError("licens
+ struct PasswordTokenExpired: IpaError { PasswordTokenExpired(): IpaError("password token is expired") {} };
+ struct SubscriptionRequired: IpaError { SubscriptionRequired(): IpaError("subscription required") {} };
+ struct PaidAppNotSupported : IpaError { PaidAppNotSupported() : IpaError("purchasing paid apps is not supported") {} };
++// appshelf (04-exit-codes): login refusals the web wrapper shows as distinct texts.
++struct EdgeRejected : IpaError {
++    explicit EdgeRejected(int status)
++        : IpaError("Apple refused the request at the edge (HTTP " + std::to_string(status) + ", empty body)") {}
++};
++struct InvalidCredentials : IpaError { InvalidCredentials() : IpaError("invalid Apple ID password or 2FA code") {} };
+diff --git a/main.cpp b/main.cpp
+index 6581b30..dbac47c 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -548,14 +548,37 @@ static void print_red_err(const std::string& msg) {
+ #endif
+ }
+ 
++// appshelf (04-exit-codes): exit codes for the web wrapper —
++//   0 success, 3 session_expired, 4 auth_code_required, 5 license_not_found, 1 anything else.
++// With --format json the error goes to stdout as {"error":"<code>","message":"…"}.
++[[noreturn]] static void fail(int code, const std::string& error, const std::string& message) {
++    if (g_format == "json") {
++        json j;
++        j["error"]   = error;
++        j["message"] = message;
++        std::cout << j.dump(-1, ' ', false, json::error_handler_t::replace) << "\n" << std::flush;
++    } else {
++        print_red_err("Error: " + message + "\n");
++    }
++    exit(code);
++}
++
++[[noreturn]] static void fail_from(const std::exception& e) {
++    if (dynamic_cast<const PasswordTokenExpired*>(&e)) fail(3, "session_expired", e.what());
++    if (dynamic_cast<const AuthCodeRequired*>(&e))     fail(4, "auth_code_required", e.what());
++    if (dynamic_cast<const LicenseRequired*>(&e))      fail(5, "license_not_found", e.what());
++    if (dynamic_cast<const EdgeRejected*>(&e))         fail(1, "edge_rejected", e.what());
++    if (dynamic_cast<const InvalidCredentials*>(&e))   fail(1, "invalid_credentials", e.what());
++    fail(1, "error", e.what());
++}
++
+ // appshelf (01-no-stored-password): the password is not stored, so there is
+ // nothing to re-login with. Every caller that used to retry after a silent
+ // re-login now ends the process with exit code 3 (session expired) and the web
+ // wrapper asks the owner to log in again. Kept as a function so the call sites
+ // stay untouched and the patch rebases onto new upstream commits easily.
+ [[noreturn]] static void session_expired() {
+-    print_red_err("Error: session expired. Please log in again.\n");
+-    exit(3);
++    fail(3, "session_expired", "session expired, log in again");
+ }
+ 
+ static bool silent_relogin(Account&, const std::string&) {
+@@ -621,10 +644,7 @@ static void cmd_login(const Args& args) {
+         if (interactive) {
+             email = read_line("Enter email: ");
+         }
+-        if (email.empty()) {
+-            std::cerr << "Error: email is required. Use -e EMAIL\n";
+-            exit(1);
+-        }
++        if (email.empty()) fail(1, "usage", "email is required (-e EMAIL)");
+     }
+ 
+     // password: prompt with hidden input if not supplied and interactive
+@@ -632,10 +652,7 @@ static void cmd_login(const Args& args) {
+         if (interactive) {
+             password = read_hidden("Enter password: ");
+         }
+-        if (password.empty()) {
+-            std::cerr << "Error: password is required when not running interactively. Use -p PASSWORD\n";
+-            exit(1);
+-        }
++        if (password.empty()) fail(1, "usage", "password is required (-p PASSWORD or --password-stdin)");
+     }
+ 
+     AppStore store(COOKIE_FILE);
+@@ -679,15 +696,12 @@ static void cmd_login(const Args& args) {
+                     authCode.pop_back();
+                 continue; // retry with code
+             }
+-            std::cerr << "Error: two-factor auth code required. Retry with --auth-code CODE\n";
+-            exit(1);
++            fail(4, "auth_code_required", "two-factor auth code required, retry with --auth-code CODE");
+         } catch (const std::exception& e) {
+-            print_red_err(std::string("Login error: ") + e.what() + "\n");
+-            exit(1);
++            fail_from(e);
+         }
+     }
+-    print_red_err("Login failed after retry.\n");
+-    exit(1);
++    fail(1, "error", "login failed after retry");
+ }
+ 
+ static void cmd_search(const Args& args) {
+@@ -826,7 +840,7 @@ static void cmd_list_versions(const Args& args) {
+     bool acquireLicense = (get(args, "purchase") == "true");
+ 
+     Account acc;
+-    if (!load_account(acc, passphrase)) { std::cerr << "Not logged in.\n"; exit(1); }
++    if (!load_account(acc, passphrase)) fail(3, "not_logged_in", "not logged in");
+ 
+     AppStore store(COOKIE_FILE);
+     if (get(args, "debug") == "true") store.set_debug(true);
+@@ -857,6 +871,7 @@ static void cmd_list_versions(const Args& args) {
+ 
+         json j;
+         j["externalVersionIdentifiers"] = out.externalVersionIdentifiers;
++        j["latestExternalVersionID"]    = out.latestExternalVersionID;   // appshelf 04
+         j["bundleID"]                   = app.bundleID;
+         j["success"]                    = true;
+         log_output(j);
+@@ -902,19 +917,11 @@ static void cmd_list_versions(const Args& args) {
+             run();
+         }
+     } catch (const LicenseRequired&) {
+-        if (!acquireLicense) {
+-            print_red_err("Error: you must purchase this app first.\n");
+-            if (!bundleID.empty())
+-                print_red_err("Run: ipatool purchase -b " + bundleID + "\n");
+-            else
+-                print_red_err("Run: ipatool search to find the bundle ID, then: ipatool purchase -b BUNDLE_ID\n");
+-            print_red_err("Or re-run with --purchase to acquire the license automatically.\n");
+-            exit(1);
+-        }
++        if (!acquireLicense)
++            fail(5, "license_not_found", "this Apple ID has no license for the app");
+         purchaseAndRetry();
+     } catch (const std::exception& e) {
+-        print_red_err(std::string("Error: ") + e.what() + "\n");
+-        exit(1);
++        fail_from(e);
+     }
+ }
+ 
+@@ -1111,10 +1118,7 @@ static void cmd_download(const Args& args) {
+     }
+ 
+     Account acc;
+-    if (!load_account(acc, passphrase)) {
+-        std::cerr << "Not logged in.\n";
+-        exit(1);
+-    }
++    if (!load_account(acc, passphrase)) fail(3, "not_logged_in", "not logged in");
+ 
+     AppStore store(COOKIE_FILE);
+     if (get(args, "debug") == "true") store.set_debug(true);
+@@ -1314,15 +1318,8 @@ static void cmd_download(const Args& args) {
+         dlOut["success"]   = true;
+         log_output(dlOut);
+     } catch (const LicenseRequired&) {
+-        if (!acquireLicense) {
+-            print_red_err("Error: you must purchase this app first.\n");
+-            if (!bundleID.empty())
+-                print_red_err("Run: ipatool purchase -b " + bundleID + "\n");
+-            else
+-                print_red_err("Run: ipatool search to find the bundle ID, then: ipatool purchase -b BUNDLE_ID\n");
+-            print_red_err("Or re-run with --purchase to acquire the license automatically.\n");
+-            exit(1);
+-        }
++        if (!acquireLicense)
++            fail(5, "license_not_found", "this Apple ID has no license for the app");
+         // --purchase flag: acquire license then retry download once.
+         // Apple returns the download URL in the purchase response for paid apps —
+         // if songList is present we use it directly, otherwise retry volumeStore.
+@@ -1418,8 +1415,7 @@ static void cmd_download(const Args& args) {
+             exit(1);
+         }
+     } catch (const std::exception& e) {
+-        print_red_err(std::string("Download error: ") + e.what() + "\n");
+-        exit(1);
++        fail_from(e);
+     }
+ }
+ 
+@@ -1431,10 +1427,7 @@ static void cmd_list_purchases(const Args& args) {
+     std::string passphrase = get(args, "keychain-passphrase", "");
+ 
+     Account acc;
+-    if (!load_account(acc, passphrase)) {
+-        std::cerr << "Not logged in.\n";
+-        exit(1);
+-    }
++    if (!load_account(acc, passphrase)) fail(3, "not_logged_in", "not logged in");
+ 
+     AppStore store(COOKIE_FILE);
+     if (get(args, "debug") == "true") store.set_debug(true);
+@@ -1445,8 +1438,7 @@ static void cmd_list_purchases(const Args& args) {
+     } catch (const PasswordTokenExpired&) {
+         silent_relogin(acc, passphrase);
+     } catch (const std::exception& e) {
+-        print_red_err(std::string("list-purchases error: ") + e.what() + "\n");
+-        exit(1);
++        fail_from(e);
+     }
+ 
+     json out = json::array();

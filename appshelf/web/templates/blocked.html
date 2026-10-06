@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block main %}
+<p>Удалённые из App Store приложения (банки и их клоны, VK, МАКС…): Apple их не показывает в истории покупок,
+но то, что есть у вашего Apple ID, скачивается. Серые — нет в вашем аккаунте или ещё не проверены.</p>
+<p class="meta">Есть в аккаунте: {{ counts.owned }} · нет в аккаунте: {{ counts.missing }} · не проверено: {{ counts.unknown }}</p>
+<form method="post" action="/blocked/check" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+  <button>Проверить новые</button>
+  <span class="meta">{% if checking %}{{ 'проверяю…' if session.session == 'ok' else 'ждёт входа в Apple ID' }}{% else %}всё заново проверяет ночная проверка в 04:30{% endif %}</span>
+</form>
+<form method="get" action="/blocked"><input name="q" value="{{ q }}" placeholder="Поиск: сбер, vk, max, тинькофф…"></form>
+<table>
+{% for i in items %}
+<tr class="row{{ ' inactive' if i.status != 'owned' }}">
+  <td><b>{{ i.name }}</b><div class="meta">
+    {%- if i.version %}{{ i.version }} · {% endif -%}
+    {%- if i.name != i.catalog_name %}{{ i.catalog_name }} · {% endif -%}
+    ID {{ i.id }} · {{ {'owned': 'есть в аккаунте', 'missing': 'нет в аккаунте', 'unknown': 'не проверено'}[i.status] }}</div></td>
+  <td style="text-align:right">{% if i.status == 'owned' %}{% if i.published %}<span class="meta">в каталоге</span>{% else %}
+    <form method="post" action="/apps/{{ i.id }}/publish"><button>Опубликовать</button></form>{% endif %}{% endif %}</td>
+</tr>
+{% else %}
+<tr><td class="hint">Ничего не найдено</td></tr>
+{% endfor %}
+</table>
+<form method="post" action="/blocked/add">
+  <p class="hint">Нет в справочнике — вставьте ссылку App Store или ID приложения.</p>
+  <div style="display:flex;gap:8px"><input name="ref" value="{{ add_ref }}" placeholder="apps.apple.com/ru/app/…/id492224193 или 492224193" style="margin:0"><button>Добавить</button></div>
+  {% if add_error %}<p class="err">{{ add_error }}</p>{% endif %}
+</form>
+{% endblock %}

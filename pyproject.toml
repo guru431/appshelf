@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appshelf"
+version = "0.1.0"
+description = "Своя полка приложений iPhone: IPA из истории покупок Apple ID → OTA-установка из Safari"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "jinja2>=3.1",
+    "pillow>=10",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-timeout>=2.3", "httpx2"]
+
+[project.scripts]
+appshelf = "appshelf.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["appshelf*"]
+
+[tool.setuptools.package-data]
+"appshelf" = ["data/*.json"]
+"appshelf.web" = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration and not manual'"
+# pytest-timeout: зависший тест падает за 30 с со стеком, а не держит прогон
+timeout = 30
+markers = [
+    "integration: ходит на debian и в Apple (bin/ipatool по SSH)",
+    "manual: запускается руками",
+]

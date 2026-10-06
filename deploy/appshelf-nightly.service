@@ -1,0 +1,15 @@
+[Unit]
+Description=appshelf — ночная проверка новых версий
+After=network-online.target remote-fs.target
+
+[Service]
+Type=oneshot
+User=appshelf
+Group=appshelf
+WorkingDirectory=/var/_sh/appshelf
+EnvironmentFile=/etc/appshelf/appshelf.env
+UMask=0077
+LimitCORE=0
+ExecStart=/var/_sh/appshelf/.venv/bin/python -m appshelf nightly
+# скачивания по 30 мин на приложение и ожидание блокировки ipatool
+TimeoutStartSec=4h

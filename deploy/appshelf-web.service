@@ -1,0 +1,30 @@
+[Unit]
+Description=appshelf — своя полка приложений iPhone
+# архив IPA может быть сетевой шарой из fstab; без неё каталог работает, публикация ждёт с ошибкой
+After=network-online.target remote-fs.target
+
+[Service]
+User=appshelf
+Group=appshelf
+WorkingDirectory=/var/_sh/appshelf
+EnvironmentFile=/etc/appshelf/appshelf.env
+# Только unix-сокет, без TCP: 127.0.0.1 бывает достижим клиентам VPN на том же сервере. Граница —
+# /run/appshelf 0750 appshelf:www-data: войти могут appshelf, root и Apache. www-data НЕ в группе
+# appshelf: иначе RCE в любом PHP-сайте читало бы /etc/appshelf/appshelf.env с PUB_TOKEN.
+# Сокет uvicorn делает 0666; www-data — это и php-fpm, поэтому пароль проверяет и само приложение.
+RuntimeDirectory=appshelf
+RuntimeDirectoryMode=0750
+# Перед каждой своей командой systemd возвращает каталогу владельца appshelf:appshelf, а ExecStartPost
+# при Type=simple идёт параллельно подготовке ExecStart: под нагрузкой chgrp затирался (2026-10-05).
+# Ждём сокет — uvicorn уже поднялся, подготовка позади; заодно restart возвращается готовым.
+ExecStartPost=+/bin/sh -c 'until [ -S /run/appshelf/web.sock ]; do sleep 0.1; done; chgrp www-data /run/appshelf'
+# пароль шага входа живёт в памяти — дамп памяти не должен лечь на диск
+LimitCORE=0
+# Данные и токен магазина — только владельцу; публичные файлы /d/ jobs.py открывает явно (0644/0755)
+UMask=0077
+# Один процесс обязателен: пароль между шагами входа и обработчик заданий живут в его памяти
+ExecStart=/var/_sh/appshelf/.venv/bin/uvicorn --factory appshelf.web.app:main --uds /run/appshelf/web.sock --workers 1 --log-level warning
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

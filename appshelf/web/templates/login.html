@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block main %}
+<form method="post" action="/login" style="max-width:360px;margin:24px auto">
+  <p><b>appshelf</b></p>
+  <label>Логин<input name="user" value="admin" autocomplete="username" autocapitalize="off"></label>
+  <label>Пароль<input name="password" type="password" autocomplete="current-password" autofocus></label>
+  <input type="hidden" name="next" value="{{ next }}">
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  <button>Войти</button>
+  <p class="hint">Вход запоминается на год на этом устройстве (и в приложении на экране «Домой»).</p>
+</form>
+{% endblock %}

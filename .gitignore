@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+!.env.example
+# Денилисты публикации в github (github-push) — локальные, в них внутренние имена
+.sanitize-patterns*
+.github-push-deny
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+# Claude / IDE (копии claude-switch, локальные настройки)
+.claude/
+.idea/
+.vscode/
+# Рабочая копия upstream ipatool-cpp для правки патчей
+.work/
+# Рабочие файлы исполнения планов (superpowers)
+.superpowers/

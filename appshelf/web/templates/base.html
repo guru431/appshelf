@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru"{% if theme %} data-theme="{{ theme }}"{% endif %}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>appshelf</title>
+<link rel="manifest" href="/pwa/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/pwa/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="appshelf">
+{% if theme %}<meta name="theme-color" content="{{ '#f2f2f7' if theme == 'light' else '#111111' }}">
+{% else %}<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">{% endif %}
+<style>
+/* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в шапке */
+:root { color-scheme: dark; --bg: #111; --card: #1c1c1e; --line: #2c2c2e; --fg: #f2f2f7; --muted: #8e8e93;
+        --accent: #0a84ff; --err: #ff453a; --warn: #ffd60a; --banner: #3a2e00; --input: #000; --inputline: #3a3a3c; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f2f2f7; --card: #fff; --line: #d1d1d6; --fg: #000;
+        --muted: #6c6c70; --accent: #007aff; --err: #d70015; --warn: #7a5c00; --banner: #fff4ce; --input: #fff; --inputline: #c7c7cc; }
+}
+:root[data-theme="light"] { color-scheme: light; --bg: #f2f2f7; --card: #fff; --line: #d1d1d6; --fg: #000;
+        --muted: #6c6c70; --accent: #007aff; --err: #d70015; --warn: #7a5c00; --banner: #fff4ce; --input: #fff; --inputline: #c7c7cc; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+header a { color: var(--fg); text-decoration: none; }
+header a.on { color: var(--accent); }
+header .session { margin-left: auto; color: var(--muted); font-size: 14px; }
+main { max-width: 720px; margin: 0 auto; padding: 16px; }
+a { color: var(--accent); }
+.banner { background: var(--banner); color: var(--warn); padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; }
+.card { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+.card img, .card .noicon { width: 60px; height: 60px; border-radius: 13px; flex: none; background: var(--line); }
+.card .body { flex: 1; min-width: 0; }
+.meta, .hint { color: var(--muted); font-size: 14px; }
+.err { color: var(--err); }
+button, .btn { display: inline-block; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+               padding: 8px 14px; font-size: 16px; text-decoration: none; }
+button.secondary { background: var(--line); }
+input { width: 100%; margin: 6px 0 12px; padding: 10px; font-size: 16px; color: var(--fg); background: var(--input);
+        border: 1px solid var(--inputline); border-radius: 10px; }
+details summary { list-style: none; cursor: pointer; color: var(--muted); padding: 4px 8px; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sortbar { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 14px; margin: 4px 0 8px; }
+.sortbar a { text-decoration: none; }
+.sortbar a.on { font-weight: 600; }
+.row.inactive { opacity: .45; }
+.tag { font-size: 12px; padding: 1px 6px; border-radius: 6px; background: var(--line); color: var(--muted); }
+.theme { font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+{% if nav != 'login' %}
+<header>
+  <a href="/" class="{{ 'on' if nav == 'catalog' }}">Каталог</a>
+  <a href="/history" class="{{ 'on' if nav == 'history' }}">История</a>
+  <a href="/blocked" class="{{ 'on' if nav == 'blocked' }}">Удалённые</a>
+  <a href="/apple" class="{{ 'on' if nav == 'apple' }}">Apple ID</a>
+  <span class="session">
+    {%- if session.session == 'ok' %}{{ session.account_name }} · {{ session.storefront }}
+    {%- elif session.session == 'expired' %}<span class="err">вход истёк</span>
+    {%- else %}нет входа{% endif -%}
+  </span>
+  <span class="theme">Тема:
+    <a href="/theme?set=auto"{% if not theme %} class="on"{% endif %}>авто</a>
+    <a href="/theme?set=light"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
+    <a href="/theme?set=dark"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a></span>
+</header>
+{% endif %}
+<main>{% block main %}{% endblock %}</main>
+{% if busy %}
+<script>
+(function () {
+  var seen = {{ statuses | default('null') | safe }};
+  setInterval(function () {
+    fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (!s.busy || (seen !== null && JSON.stringify(s.apps) !== JSON.stringify(seen))) location.reload();
+    }).catch(function () {});
+  }, 3000);
+})();
+</script>
+{% endif %}
+</body>
+</html>

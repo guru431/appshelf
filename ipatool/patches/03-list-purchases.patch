@@ -1,0 +1,316 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index aa40c7f..72028c3 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -2476,3 +2476,210 @@ AppStore::DownloadOutput AppStore::download_mac(const Account& acc, const App& a
+     if (m_debug) fprintf(stderr, "[DEBUG] macOS pkg saved: %s\n", dest.c_str());
+     return { dest, sinfs };
+ }
++
++// ─────────────────────────────────────────────────────────────────────────────
++// appshelf (03-list-purchases): purchase history over DAAP.
++// Port of ipatool v2.5.0 pkg/appstore/appstore_owned_apps.go.
++// ─────────────────────────────────────────────────────────────────────────────
++#include <functional>
++
++namespace {
++
++constexpr const char* PURCHASE_DAAP_BASE =
++    "https://pd.itunes.apple.com/WebObjects/MZPurchaseDaap.woa/purchase";
++// mediaKind 131072 = iOS apps; the backslashes belong to the DAAP query syntax
++constexpr const char* OWNED_APPS_QUERY =
++    "('com.apple.itunes.extended\\-media\\-kind:131072')";
++
++using DmapVisit = std::function<void(const std::string&, const uint8_t*, size_t)>;
++
++bool dmap_is_container(const std::string& tag) {
++    static const std::set<std::string> kContainers = {
++        "adbs", "adsr", "aply", "avdb", "mbcl", "mccr", "mcty",
++        "mdcl", "mlcl", "mlit", "mlog", "msrv", "mupd"};
++    return kContainers.count(tag) != 0;
++}
++
++void dmap_walk(const uint8_t* data, size_t size, int depth, const DmapVisit& visit) {
++    if (depth > 16) throw IpaError("DMAP nesting is too deep");
++    size_t off = 0;
++    while (off < size) {
++        if (size - off < 8) throw IpaError("truncated DMAP tag header");
++        for (int i = 0; i < 4; ++i)
++            if (data[off + i] < 0x20 || data[off + i] > 0x7e)
++                throw IpaError("invalid DMAP tag");
++        std::string tag(reinterpret_cast<const char*>(data + off), 4);
++        uint64_t len = (uint64_t(data[off + 4]) << 24) | (uint64_t(data[off + 5]) << 16)
++                     | (uint64_t(data[off + 6]) << 8)  |  uint64_t(data[off + 7]);
++        if (len > size - off - 8)
++            throw IpaError("DMAP tag " + tag + " exceeds the response length");
++        const uint8_t* payload = data + off + 8;
++        visit(tag, payload, (size_t)len);
++        if (dmap_is_container(tag)) dmap_walk(payload, (size_t)len, depth + 1, visit);
++        off += 8 + (size_t)len;
++    }
++}
++
++uint64_t dmap_uint(const std::string& tag, const uint8_t* p, size_t n) {
++    if (n != 4 && n != 8)
++        throw IpaError("DMAP tag " + tag + " has invalid integer length " + std::to_string(n));
++    uint64_t v = 0;
++    for (size_t i = 0; i < n; ++i) v = (v << 8) | p[i];
++    return v;
++}
++
++bool dmap_first_uint(const std::string& body, const char* target, uint64_t& out) {
++    bool found = false;
++    dmap_walk(reinterpret_cast<const uint8_t*>(body.data()), body.size(), 0,
++              [&](const std::string& tag, const uint8_t* p, size_t n) {
++                  if (found || tag != target) return;
++                  out = dmap_uint(tag, p, n);
++                  found = true;
++              });
++    return found;
++}
++
++std::string dmap_tag(const char* name, const std::string& payload) {
++    std::string out(name, 4);
++    uint32_t n = (uint32_t)payload.size();
++    out += (char)(n >> 24); out += (char)(n >> 16); out += (char)(n >> 8); out += (char)n;
++    return out + payload;
++}
++
++std::string dmap_u32(const char* name, uint32_t v) {
++    std::string p;
++    p += (char)(v >> 24); p += (char)(v >> 16); p += (char)(v >> 8); p += (char)v;
++    return dmap_tag(name, p);
++}
++
++// HTTP or DAAP status 401/403 → the session token is no longer valid.
++void daap_check(const char* label, const HttpResponse& res) {
++    if (res.statusCode == 401 || res.statusCode == 403) throw PasswordTokenExpired();
++    if (res.statusCode != 200)
++        throw IpaError(std::string(label) + " request returned HTTP " + std::to_string(res.statusCode));
++    uint64_t status = 0;
++    if (dmap_first_uint(res.body, "mstt", status)) {
++        if (status == 401 || status == 403) throw PasswordTokenExpired();
++        if (status != 200)
++            throw IpaError(std::string(label) + " response returned DAAP status " + std::to_string(status));
++    }
++}
++
++std::map<std::string, std::string> daap_headers(const Account& acc, const std::string& guid) {
++    std::time_t now = std::time(nullptr);
++    std::tm utc{};
++#ifdef _WIN32
++    gmtime_s(&utc, &now);
++#else
++    gmtime_r(&now, &utc);
++#endif
++    char date[64], iso[32];
++    std::strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", &utc);
++    std::strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", &utc);
++    return {
++        {"Accept",                             "*/*"},
++        {"Accept-Language",                    "en-us"},
++        {"Client-Cloud-DAAP-Request-Reason",   "5"},
++        {"Client-Cloud-Purchase-Daap-Version", "1.1/Configurator-2.0"},
++        {"Client-DAAP-Version",                "3.12"},
++        {"Date",                               date},
++        {"iCloud-DSID",                        acc.directoryServicesID},
++        {"User-Agent",                         CONFIGURATOR_UA},
++        {"X-Apple-I-Client-Time",              iso},
++        {"X-Apple-I-Locale",                   "en_US"},
++        {"X-Apple-I-TimeZone",                 "UTC"},
++        {"X-Apple-Store-Front",                acc.storeFront},
++        {"X-Apple-TZ",                         "0"},
++        {"X-Dsid",                             acc.directoryServicesID},
++        {"X-Guid",                             guid},
++        {"X-Token",                            acc.passwordToken.get()},
++    };
++}
++
++}  // namespace
++
++std::vector<AppStore::OwnedApp> AppStore::list_purchases(const Account& acc) {
++    std::string guid = get_guid();
++    BagOutput bag = fetch_bag_impl(guid);
++    if (bag.signSapSetup.empty() || bag.signSapSetupCert.empty()
++        || bag.sapVersion != 200 || bag.hardwareID.empty())
++        throw IpaError("bag has no usable SAP signing configuration");
++
++    std::unique_ptr<SapSigner> signer;
++    try {
++        SapSigner::Config sapCfg;
++        sapCfg.setupURL       = bag.signSapSetup;
++        sapCfg.certificateURL = bag.signSapSetupCert;
++        sapCfg.version        = bag.sapVersion;
++        sapCfg.hardwareID     = bag.hardwareID;
++        signer = SapSigner::Create(sapCfg, load_sap_asset("CoreFP"), load_sap_asset("CommerceCore"),
++                                   load_sap_asset("CommerceKit"), load_sap_asset("CoreFP.icxs"));
++    } catch (const std::exception& e) {
++        throw IpaError(std::string("failed to initialize SAP signer: ") + e.what());
++    }
++    if (!signer) throw IpaError("failed to initialize SAP signer");
++
++    const std::string base = PURCHASE_DAAP_BASE;
++
++    // 1. login → session id (mlid); not signed
++    auto hdrs = daap_headers(acc, guid);
++    HttpResponse res = m_http.post(base + "/login", "", hdrs);
++    daap_check("purchase history login", res);
++    uint64_t session = 0;
++    if (!dmap_first_uint(res.body, "mlid", session) || session > 0xFFFFFFFFull)
++        throw IpaError("purchase history login response did not contain a valid session ID");
++
++    // 2. update → database revision (musr)
++    std::string updateBody = "session-id=" + std::to_string(session)
++                           + "&revision-number=(null)&query=" + OWNED_APPS_QUERY;
++    hdrs = daap_headers(acc, guid);
++    hdrs["Content-Type"] = "application/x-www-form-urlencoded";
++    hdrs[HTTP_HEADER_SAP_SIGNATURE] = signer->SignBase64(std::string_view(updateBody));
++    res = m_http.post(base + "/update", updateBody, hdrs);
++    daap_check("purchase history update", res);
++    uint64_t revision = 0;
++    if (!dmap_first_uint(res.body, "musr", revision) || revision > 0xFFFFFFFFull)
++        throw IpaError("purchase history update response did not contain a valid revision");
++
++    // 3. items
++    std::string payload = dmap_u32("mstc", (uint32_t)std::time(nullptr))
++                        + dmap_u32("mlid", (uint32_t)session)
++                        + dmap_tag("mikd", std::string(1, '\x02'))
++                        + dmap_u32("musr", (uint32_t)revision)
++                        + dmap_u32("mder", 0)
++                        + dmap_tag("mque", OWNED_APPS_QUERY)
++                        + dmap_tag("aetl", "");
++    std::string itemsBody = dmap_tag("adsr", payload);
++    hdrs = daap_headers(acc, guid);
++    hdrs["Content-Type"] = "application/x-dmap-tagged";
++    hdrs[HTTP_HEADER_SAP_SIGNATURE] = signer->SignBase64(std::string_view(itemsBody));
++    res = m_http.post(base + "/databases/" + std::to_string(revision) + "/items", itemsBody, hdrs);
++    daap_check("purchase history items", res);
++
++    std::vector<OwnedApp> apps;
++    std::set<int64_t> seen;
++    dmap_walk(reinterpret_cast<const uint8_t*>(res.body.data()), res.body.size(), 0,
++        [&](const std::string& tag, const uint8_t* p, size_t n) {
++            if (tag != "mlit") return;
++            OwnedApp app;
++            dmap_walk(p, n, 1, [&](const std::string& t, const uint8_t* q, size_t m) {
++                if (t == "aeSI")                        app.id = (int64_t)dmap_uint(t, q, m);
++                else if (t == "aeBI")                   app.bundleID.assign((const char*)q, m);
++                else if (t == "aeLN")                   app.name.assign((const char*)q, m);
++                else if (t == "minm" && app.name.empty()) app.name.assign((const char*)q, m);
++                else if (t == "aePd")                   app.version.assign((const char*)q, m);
++                else if (t == "asdp") {
++                    if (m != 4) throw IpaError("owned app purchase date has invalid length");
++                    app.purchaseDate = (int64_t)dmap_uint(t, q, m);
++                }
++            });
++            if (app.id == 0 || !seen.insert(app.id).second) return;
++            apps.push_back(std::move(app));
++        });
++    std::stable_sort(apps.begin(), apps.end(), [](const OwnedApp& a, const OwnedApp& b) {
++        if (a.purchaseDate == 0) return false;
++        if (b.purchaseDate == 0) return true;
++        return a.purchaseDate > b.purchaseDate;
++    });
++    return apps;
++}
+diff --git a/appstore.h b/appstore.h
+index dfb13e6..0694e4a 100644
+--- a/appstore.h
++++ b/appstore.h
+@@ -161,6 +161,18 @@ public:
+                                                    const std::string& entDownloadEndpoint = "",
+                                                    const std::string& kbsyncB64 = "");
+ 
++    // ── Purchase history (appshelf 03-list-purchases) ────────────────────────
++    // Port of ipatool v2.5.0 pkg/appstore/appstore_owned_apps.go: DAAP
++    // login → update → databases/<rev>/items; update and items are SAP-signed.
++    struct OwnedApp {
++        int64_t     id = 0;
++        std::string bundleID;
++        std::string name;
++        std::string version;
++        int64_t     purchaseDate = 0;   // unix seconds; 0 = unknown
++    };
++    std::vector<OwnedApp> list_purchases(const Account& acc);
++
+ private:
+     HttpClient m_http;
+     bool       m_debug = false;
+diff --git a/main.cpp b/main.cpp
+index 6ba6962..6581b30 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -1425,6 +1425,56 @@ static void cmd_download(const Args& args) {
+ 
+ // ── Help ──────────────────────────────────────────────────────────────────────
+ 
++// appshelf (03-list-purchases): purchase history of the saved account.
++// JSON: [{"id":…,"bundleId":"…","name":"…","version":"…","purchaseDate":"2024-01-31T10:00:00Z"}]
++static void cmd_list_purchases(const Args& args) {
++    std::string passphrase = get(args, "keychain-passphrase", "");
++
++    Account acc;
++    if (!load_account(acc, passphrase)) {
++        std::cerr << "Not logged in.\n";
++        exit(1);
++    }
++
++    AppStore store(COOKIE_FILE);
++    if (get(args, "debug") == "true") store.set_debug(true);
++
++    std::vector<AppStore::OwnedApp> apps;
++    try {
++        apps = store.list_purchases(acc);
++    } catch (const PasswordTokenExpired&) {
++        silent_relogin(acc, passphrase);
++    } catch (const std::exception& e) {
++        print_red_err(std::string("list-purchases error: ") + e.what() + "\n");
++        exit(1);
++    }
++
++    json out = json::array();
++    for (const auto& a : apps) {
++        char date[32] = "";
++        if (a.purchaseDate > 0) {
++            std::time_t t = (std::time_t)a.purchaseDate;
++            std::tm utc{};
++#ifdef _WIN32
++            gmtime_s(&utc, &t);
++#else
++            gmtime_r(&t, &utc);
++#endif
++            std::strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%SZ", &utc);
++        }
++        out.push_back({{"id", a.id}, {"bundleId", a.bundleID}, {"name", a.name},
++                       {"version", a.version}, {"purchaseDate", std::string(date)}});
++    }
++    if (g_format == "json") {
++        // names come from Apple; a broken UTF-8 byte must not abort the dump
++        std::cout << out.dump(-1, ' ', false, json::error_handler_t::replace) << "\n";
++    } else {
++        for (const auto& a : out)
++            std::cout << a["id"].get<int64_t>() << "  " << a["bundleId"].get<std::string>() << "  "
++                      << a["name"].get<std::string>() << "  " << a["purchaseDate"].get<std::string>() << "\n";
++    }
++}
++
+ static void print_help() {
+     std::cout << R"(
+ ipatool-cpp — CLI tool to interact with the Apple App Store
+@@ -1442,6 +1492,7 @@ Commands:
+   list-versions         List available versions of an app
+   get-version-metadata  Get metadata for a specific app version
+   kbsync                Test: generate kbsync locally (no request to Apple)
++  list-purchases        List apps in the account's purchase history (appshelf)
+ 
+ Global flags:
+   --format                Output format: "text" (default) or "json"
+@@ -1553,6 +1604,8 @@ int main(int argc, char** argv) {
+         cmd_download(args);
+     } else if (cmd == "kbsync") {
+         cmd_kbsync(args);
++    } else if (cmd == "list-purchases") {
++        cmd_list_purchases(args);
+     } else if (cmd == "help" || cmd == "--help" || cmd == "-h") {
+         print_help();
+     } else {
