@@ -4,7 +4,7 @@ import pytest
 
 from appshelf import jobs, removed, store
 from appshelf.config import GB, Config
-from helpers import TOKEN, Clock, FakeTool
+from helpers import TOKEN, Clock, FakeTool, owner
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +33,12 @@ def conn(cfg):
 @pytest.fixture
 def clock() -> Clock:
     return Clock()
+
+
+@pytest.fixture
+def acct(conn, clock):
+    """Владелец и его Apple ID №1 (legacy_pub: каталог архива — <TOKEN>)."""
+    return owner(conn, clock)
 
 
 @pytest.fixture
