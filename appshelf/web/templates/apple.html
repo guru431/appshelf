@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block main %}
+<p><b>Мои Apple ID</b></p>
+<table>
+{% for r in rows %}
+<tr>
+  <td>{{ r.a.email }}<div class="meta">{{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
+    {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}<span class="err">вход истёк</span>{% else %}нет входа{% endif %}
+    {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ (r.size / 1073741824) | round(1) }} ГБ</div></td>
+  <td style="text-align:right"><a href="/login?{{ r.relogin }}">Войти заново</a><br><a href="/apple/{{ r.a.id }}/delete">Удалить</a></td>
+</tr>
+{% endfor %}
+</table>
+<p><a class="btn" href="/apple/add">Добавить Apple ID</a></p>
+<form method="post" action="/logout-all"><button class="secondary">Выйти на всех устройствах</button></form>
+<p class="hint">Вход в панель — любым из этих Apple ID и паролем от него; пароль на сервере не сохраняется.</p>
+{% endblock %}
