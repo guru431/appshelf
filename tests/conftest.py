@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
 
 from appshelf import jobs, removed, store
 from appshelf.config import GB, Config
-from helpers import TOKEN, Clock, FakeTool, owner
+from appshelf.web.app import create_app
+from helpers import HOST, TOKEN, Clock, FakeTool, owner, sign_in
 
 
 @pytest.fixture(autouse=True)
@@ -49,3 +51,34 @@ def ctx(cfg, clock):
     env = jobs.Env(cfg, lambda acct: tools.setdefault(acct.id, FakeTool()), now=clock.iso,
                    send=lambda subject, body, to: sent.append(subject), disk_free=lambda path: free["bytes"])
     return SimpleNamespace(env=env, tools=tools, sent=sent, free=free, tool=tools.setdefault(1, FakeTool()))
+
+
+@pytest.fixture
+def make_web(clock):
+    """Приложение с подменами. tools[id] — ipatool Apple ID; queue — ipatool первых входов новых Apple ID по
+    порядку (пусто — свежий FakeTool), выданные — в new_tools (у каждого .home и .mac); sent — (тема, текст)."""
+    def make(cfg, conn):
+        wb = SimpleNamespace(tools={}, queue=[], new_tools=[], sent=[], free={"bytes": 50 * GB})
+
+        def new_tool(home, mac):
+            t = wb.queue.pop(0) if wb.queue else FakeTool()
+            t.home, t.mac = home, mac
+            wb.new_tools.append(t)
+            return t
+
+        wb.app = create_app(cfg, lambda acct: wb.tools.setdefault(acct.id, FakeTool()), new_tool=new_tool,
+                            now=clock.iso, clock=clock.monotonic,
+                            send=lambda subject, body, to: wb.sent.append((subject, body)),
+                            disk_free=lambda path: wb.free["bytes"], start_worker=False)
+        wb.client = TestClient(wb.app, base_url=f"https://{HOST}")
+        return wb
+    return make
+
+
+@pytest.fixture
+def web(make_web, cfg, conn, clock, acct):
+    """Владелец вошёл: cookie человека 1, активная полка — Apple ID №1; web.tool — его ipatool."""
+    wb = make_web(cfg, conn)
+    sign_in(wb.client, cfg, conn, clock, acct.user_id)
+    wb.tool = wb.tools.setdefault(acct.id, FakeTool())
+    return wb

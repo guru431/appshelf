@@ -2,7 +2,7 @@
 {% block main %}
 <form method="post" action="/history/refresh" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
   <button>Обновить историю</button>
-  <span class="meta">{% if refreshing and session.session != 'ok' %}ждёт входа в Apple ID
+  <span class="meta">{% if refreshing and acct.session != 'ok' %}ждёт входа в Apple ID
     {%- elif refreshing == 'refresh_history' %}обновляется…
     {%- elif refreshing == 'check_removed' %}история обновлена, проверяю справочник удалённых…
     {%- elif refreshed %}обновлено {{ refreshed[:16] | replace('T', ' ') }} UTC{% else %}ещё не загружалась{% endif %}</span>

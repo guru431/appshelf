@@ -5,7 +5,7 @@
 <p class="meta">Есть в аккаунте: {{ counts.owned }} · нет в аккаунте: {{ counts.missing }} · не проверено: {{ counts.unknown }}</p>
 <form method="post" action="/blocked/check" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
   <button>Проверить новые</button>
-  <span class="meta">{% if checking %}{{ 'проверяю…' if session.session == 'ok' else 'ждёт входа в Apple ID' }}{% else %}всё заново проверяет ночная проверка в 04:30{% endif %}</span>
+  <span class="meta">{% if checking %}{{ 'проверяю…' if acct.session == 'ok' else 'ждёт входа в Apple ID' }}{% else %}всё заново — ночная проверка, раз в неделю{% endif %}</span>
 </form>
 <form method="get" action="/blocked"><input name="q" value="{{ q }}" placeholder="Поиск: сбер, vk, max, тинькофф…"></form>
 <table>

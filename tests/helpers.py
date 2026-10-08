@@ -1,16 +1,16 @@
 """Общее для тестов: токен, подменённые часы, Apple ID, наполнение базы."""
 from __future__ import annotations
 
-import base64
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from appshelf import people, store
+from appshelf import people, store, webauth
 from appshelf.ipatool import LicenseNotFound
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 OWNER_EMAIL = "owner@example"
+HOST = "apps.example"
 
 
 class Clock:
@@ -29,8 +29,10 @@ class Clock:
         self.t += seconds
 
 
-def basic(user: str, password: str) -> dict[str, str]:
-    return {"Authorization": "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()}
+def sign_in(client, cfg, conn, clock, uid: int = 1) -> None:
+    """cookie человека uid — как после входа Apple ID (ключ — тот же cookie-key, что у приложения)."""
+    key = webauth.load_key(cfg.cookie_key)
+    client.cookies.set(webauth.COOKIE, webauth.make_cookie(key, people.get_user(conn, uid), int(clock.t)), domain=HOST)
 
 
 def make_account(conn, clock, email=OWNER_EMAIL, role="owner", legacy=True, session="none", user_id=None,

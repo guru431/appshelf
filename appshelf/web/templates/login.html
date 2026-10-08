@@ -1,12 +1,27 @@
 {% extends "base.html" %}
 {% block main %}
-<form method="post" action="/login" style="max-width:360px;margin:24px auto">
-  <p><b>appshelf</b></p>
-  <label>Логин<input name="user" value="admin" autocomplete="username" autocapitalize="off"></label>
-  <label>Пароль<input name="password" type="password" autocomplete="current-password" autofocus></label>
-  <input type="hidden" name="next" value="{{ next }}">
+<div style="max-width:360px;margin:24px auto">
+  <p><b>appshelf</b>{% if add %} — добавить Apple ID{% endif %}</p>
+  {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID.</div>{% endif %}
   {% if error %}<p class="err">{{ error }}</p>{% endif %}
-  <button>Войти</button>
-  <p class="hint">Вход запоминается на год на этом устройстве (и в приложении на экране «Домой»).</p>
-</form>
+  {% if step == 2 %}
+  <form method="post" action="/login/code">
+    <p>Apple отправила код на ваши устройства ({{ email }}). Apple покажет запрос входа с картой — на ней город сервера,
+      а не ваш. Нажмите «Разрешить» и введите код. Шаг действует 10 минут.</p>
+    <label>Код 2FA<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" autofocus></label>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button>Войти</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ action }}">
+    <label>Apple ID<input name="email" type="email" value="{{ email }}" autocomplete="username" autocapitalize="off"></label>
+    <label>Пароль<input name="password" type="password" autocomplete="current-password"></label>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button>Продолжить</button>
+  </form>
+  <p class="hint">Вход — вашим Apple ID и паролем от него. Пароль на сервере не сохраняется: он нужен только для входа
+    и живёт в памяти не дольше 10 минут. Вход запоминается на год на этом устройстве; в приложении на экране «Домой»
+    войти нужно отдельно.</p>
+  {% endif %}
+</div>
 {% endblock %}

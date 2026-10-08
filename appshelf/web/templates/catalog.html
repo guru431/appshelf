@@ -1,19 +1,20 @@
 {% extends "base.html" %}
 {% block main %}
+{% if acct.session == 'expired' %}<div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>{% endif %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% if not apps %}<p class="hint">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
 {% for a in apps %}
 <div class="card">
-  {% if a.current %}<img src="{{ cfg.public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon"></div>{% endif %}
+  {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon"></div>{% endif %}
   <div class="body">
     <div><b>{{ a.name }}</b></div>
     {% if a.current %}
     <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ (a.current['size'] / 1048576) | round | int }} МБ
       {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}</div>
-    <p><a class="btn" href="itms-services://?action=download-manifest&amp;url={{ cfg.public_url(a.current['dir'], 'manifest.plist') }}">Установить</a></p>
-    {% if a.previous %}<div class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ cfg.public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a></div>{% endif %}
+    <p><a class="btn" href="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Установить</a></p>
+    {% if a.previous %}<div class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a></div>{% endif %}
     {% endif %}
-    {% if a.status == 'queued' %}<div class="meta">{{ 'в очереди' if session.session == 'ok' else 'ждёт входа в Apple ID' }}</div>
+    {% if a.status == 'queued' %}<div class="meta">{{ 'в очереди' if acct.session == 'ok' else 'ждёт входа в Apple ID' }}</div>
     {% elif a.status == 'downloading' %}<div class="meta">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     <form method="post" action="/apps/{{ a.app_id }}/retry"><button>Повторить</button></form>
@@ -25,6 +26,7 @@
 </div>
 {% endfor %}
 <div class="hint">
+  <p>На iPhone в App Store должен быть выполнен вход этим же Apple ID ({{ acct.email }}) — иначе приложение при запуске попросит пароль.</p>
   <p>Открывайте страницу в Safari: из Telegram и Chrome установка не запускается.
     Safari → «Поделиться» → «На экран „Домой“» — полка откроется как приложение.</p>
   <p>После «Установить» подтвердите системное окно — иконка появится на экране «Домой».</p>

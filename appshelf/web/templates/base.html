@@ -28,6 +28,7 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple
 header { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 header a { color: var(--fg); text-decoration: none; }
 header a.on { color: var(--accent); }
+header .on { color: var(--accent); }
 header .session { margin-left: auto; color: var(--muted); font-size: 14px; }
 main { max-width: 720px; margin: 0 auto; padding: 16px; }
 a { color: var(--accent); }
@@ -60,11 +61,18 @@ td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top
   <a href="/history" class="{{ 'on' if nav == 'history' }}">История</a>
   <a href="/blocked" class="{{ 'on' if nav == 'blocked' }}">Удалённые</a>
   <a href="/apple" class="{{ 'on' if nav == 'apple' }}">Apple ID</a>
+  {% if user and user.role == 'owner' %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Участники</a>{% endif %}
   <span class="session">
-    {%- if session.session == 'ok' %}{{ session.account_name }} · {{ session.storefront }}
-    {%- elif session.session == 'expired' %}<span class="err">вход истёк</span>
-    {%- else %}нет входа{% endif -%}
+    {%- if accounts and accounts | length > 1 %}
+      {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}">{{ a.email }}</a>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
+    {%- elif acct %}{{ acct.email }}{% endif %}
+    {%- if acct %} —
+      {% if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
+      {%- elif acct.session == 'expired' %}<span class="err">вход истёк</span>
+      {%- else %}нет входа{% endif %}
+    {%- endif -%}
   </span>
+  <form method="post" action="/logout" style="display:inline"><button class="secondary">Выйти</button></form>
   <span class="theme">Тема:
     <a href="/theme?set=auto"{% if not theme %} class="on"{% endif %}>авто</a>
     <a href="/theme?set=light"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
