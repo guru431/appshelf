@@ -52,6 +52,39 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS removed_checks (app_id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    invite_id INTEGER,
+    created_at TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    storefront TEXT NOT NULL DEFAULT '',
+    session TEXT NOT NULL DEFAULT 'none',
+    session_since TEXT NOT NULL DEFAULT '',
+    expired_mail_sent TEXT NOT NULL DEFAULT '',
+    device_mac TEXT NOT NULL DEFAULT '',
+    legacy_pub INTEGER NOT NULL DEFAULT 0,
+    last_login_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS links (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL DEFAULT '',
+    user_id INTEGER,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL DEFAULT '',
+    used_at TEXT NOT NULL DEFAULT '',
+    disabled_at TEXT NOT NULL DEFAULT ''
+);
 """
 DIR_RE = re.compile(r"^\d+-[A-Za-z0-9._-]+$")
 WORKER_KINDS = ("publish", "refresh_history", "check_removed")

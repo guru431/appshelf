@@ -1,6 +1,8 @@
 """Настройки из окружения: /etc/appshelf/appshelf.env (EnvironmentFile служб)."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 from dataclasses import dataclass
@@ -16,10 +18,11 @@ class Config:
     pub_token: str       # 32 hex: имя каталога с IPA и manifest; есть только здесь и в appshelf.env
     public_base: str     # https://apps.example.com — адрес сайта, из него собираются ссылки установки
     ipatool_bin: Path
-    ipatool_home: Path   # HOME для ipatool: учётка и cookies — в $HOME/.ipatool
+    ipatool_home: Path   # /etc/appshelf: HOME каждого Apple ID — accounts/<id> (учётка и cookies ipatool)
     ipatool_proxy: str   # необязательный https_proxy для ipatool (отказ Apple на edge)
     mail_to: str
     pub_dir: Path | None = None  # архив IPA; может быть сетевой шарой (APPSHELF_PUB), база и tmp — локально
+    owner_email: str = ""        # APPSHELF_OWNER: Apple ID владельца, в нижнем регистре
 
     @property
     def db(self) -> Path:
@@ -49,6 +52,36 @@ class Config:
     def cookie_key(self) -> Path:
         return self.data_dir / "cookie-key"
 
+    @property
+    def archive(self) -> Path:
+        """Корень архива IPA; внутри — каталог на каждый Apple ID (shelf_root)."""
+        return self.pub_dir or self.data_dir / "pub"
+
+    @property
+    def accounts_dir(self) -> Path:
+        return self.ipatool_home / "accounts"
+
+    @property
+    def locks_dir(self) -> Path:
+        return self.data_dir / "locks"
+
+    @property
+    def download_lock(self) -> Path:
+        return self.locks_dir / "download.lock"
+
+    def shelf_token(self, acct) -> str:
+        """Каталог Apple ID в архиве — HMAC от PUB_TOKEN: из своего токена чужой не вычислить. Перенесённый из
+        версии 1 Apple ID (legacy_pub) остаётся в каталоге <PUB_TOKEN>: выданные ссылки установки работают."""
+        if acct.legacy_pub:
+            return self.pub_token
+        return hmac.new(self.pub_token.encode(), f"account:{acct.id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+    def shelf_root(self, acct) -> Path:
+        return self.archive / self.shelf_token(acct)
+
+    def shelf_url(self, acct, dir_name: str, file: str) -> str:
+        return f"{self.public_base}/d/{self.shelf_token(acct)}/{dir_name}/{file}"
+
     def public_url(self, dir_name: str, file: str) -> str:
         return f"{self.public_base}/d/{self.pub_token}/{dir_name}/{file}"
 
@@ -70,4 +103,5 @@ def from_env(env=None) -> Config:
         ipatool_proxy=env.get("IPATOOL_PROXY", ""),
         mail_to=env.get("MAIL_TO", ""),
         pub_dir=Path(env["APPSHELF_PUB"]) if env.get("APPSHELF_PUB") else None,
+        owner_email=env.get("APPSHELF_OWNER", "").strip().lower(),
     )

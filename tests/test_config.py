@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,3 +47,22 @@ def test_bad_token_rejected(token):
 def test_public_base_required(base):
     with pytest.raises(ValueError):
         from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": base})
+
+
+def test_owner_and_shelves():
+    cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE, "APPSHELF_OWNER": "  Boss@Example.COM "})
+    assert cfg.owner_email == "boss@example.com"
+    assert cfg.archive == Path("/var/lib/appshelf/pub")
+    assert cfg.accounts_dir == Path("/etc/appshelf/accounts")
+    assert cfg.locks_dir == Path("/var/lib/appshelf/locks")
+    assert cfg.download_lock == Path("/var/lib/appshelf/locks/download.lock")
+    legacy, new = SimpleNamespace(id=1, legacy_pub=True), SimpleNamespace(id=2, legacy_pub=False)
+    assert cfg.shelf_token(legacy) == TOKEN                  # перенесённый из версии 1 — прежний каталог
+    token = hmac.new(TOKEN.encode(), b"account:2", hashlib.sha256).hexdigest()[:32]
+    assert cfg.shelf_token(new) == token and cfg.shelf_root(new) == Path("/var/lib/appshelf/pub") / token
+    assert cfg.shelf_url(new, "5-1.0", "app.ipa") == f"{BASE}/d/{token}/5-1.0/app.ipa"
+    assert cfg.shelf_token(SimpleNamespace(id=3, legacy_pub=False)) not in (token, TOKEN)
+
+
+def test_owner_is_optional():
+    assert from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}).owner_email == ""
