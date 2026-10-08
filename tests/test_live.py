@@ -45,6 +45,13 @@ def test_kbsync_without_apple():
     assert r.returncode == 0 and last_json(r.stdout)["success"] is True
 
 
+def test_device_mac_override_without_apple():
+    r = remote(f"HOME=$(mktemp -d) IPATOOL_DEVICE_MAC=00:03:93:12:34:56 {BIN} --format json kbsync --dsid 1 --debug")
+    assert r.returncode == 0 and "device ID: OK (IPATOOL_DEVICE_MAC)" in r.stderr, r.stdout + r.stderr
+    r = remote(f"HOME=$(mktemp -d) IPATOOL_DEVICE_MAC=00:00:00:00:00:00 {BIN} --format json kbsync --dsid 1")
+    assert r.returncode == 1 and last_json(r.stdout)["error"] == "bad_device_mac"
+
+
 def test_password_not_stored():
     r = remote(f"{AS_APPSHELF} auth info")
     assert r.returncode == 0, r.stdout + r.stderr

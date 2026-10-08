@@ -10,6 +10,7 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 | `02-password-stdin` | `auth login --password-stdin` — пароль из первой строки stdin, не из `-p` (виден в `/proc/<pid>/cmdline`) |
 | `03-list-purchases` | `list-purchases [--format json]` → `[{"id","bundleId","name","version","purchaseDate"}]`; перенос `appstore_owned_apps.go` (ipatool v2.5.0, DAAP) на `SapSigner` и HTTP-клиент форка |
 | `04-exit-codes` | Коды выхода `0`/`3` `session_expired`/`4` `auth_code_required`/`5` `license_not_found`/`1`; при `--format json` ошибка — `{"error","message"}`; `edge_rejected`, `invalid_credentials`, `not_logged_in`; `list-versions` печатает `latestExternalVersionID` |
+| `05-device-mac` | `IPATOOL_DEVICE_MAC` (12 hex, `:`/`-` допустимы) вместо MAC сетевой карты: из него `guid`, `kbsync`, `fserial` — свой «Mac» на каждый Apple ID; заглушка или мусор → выход `1`, `bad_device_mac`, к Apple не обращается |
 
 ## Правка патчей
 

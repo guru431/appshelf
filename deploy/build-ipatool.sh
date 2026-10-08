@@ -41,6 +41,14 @@ docker run --rm --network host -v /etc/machine-id:/etc/machine-id:ro -v "$WORK:/
   test "$rc1" = 3; grep -q "\"error\":\"not_logged_in\"" /work/lp.txt
   test "$rc2" = 3; grep -q "\"error\":\"not_logged_in\"" /work/dl.txt
   test "$rc3" = 1; grep -q "\"error\":\"usage\"" /work/li.txt
+  # патч 05: MAC из IPATOOL_DEVICE_MAC — без обращения к Apple
+  IPATOOL_DEVICE_MAC=00:03:93:12:34:56 HOME=/work/h3 ./build/ipatool --format json kbsync --dsid 1 --debug \
+    2> /work/mac.txt | grep -q "\"success\":true"
+  grep -q "device ID: OK (IPATOOL_DEVICE_MAC)" /work/mac.txt
+  set +e
+  IPATOOL_DEVICE_MAC=00:00:00:00:00:00 HOME=/work/h3 ./build/ipatool --format json kbsync --dsid 1 > /work/bad.txt; rc4=$?
+  set -e
+  test "$rc4" = 1; grep -q "\"error\":\"bad_device_mac\"" /work/bad.txt
   ldd build/ipatool | tee /work/ldd.txt
   if grep -v -E "linux-vdso|ld-linux|libc\.so|libm\.so|libstdc\+\+|libgcc_s|libunicorn\.so" /work/ldd.txt | grep -q .; then
     echo "ОШИБКА: в ldd несистемные библиотеки" >&2; exit 1

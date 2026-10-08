@@ -1,0 +1,94 @@
+diff --git a/device_mac.cpp b/device_mac.cpp
+index a4fc8e2..46ffdf0 100644
+--- a/device_mac.cpp
++++ b/device_mac.cpp
+@@ -5,6 +5,8 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <mutex>
++#include <cctype>
++#include <cstdlib>
+ 
+ #ifdef _WIN32
+ #  ifndef WIN32_LEAN_AND_MEAN
+@@ -268,7 +270,14 @@ const Detected& detected() {
+     static std::once_flag once;
+     static Detected d;
+     std::call_once(once, [] {
+-        d = detect();
++        // appshelf (05-device-mac): an explicit address wins over detection.
++        const char* env = getenv("IPATOOL_DEVICE_MAC");
++        if (env && *env) {
++            if (parse_device_mac(env, d.mac)) d.source = "IPATOOL_DEVICE_MAC";
++            else d.error = "IPATOOL_DEVICE_MAC is not a valid unicast MAC address";
++        } else {
++            d = detect();
++        }
+         if (d.error.empty())
+             debug_log("OK (%s)", d.source);
+         else
+@@ -295,6 +304,22 @@ bool is_placeholder_mac(const uint8_t* m, size_t len) {
+     return false;
+ }
+ 
++bool parse_device_mac(const std::string& text, std::vector<uint8_t>& out) {
++    std::string hex;
++    for (char ch : text) {
++        if (ch == ':' || ch == '-') continue;
++        if (!isxdigit((unsigned char)ch)) return false;
++        hex += ch;
++    }
++    if (hex.size() != 12) return false;
++    std::vector<uint8_t> mac(6);
++    for (size_t i = 0; i < 6; ++i)
++        mac[i] = (uint8_t)std::stoul(hex.substr(i * 2, 2), nullptr, 16);
++    if (is_placeholder_mac(mac.data(), mac.size())) return false;
++    out = std::move(mac);
++    return true;
++}
++
+ std::vector<uint8_t> device_mac_address() {
+     const Detected& d = detected();
+     if (!d.error.empty())
+diff --git a/device_mac.h b/device_mac.h
+index 1293e34..426c533 100644
+--- a/device_mac.h
++++ b/device_mac.h
+@@ -45,5 +45,11 @@ std::string device_mac_source();
+ // AA:BB:CC:DD:EE:FF fallback older builds used.
+ bool is_placeholder_mac(const uint8_t* mac, size_t len);
+ 
++// appshelf (05-device-mac): IPATOOL_DEVICE_MAC overrides adapter detection, so
++// every Apple ID (its own HOME) can have its own device identity. Accepts 12 hex
++// digits, optionally separated by ':' or '-'. False for malformed or placeholder
++// values (see is_placeholder_mac).
++bool parse_device_mac(const std::string& text, std::vector<uint8_t>& out);
++
+ // Print adapter selection details to stderr (enabled by --debug).
+ void device_mac_set_debug(bool on);
+diff --git a/main.cpp b/main.cpp
+index dbac47c..573dcdb 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -26,6 +26,7 @@
+ #include "aes.h"        // aes::gcm_encrypt/decrypt — used directly for account file encryption
+ #include "SapSigner.h"  // SapBase64 — kbsync output
+ #include "path_utf8.h"  // ipt::fs_path — Unicode account-file paths on Windows
++#include "device_mac.h"   // appshelf 05: IPATOOL_DEVICE_MAC
+ 
+ #include <iostream>
+ #include <fstream>
+@@ -1553,6 +1554,13 @@ int main(int argc, char** argv) {
+         return 1;
+     }
+ 
++    // appshelf (05-device-mac): a bad override must never reach Apple.
++    if (const char* m = getenv("IPATOOL_DEVICE_MAC"); m && *m) {
++        std::vector<uint8_t> mac;
++        if (!parse_device_mac(m, mac))
++            fail(1, "bad_device_mac", "IPATOOL_DEVICE_MAC is not a valid unicast MAC address");
++    }
++
+     // ~/.ipatool must exist before the first request: libcurl writes the cookie
+     // jar but does not create its directory, so on a first login the session
+     // cookies were silently dropped.
