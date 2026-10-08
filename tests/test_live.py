@@ -1,5 +1,5 @@
 """Живые проверки bin/ipatool на сервере (-m integration). Куда ходить — APPSHELF_SSH* из .env, как у
-deploy/deploy.sh; нужен вход в Apple ID от appshelf. flock — тот же, что у appshelf-web и ночной проверки."""
+deploy/deploy.sh; нужен вход Apple ID №1 (владельца) от appshelf. flock — тот же, что у appshelf-web и ночной проверки."""
 import json
 import os
 import subprocess
@@ -27,7 +27,7 @@ KEY = ENV.get("APPSHELF_SSH_KEY", "")
 SSH = ["ssh", "-o", "BatchMode=yes", "-p", ENV.get("APPSHELF_SSH_PORT", "22"),
        *(["-i", str(Path(KEY).expanduser()), "-o", "IdentitiesOnly=yes"] if KEY else []), ENV.get("APPSHELF_SSH", "")]
 BIN = "/var/_sh/appshelf/bin/ipatool"
-AS_APPSHELF = f"sudo -u appshelf env HOME=/etc/appshelf flock /var/lib/appshelf/ipatool.lock {BIN} --format json"
+AS_APPSHELF = f"sudo -u appshelf env HOME=/etc/appshelf/accounts/1 flock /var/lib/appshelf/locks/1.lock {BIN} --format json"
 
 
 def remote(cmd: str) -> subprocess.CompletedProcess:

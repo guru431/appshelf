@@ -13,36 +13,40 @@
 
 ## Возможности
 
-- Вход в Apple ID на странице сайта (пароль и код 2FA); пароль нигде не сохраняется.
+- Вход в панель — вашим Apple ID и паролем от него (и код 2FA); пароль нигде не сохраняется. Пользоваться могут
+  несколько человек, у человека — несколько Apple ID: у каждого Apple ID своя полка; новые Apple ID — по
+  ссылке-приглашению владельца.
 - История покупок: публикуете только то, что выбрали. Удалённое из App Store добавляется по ссылке
   `apps.apple.com/…/id…` или по ID.
 - Справочник ~480 удалённых из App Store приложений (банки и их клоны, VK, Почта Mail.ru и другие):
   appshelf проверяет, на какие из них у вашего Apple ID есть лицензия.
 - Каталог с кнопкой «Установить»; хранятся текущая и предыдущая версии.
-- Ночная проверка новых версий; одно письмо, если истёк вход в Apple ID или кончается место.
+- Ночная проверка новых версий; владельцу — письмо, если истёк вход его Apple ID или кончается место.
 - PWA: полка на экране «Домой».
 
 ## Как устроено
 
     iPhone (Safari) ─► Apache (HTTPS), vhost apps.example.com
-                         ├─ /        → unix:/run/appshelf/web.sock (appshelf-web: вход формой /login)
+                         ├─ /        → unix:/run/appshelf/web.sock (appshelf-web: вход Apple ID — /login)
+                         ├─ /join/, /l/ → без входа (приглашение, запасная ссылка)
                          ├─ /healthz → без пароля (мониторинг)
                          ├─ /pwa/    → без пароля (манифест PWA, иконка)
                          └─ /d/      → <архив>/ без пароля (manifest, IPA, иконки; путь с секретным токеном)
     appshelf-web (обработчик заданий) ─┐
-    appshelf-nightly (04:30)           ┴─► bin/ipatool (HOME=/etc/appshelf, flock ipatool.lock) ─► Apple
+    appshelf-nightly (04:30)           ┴─► bin/ipatool (HOME=/etc/appshelf/accounts/<id>, flock locks/<id>.lock) ─► Apple
 
 IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.com/Sorvigolova/ipatool) с нашими патчами
 (`ipatool/`): пароль не хранится и передаётся только через stdin, есть команда `list-purchases`, коды
 выхода для обёртки. Веб-часть — FastAPI и Jinja2, данные — SQLite. Дизайн —
 [docs/superpowers/specs/2026-10-05-appshelf-design.md](docs/superpowers/specs/2026-10-05-appshelf-design.md).
+Вход и несколько Apple ID — [docs/superpowers/specs/2026-10-08-multi-apple-id-design.md](docs/superpowers/specs/2026-10-08-multi-apple-id-design.md).
 
 | Что | Где |
 |---|---|
 | Код, `.venv`, `bin/ipatool` | `/var/_sh/appshelf` (путь зашит в `deploy/*.service` и скриптах `deploy/`) |
-| Данные | `/var/lib/appshelf`: `appshelf.db`, `tmp/`, `status/nightly.stamp`, `web-auth`, `cookie-key` |
-| Архив IPA | `<архив>/<PUB_TOKEN>/`; `<архив>` — `APPSHELF_PUB` или `/var/lib/appshelf/pub`. Может быть сетевой шарой; база и `tmp/` — только локально (SQLite на CIFS портится) |
-| Настройки | `/etc/appshelf/appshelf.env` (образец — `deploy/appshelf.env.example`), токен App Store — `/etc/appshelf/.ipatool/` |
+| Данные | `/var/lib/appshelf`: `appshelf.db`, `tmp/`, `locks/`, `status/nightly.stamp`, `cookie-key` |
+| Архив IPA | `<архив>/<токен Apple ID>/` (HMAC от `PUB_TOKEN`; Apple ID, перенесённый из первой версии, — `<архив>/<PUB_TOKEN>/`); `<архив>` — `APPSHELF_PUB` или `/var/lib/appshelf/pub`. Может быть сетевой шарой; база и `tmp/` — только локально (SQLite на CIFS портится) |
+| Настройки | `/etc/appshelf/appshelf.env` (образец — `deploy/appshelf.env.example`), токены App Store — `/etc/appshelf/accounts/<id>/.ipatool/` |
 | Службы | `appshelf-web.service`, `appshelf-nightly.service` + `.timer` |
 
 ## Требования
@@ -64,7 +68,7 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
        sudo install -d -o appshelf -g appshelf -m 0711 /var/lib/appshelf /var/lib/appshelf/pub /var/lib/appshelf/status
        sudo install -d -o appshelf -g appshelf -m 0700 /var/lib/appshelf/tmp
        sudo install -d -o root -g appshelf -m 0711 /etc/appshelf
-       sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/.ipatool
+       sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
 
 2. Код и зависимости. На своей машине:
 
@@ -77,17 +81,15 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 
 3. Настройки: `deploy/appshelf.env.example` → `/etc/appshelf/appshelf.env` (`root:appshelf 0640`),
    заполнить `PUB_TOKEN` (`python3 -c "import secrets; print(secrets.token_hex(16))"`),
-   `APPSHELF_PUBLIC_BASE`, `MAIL_TO`. Каталог публикации — от `appshelf`:
-   `sudo -u appshelf install -d -m 0711 /var/lib/appshelf/pub/<PUB_TOKEN>` (или внутри `APPSHELF_PUB`).
+   `APPSHELF_PUBLIC_BASE`, `MAIL_TO`, `APPSHELF_OWNER` (ваш Apple ID).
 
 4. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
 
 5. Службы: на своей машине `.env` по образцу `.env.example` и `bash deploy/deploy.sh`, затем на сервере
    `sudo systemctl enable appshelf-web && sudo systemctl enable --now appshelf-nightly.timer`.
 
-6. Пароль страниц (логин `admin`, пароль — первой строкой stdin):
-
-       sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf set-web-password'
+6. Первый вход: откройте сайт и войдите Apple ID из `APPSHELF_OWNER` (пароль и код 2FA) — вы владелец.
+   Участников приглашайте на странице «Участники».
 
 7. Apache: vhost по образцу `deploy/apache-appshelf.conf` (домен, сертификат, путь архива), затем
    `sudo a2enmod ssl proxy proxy_http headers && sudo apache2ctl configtest && sudo systemctl reload apache2`.
@@ -104,16 +106,30 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
     bash deploy/deploy.sh                                          # код + перезапуск; куда — .env (.env.example)
     ssh … 'sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh'   # bin/ipatool (после правки ipatool/)
 
-## Вход в Apple ID
+## Вход и участники
 
-Только на странице `/apple`: Apple ID и пароль → код 2FA. Пароль не сохраняется: в ipatool он идёт через
-stdin, в appshelf-web живёт в памяти не дольше 10 минут. Истёк токен — одно письмо и баннер; задания ждут входа.
+Вход в панель — Apple ID и паролем от него, затем код 2FA. Пароль не сохраняется: в ipatool он идёт через
+stdin, в appshelf-web живёт в памяти не дольше 10 минут. Вход запоминается на год; «Выйти на всех
+устройствах» (страница «Apple ID») гасит все cookie человека.
+
+Новый Apple ID попадает на сервер только по ссылке-приглашению: «Участники» → «Создать ссылку». Ссылка
+работает, пока её не отключили, — одна на всех или своя на каждого; спрашивается один раз, при первом входе.
+Второй свой Apple ID человек добавляет сам: «Apple ID» → «Добавить Apple ID». У каждого Apple ID своя полка:
+история, каталог, IPA (в IPA — данные покупателя, ставится он на iPhone с тем же Apple ID в App Store).
+
+Истёк токен магазина — баннер на полке и «Войти заново»; владельцу — письмо о его Apple ID. Если Apple сломает
+вход — запасная ссылка (одноразовая, 24 ч): «Участники» → «Ссылка входа» или на сервере
+
+    sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf login-link --email <Apple ID>'
+
+Для Apple все входы идут с сервера: клиент — Apple Configurator на Mac, место на карте запроса входа — по IP
+сервера. У каждого нового Apple ID свой MAC (`IPATOOL_DEVICE_MAC`, патч 05) — для Apple это отдельный «Mac».
 
 Консольный `auth login` годится лишь для проверки форка: сайт о нём не узнаёт, поэтому задания и ночная
-проверка стоят, пока не выполнен вход на `/apple`. Если всё же нужен — только от `appshelf` и под общей
-блокировкой (иначе служба не прочитает учётку или столкнётся с идущим скачиванием):
+проверка стоят, пока не выполнен вход в панели. Если всё же нужен — только от `appshelf` и под блокировкой
+этого Apple ID (иначе служба не прочитает учётку или столкнётся с идущим скачиванием):
 
-    sudo -u appshelf env HOME=/etc/appshelf flock /var/lib/appshelf/ipatool.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
+    sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, если не пуст> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
 
 Учётка ipatool зашифрована ключом от `machine-id`: файл, созданный другим пользователем или с другим
 `HOME`, служба не прочитает.
@@ -143,9 +159,9 @@ Safari → «Поделиться» → «На экран „Домой“»: п
 
 ## Смена PUB_TOKEN
 
-Ссылки установки и manifest содержат токен: снять все приложения с публикации, записать новый токен
-в `appshelf.env`, создать `<архив>/<новый токен>` (от `appshelf`), перезапустить `appshelf-web`,
-опубликовать заново.
+Токены каталогов всех Apple ID вычисляются из `PUB_TOKEN`, а ссылки установки и manifest их содержат: снять с
+публикации все приложения на всех полках, записать новый токен в `appshelf.env`, перезапустить `appshelf-web`,
+опубликовать заново; каталоги прежних токенов в архиве удалить вручную.
 
 ## Разработка
 

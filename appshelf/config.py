@@ -15,7 +15,7 @@ TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 @dataclass(frozen=True)
 class Config:
     data_dir: Path       # /var/lib/appshelf
-    pub_token: str       # 32 hex: имя каталога с IPA и manifest; есть только здесь и в appshelf.env
+    pub_token: str       # 32 hex: из него — токены каталогов Apple ID (shelf_token); есть только здесь и в appshelf.env
     public_base: str     # https://apps.example.com — адрес сайта, из него собираются ссылки установки
     ipatool_bin: Path
     ipatool_home: Path   # /etc/appshelf: HOME каждого Apple ID — accounts/<id> (учётка и cookies ipatool)
@@ -29,24 +29,12 @@ class Config:
         return self.data_dir / "appshelf.db"
 
     @property
-    def pub_root(self) -> Path:
-        return (self.pub_dir or self.data_dir / "pub") / self.pub_token
-
-    @property
     def tmp_dir(self) -> Path:
         return self.data_dir / "tmp"
 
     @property
     def status_dir(self) -> Path:
         return self.data_dir / "status"
-
-    @property
-    def lock(self) -> Path:
-        return self.data_dir / "ipatool.lock"
-
-    @property
-    def web_auth(self) -> Path:
-        return self.data_dir / "web-auth"
 
     @property
     def cookie_key(self) -> Path:
@@ -81,9 +69,6 @@ class Config:
 
     def shelf_url(self, acct, dir_name: str, file: str) -> str:
         return f"{self.public_base}/d/{self.shelf_token(acct)}/{dir_name}/{file}"
-
-    def public_url(self, dir_name: str, file: str) -> str:
-        return f"{self.public_base}/d/{self.pub_token}/{dir_name}/{file}"
 
 
 def from_env(env=None) -> Config:

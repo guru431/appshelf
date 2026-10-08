@@ -6,6 +6,7 @@
 
 ## Точки входа
 - Дизайн `docs/superpowers/specs/2026-10-05-appshelf-design.md`
+- Вход и несколько Apple ID: docs/superpowers/specs/2026-10-08-multi-apple-id-design.md
 - Пакет `appshelf/` (FastAPI `web/app.py:main`, ночная проверка `python -m appshelf nightly`)
 - Форк ipatool-cpp: `ipatool/UPSTREAM`, `ipatool/patches/`, сборка `deploy/build-ipatool.sh`
 - Боевые значения (хост, домен, архив, мониторинг) — `.env` (не в git) и вики проекта
@@ -13,7 +14,8 @@
 ## Gotchas
 - Репозиторий публичный (GitHub): внутренних имён, адресов, путей и учётных данных в git нет.
 - Пароль Apple ID не сохраняется нигде: в ipatool — только stdin, в appshelf-web — память ≤ 10 минут.
-- ipatool — только от пользователя `appshelf` с `HOME=/etc/appshelf` (шифрование учётки привязано к machine-id).
+- ipatool — только от пользователя `appshelf` с `HOME=/etc/appshelf/accounts/<id>` (и `IPATOOL_DEVICE_MAC` из `accounts.device_mac`, если не пуст; шифрование учётки привязано к machine-id).
+- Вход в панель — Apple ID; новые Apple ID — по приглашению владельца; у каждого Apple ID своя полка и свой HOME ipatool.
 - appshelf-web — один процесс uvicorn; второй потеряет пароль между шагами входа.
 - PUB_TOKEN не печатать и не коммитить.
 - Тесты — на Windows (`.venv/Scripts/python -m pytest -q`), `integration` ходит на сервер по SSH (`.env`).

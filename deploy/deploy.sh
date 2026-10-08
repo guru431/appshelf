@@ -19,6 +19,17 @@ tar -C "$D" --exclude=__pycache__ -czf - pyproject.toml appshelf deploy ipatool 
     sudo install -m 0644 "/var/_sh/appshelf/deploy/$u" "/etc/systemd/system/$u"
   done
   sudo systemctl daemon-reload
+  # spec 2026-10-08 §6: Apple ID владельца, HOME ipatool на каждый Apple ID
+  if ! sudo grep -qE "^APPSHELF_OWNER=.+" /etc/appshelf/appshelf.env; then
+    echo "ОШИБКА: в /etc/appshelf/appshelf.env нет APPSHELF_OWNER=<Apple ID владельца>" >&2
+    exit 1
+  fi
+  sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
+  if sudo test -d /etc/appshelf/.ipatool && ! sudo test -e /etc/appshelf/accounts/1; then
+    sudo systemctl stop appshelf-web       # учётка ipatool переезжает — служба её в это время не трогает
+    sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts/1
+    sudo mv /etc/appshelf/.ipatool /etc/appshelf/accounts/1/.ipatool
+  fi
   sudo systemctl restart appshelf-web
   if sudo -u www-data test -r /etc/appshelf/appshelf.env; then
     echo "ОШИБКА: www-data читает /etc/appshelf/appshelf.env (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2

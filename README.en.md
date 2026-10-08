@@ -14,36 +14,40 @@ The web UI is in Russian.
 
 ## Features
 
-- Apple ID sign-in on a web page (password and 2FA code); the password is never stored.
+- You sign in to the panel with your Apple ID and its password (plus a 2FA code); the password is never stored.
+  Several people can use it, and a person can have several Apple IDs: each Apple ID gets its own shelf; new
+  Apple IDs join by the owner's invite link.
 - Purchase history: you publish only what you pick. Apps removed from the App Store are added by an
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
   appshelf checks which of them your Apple ID holds a license for.
 - Catalog with an "Install" button; the current and the previous version are kept.
-- Nightly check for new versions; a single email when the Apple ID session expires or disk space runs low.
+- Nightly check for new versions; the owner gets an email when their Apple ID session expires or disk space runs low.
 - PWA: the shelf on the Home Screen.
 
 ## How it works
 
     iPhone (Safari) ─► Apache (HTTPS), vhost apps.example.com
-                         ├─ /        → unix:/run/appshelf/web.sock (appshelf-web: form sign-in at /login)
+                         ├─ /        → unix:/run/appshelf/web.sock (appshelf-web: Apple ID sign-in at /login)
+                         ├─ /join/, /l/ → no sign-in (invite, fallback link)
                          ├─ /healthz → no password (monitoring)
                          ├─ /pwa/    → no password (PWA manifest, icon)
                          └─ /d/      → <archive>/ no password (manifests, IPAs, icons; path holds a secret token)
     appshelf-web (job worker) ─┐
-    appshelf-nightly (04:30)   ┴─► bin/ipatool (HOME=/etc/appshelf, flock ipatool.lock) ─► Apple
+    appshelf-nightly (04:30)   ┴─► bin/ipatool (HOME=/etc/appshelf/accounts/<id>, flock locks/<id>.lock) ─► Apple
 
 IPAs are fetched by `bin/ipatool`, a fork of [ipatool-cpp](https://github.com/Sorvigolova/ipatool) with our
 patches (`ipatool/`): the password is never stored and is passed only via stdin, a `list-purchases`
 command, and exit codes for the wrapper. The web part is FastAPI and Jinja2, data lives in SQLite. Design
 document (Russian): [docs/superpowers/specs/2026-10-05-appshelf-design.md](docs/superpowers/specs/2026-10-05-appshelf-design.md).
+Sign-in and multiple Apple IDs: [docs/superpowers/specs/2026-10-08-multi-apple-id-design.md](docs/superpowers/specs/2026-10-08-multi-apple-id-design.md).
 
 | What | Where |
 |---|---|
 | Code, `.venv`, `bin/ipatool` | `/var/_sh/appshelf` (hard-coded in `deploy/*.service` and the `deploy/` scripts) |
-| Data | `/var/lib/appshelf`: `appshelf.db`, `tmp/`, `status/nightly.stamp`, `web-auth`, `cookie-key` |
-| IPA archive | `<archive>/<PUB_TOKEN>/`; `<archive>` is `APPSHELF_PUB` or `/var/lib/appshelf/pub`. May be a network share; the database and `tmp/` stay local (SQLite on CIFS gets corrupted) |
-| Settings | `/etc/appshelf/appshelf.env` (sample: `deploy/appshelf.env.example`), App Store token in `/etc/appshelf/.ipatool/` |
+| Data | `/var/lib/appshelf`: `appshelf.db`, `tmp/`, `locks/`, `status/nightly.stamp`, `cookie-key` |
+| IPA archive | `<archive>/<Apple ID token>/` (HMAC of `PUB_TOKEN`; the Apple ID carried over from the first version uses `<archive>/<PUB_TOKEN>/`); `<archive>` is `APPSHELF_PUB` or `/var/lib/appshelf/pub`. May be a network share; the database and `tmp/` stay local (SQLite on CIFS gets corrupted) |
+| Settings | `/etc/appshelf/appshelf.env` (sample: `deploy/appshelf.env.example`), App Store tokens in `/etc/appshelf/accounts/<id>/.ipatool/` |
 | Services | `appshelf-web.service`, `appshelf-nightly.service` + `.timer` |
 
 ## Requirements
@@ -65,7 +69,7 @@ Run the server commands as a user with sudo.
        sudo install -d -o appshelf -g appshelf -m 0711 /var/lib/appshelf /var/lib/appshelf/pub /var/lib/appshelf/status
        sudo install -d -o appshelf -g appshelf -m 0700 /var/lib/appshelf/tmp
        sudo install -d -o root -g appshelf -m 0711 /etc/appshelf
-       sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/.ipatool
+       sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
 
 2. Code and dependencies. On your machine:
 
@@ -78,17 +82,15 @@ Run the server commands as a user with sudo.
 
 3. Settings: copy `deploy/appshelf.env.example` to `/etc/appshelf/appshelf.env` (`root:appshelf 0640`) and
    fill in `PUB_TOKEN` (`python3 -c "import secrets; print(secrets.token_hex(16))"`), `APPSHELF_PUBLIC_BASE`,
-   `MAIL_TO`. Create the publication directory as `appshelf`:
-   `sudo -u appshelf install -d -m 0711 /var/lib/appshelf/pub/<PUB_TOKEN>` (or inside `APPSHELF_PUB`).
+   `MAIL_TO`, `APPSHELF_OWNER` (your Apple ID).
 
 4. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
 
 5. Services: on your machine create `.env` from `.env.example` and run `bash deploy/deploy.sh`, then on the
    server `sudo systemctl enable appshelf-web && sudo systemctl enable --now appshelf-nightly.timer`.
 
-6. Page password (login `admin`, password on the first line of stdin):
-
-       sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf set-web-password'
+6. First sign-in: open the site and sign in with the Apple ID from `APPSHELF_OWNER` (password and 2FA code) —
+   you become the owner. Invite others on the "Участники" (People) page.
 
 7. Apache: a vhost based on `deploy/apache-appshelf.conf` (domain, certificate, archive path), then
    `sudo a2enmod ssl proxy proxy_http headers && sudo apache2ctl configtest && sudo systemctl reload apache2`.
@@ -105,12 +107,28 @@ www-data to the `appshelf` group**: Apache reaches the socket through the `www-d
     bash deploy/deploy.sh                                          # code + restart; target is in .env (.env.example)
     ssh … 'sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh'   # bin/ipatool (after changing ipatool/)
 
-## Apple ID sign-in
+## Sign-in and people
 
-Only on the `/apple` page: Apple ID and password → 2FA code. The password is not stored: ipatool gets it via
-stdin, appshelf-web keeps it in memory for at most 10 minutes. When the token expires you get one email and a
-banner; jobs wait for sign-in. The ipatool account file is encrypted with a key derived from `machine-id`: a
-file created by another user or with another `HOME` cannot be read by the service.
+You sign in to the panel with an Apple ID and its password, then a 2FA code. The password is not stored: ipatool
+gets it via stdin, appshelf-web keeps it in memory for at most 10 minutes. The sign-in is remembered for a year;
+"Sign out on all devices" (the "Apple ID" page) revokes all of the person's cookies.
+
+A new Apple ID gets onto the server only through an invite link: "Участники" (People) → "Create link". The link
+works until it is disabled — one for everyone or one per person; it is asked for once, on the first sign-in.
+A person adds a second Apple ID of their own: "Apple ID" → "Add Apple ID". Each Apple ID has its own shelf:
+history, catalog, IPAs (an IPA carries the buyer's data and installs on an iPhone signed in to the App Store with
+the same Apple ID).
+
+When a store token expires there is a banner on the shelf and "Sign in again"; the owner gets an email about
+their Apple ID. If Apple breaks sign-in, use a fallback link (one-time, 24 h): "Участники" → "Sign-in link", or on
+the server
+
+    sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf login-link --email <Apple ID>'
+
+To Apple all sign-ins come from the server: the client is Apple Configurator on a Mac, and the map in the sign-in
+prompt shows the server's IP location. Each new Apple ID gets its own MAC (`IPATOOL_DEVICE_MAC`, patch 05) — a
+separate "Mac" to Apple. The ipatool account file is encrypted with a key derived from `machine-id`: a file
+created by another user or with another `HOME` cannot be read by the service.
 
 ## Removed apps
 
@@ -122,8 +140,9 @@ to the JSON. Whether an ID is gone from the RU App Store: `itunes.apple.com/look
 
 ## Rotating PUB_TOKEN
 
-Install links and manifests contain the token: unpublish all apps, put the new token into `appshelf.env`,
-create `<archive>/<new token>` as `appshelf`, restart `appshelf-web`, publish again.
+The directory tokens of all Apple IDs are derived from `PUB_TOKEN`, and install links and manifests contain them:
+unpublish all apps on all shelves, put the new token into `appshelf.env`, restart `appshelf-web`, publish again;
+remove the old token directories from the archive by hand.
 
 ## Development
 

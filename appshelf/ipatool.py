@@ -178,10 +178,6 @@ class Ipatool:
         return Path(output)
 
 
-def from_config(cfg) -> Ipatool:
-    return Ipatool([str(cfg.ipatool_bin)], cfg.ipatool_home, cfg.lock, cfg.ipatool_proxy)
-
-
 def for_account(cfg, acct) -> Ipatool:
     return Ipatool([str(cfg.ipatool_bin)], cfg.accounts_dir / str(acct.id), cfg.locks_dir / f"{acct.id}.lock",
                    cfg.ipatool_proxy, acct.device_mac)

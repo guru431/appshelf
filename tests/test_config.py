@@ -15,10 +15,9 @@ def test_defaults_and_paths():
     cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE})
     assert cfg.data_dir == Path("/var/lib/appshelf")
     assert cfg.db == Path("/var/lib/appshelf/appshelf.db")
-    assert cfg.pub_root == Path("/var/lib/appshelf/pub") / TOKEN
-    assert cfg.lock == Path("/var/lib/appshelf/ipatool.lock")
+    assert cfg.archive == Path("/var/lib/appshelf/pub")
     assert cfg.ipatool_home == Path("/etc/appshelf")
-    assert cfg.public_url("123-1.0", "app.ipa") == f"{BASE}/d/{TOKEN}/123-1.0/app.ipa"
+    assert cfg.shelf_url(SimpleNamespace(id=1, legacy_pub=True), "123-1.0", "app.ipa") == f"{BASE}/d/{TOKEN}/123-1.0/app.ipa"
 
 
 def test_overrides():
@@ -28,12 +27,12 @@ def test_overrides():
     assert cfg.public_base == "https://x.example"
     assert cfg.ipatool_proxy == "socks5h://proxy.example:1080"
     assert cfg.mail_to == "owner@example.com"
-    assert cfg.pub_root == Path("/tmp/a/pub") / TOKEN
+    assert cfg.archive == Path("/tmp/a/pub")
 
 
 def test_archive_on_share():
     cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE, "APPSHELF_PUB": "/mnt/archive/appshelf/pub"})
-    assert cfg.pub_root == Path("/mnt/archive/appshelf/pub") / TOKEN
+    assert cfg.archive == Path("/mnt/archive/appshelf/pub")
     assert cfg.db == Path("/var/lib/appshelf/appshelf.db")  # SQLite на CIFS портится — база остаётся локально
 
 
