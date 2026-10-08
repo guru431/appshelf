@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block main %}
+{% if created_link %}<div class="banner">Ссылка — показывается один раз, скопируйте сейчас:<br>
+  <code style="word-break:break-all">{{ created_link }}</code></div>{% endif %}
+<p><b>Приглашения</b></p>
+<form method="post" action="/admin/invites" style="display:flex;gap:8px">
+  <input name="label" placeholder="подпись: коллеги, Петя…" style="margin:0"><button>Создать ссылку</button></form>
+<p class="hint">По ссылке входят новым Apple ID один раз; ссылка работает, пока вы её не отключите — одна на всех или своя на каждого.</p>
+<table>
+{% for i in invites %}
+<tr class="row{{ ' inactive' if i['disabled_at'] }}">
+  <td>{{ i['label'] }}<div class="meta">{{ i['created_at'][:10] }} · пришло: {{ i['joined'] }}{% if i['disabled_at'] %} · отключена{% endif %}</div></td>
+  <td style="text-align:right">{% if not i['disabled_at'] %}<form method="post" action="/admin/invites/{{ i['id'] }}/disable"><button class="secondary">Отключить</button></form>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td class="hint">Приглашений нет.</td></tr>
+{% endfor %}
+</table>
+<p><b>Люди</b></p>
+{% for p in persons %}
+<div class="card"><div class="body">
+  <div>{{ p.user.name }} <span class="tag">{{ 'владелец' if p.user.role == 'owner' else 'участник' }}</span></div>
+  {% for r in p.accounts %}<div class="meta">{{ r.a.email }} ·
+    {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}вход истёк{% else %}нет входа{% endif %}
+    · последний вход {{ r.a.last_login_at[:10] or '—' }} · {{ (r.size / 1073741824) | round(1) }} ГБ</div>{% endfor %}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+    <form method="post" action="/admin/users/{{ p.user.id }}/login-link"><button class="secondary">Ссылка входа</button></form>
+    <form method="post" action="/admin/users/{{ p.user.id }}/logout-all"><button class="secondary">Выйти везде</button></form>
+    {% if p.user.id != user.id %}<a class="btn" href="/admin/users/{{ p.user.id }}/delete">Удалить</a>{% endif %}
+  </div>
+</div></div>
+{% endfor %}
+{% endblock %}

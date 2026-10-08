@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import ipatool, jobs, notify, people, removed, store, webauth
 from ..config import GB, Config, from_env
-from . import accounts, pwa, signin
+from . import accounts, admin, pwa, signin
 from .common import ACCT_COOKIE, THEMES, WebCtx, back, referer_path
 from .login import Limiter, LoginFlow
 
@@ -276,6 +276,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     signin.register_routes(app, w)
     accounts.register_routes(app, w)
+    admin.register_routes(app, w)
     return app
 
 
