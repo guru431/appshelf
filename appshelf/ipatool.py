@@ -1,8 +1,8 @@
 """Запуск bin/ipatool — форк ipatool-cpp с патчами appshelf (spec §5).
 
 Пароль Apple ID — только через stdin (--password-stdin): argv виден любому пользователю в
-/proc/<pid>/cmdline. Одновременно работает один ipatool: блокировка ipatool.lock общая у обработчика
-appshelf-web и ночной проверки (общий файл cookies)."""
+/proc/<pid>/cmdline. Каждый Apple ID — свой HOME и своя блокировка: его вызовы идут по одному, другие Apple ID
+не ждут (spec 2026-10-08 §7)."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +67,20 @@ def _acquire(fd: int, wait: float | None) -> bool:
     return True
 
 
+@contextmanager
+def hold(path: Path, wait: float | None = None):
+    """Файловая блокировка на время блока: wait=None — ждать сколько угодно, иначе не дольше wait секунд;
+    не дождались — IpatoolError("busy")."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if not _acquire(fd, wait):
+            raise IpatoolError("busy", "ipatool этого Apple ID занят: идёт скачивание или проверка")
+        yield
+    finally:
+        os.close(fd)
+
+
 def _kill(proc: subprocess.Popen) -> None:
     try:
         if os.name == "posix":
@@ -94,10 +109,11 @@ def _last_json(out: str):
 
 @dataclass
 class Ipatool:
-    argv0: list[str]   # [/var/_sh/appshelf/bin/ipatool]; в тестах [python, fake_ipatool.py]
-    home: Path         # HOME: учётка и cookies — в $HOME/.ipatool
-    lock: Path
+    argv0: list[str]       # [/var/_sh/appshelf/bin/ipatool]; в тестах [python, fake_ipatool.py]
+    home: Path             # HOME Apple ID: учётка и cookies — в $HOME/.ipatool
+    lock: Path             # блокировка Apple ID: его вызовы по одному, другие Apple ID не ждут
     proxy: str = ""
+    device_mac: str = ""   # IPATOOL_DEVICE_MAC (патч 05); пусто — настоящий MAC сервера
 
     def run(self, args: list[str], timeout: float, stdin: str = "", lock_wait: float | None = None):
         env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
@@ -105,11 +121,9 @@ class Ipatool:
             env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
         if self.proxy:
             env["https_proxy"] = env["HTTPS_PROXY"] = self.proxy
-        self.lock.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.lock, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            if not _acquire(fd, lock_wait):
-                raise IpatoolError("busy", "ipatool занят: идёт скачивание или ночная проверка")
+        if self.device_mac:
+            env["IPATOOL_DEVICE_MAC"] = self.device_mac
+        with hold(self.lock, lock_wait):
             proc = subprocess.Popen([*self.argv0, "--format", "json", *args], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True,
                                     encoding="utf-8", errors="replace", start_new_session=os.name == "posix")
@@ -119,8 +133,6 @@ class Ipatool:
                 _kill(proc)
                 proc.communicate()
                 raise IpatoolError("timeout", f"ipatool не уложился в {timeout:.0f} с") from None
-        finally:
-            os.close(fd)
         data = _last_json(out)
         if proc.returncode == 0:
             if data is None:
@@ -168,3 +180,13 @@ class Ipatool:
 
 def from_config(cfg) -> Ipatool:
     return Ipatool([str(cfg.ipatool_bin)], cfg.ipatool_home, cfg.lock, cfg.ipatool_proxy)
+
+
+def for_account(cfg, acct) -> Ipatool:
+    return Ipatool([str(cfg.ipatool_bin)], cfg.accounts_dir / str(acct.id), cfg.locks_dir / f"{acct.id}.lock",
+                   cfg.ipatool_proxy, acct.device_mac)
+
+
+def for_new(cfg, home: Path, device_mac: str) -> Ipatool:
+    """Первый вход нового Apple ID — во временный HOME accounts/.new-*: id у него появится после успеха."""
+    return Ipatool([str(cfg.ipatool_bin)], home, cfg.locks_dir / f"{home.name}.lock", cfg.ipatool_proxy, device_mac)

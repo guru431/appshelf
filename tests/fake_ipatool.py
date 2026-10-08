@@ -2,7 +2,7 @@
 
 Ответы — из $HOME/scenario.json: {"<команда>": {"code": 0, "out": {...} | [...], "sleep": 0, "copy": "<ipa>"}}.
 Команда — позиционные аргументы после `--format json`: "auth login", "list-purchases", "download"…
-Каждый вызов дописывается в $HOME/calls.jsonl: argv, stdin, https_proxy. JSON — ASCII (кодировка консоли Windows).
+Каждый вызов дописывается в $HOME/calls.jsonl: argv, stdin, https_proxy, IPATOOL_DEVICE_MAC. JSON — ASCII (кодировка консоли Windows).
 """
 import json
 import os
@@ -14,7 +14,8 @@ home = os.environ["HOME"]
 args = sys.argv[1:]
 stdin = sys.stdin.read()
 with open(os.path.join(home, "calls.jsonl"), "a", encoding="utf-8") as f:
-    f.write(json.dumps({"args": args, "stdin": stdin, "https_proxy": os.environ.get("https_proxy", "")}) + "\n")
+    f.write(json.dumps({"args": args, "stdin": stdin, "https_proxy": os.environ.get("https_proxy", ""),
+                        "device_mac": os.environ.get("IPATOOL_DEVICE_MAC", "")}) + "\n")
 pos = [a for a in args[2:] if not a.startswith("-")]          # args[:2] == ["--format", "json"]
 cmd = " ".join(pos[:2]) if pos and pos[0] == "auth" else (pos[0] if pos else "")
 with open(os.path.join(home, "scenario.json"), encoding="utf-8") as f:
