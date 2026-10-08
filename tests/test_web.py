@@ -8,7 +8,7 @@ from starlette.testclient import TestClient
 from appshelf import store
 from appshelf.config import GB
 from appshelf.web.app import parse_app_id
-from helpers import TOKEN, seed_app, set_session
+from helpers import HOST, TOKEN, make_account, seed_app, set_session, sign_in
 
 
 def test_healthz_without_login(web):
@@ -67,6 +67,18 @@ def test_banners_for_expired_session_and_low_space(web, conn):
     r = web.client.get("/")
     assert "Вход в Apple ID owner@example истёк" in r.text and "Мало места" in r.text
     assert "/login?email=owner%40example&amp;next=%2F" in r.text
+
+
+def test_catalog_shows_only_own_nightly_result(web, conn, cfg, clock):  # адреса чужих Apple ID участнику не видны
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    store.set_state(conn, "nightly_last", clock.iso())
+    store.set_state(conn, "nightly_result", "owner@example: обновлено 2, без изменений 0, ошибок 0 | "
+                                            "petr@example: обновлено 0, без изменений 1, ошибок 0")
+    member = TestClient(web.app, base_url=f"https://{HOST}")
+    sign_in(member, cfg, conn, clock, petr.user_id)
+    text = member.get("/").text
+    assert "обновлено 0, без изменений 1" in text and "owner@example" not in text
+    assert "обновлено 2, без изменений 0" in web.client.get("/").text
 
 
 def test_catalog_explains_app_store_apple_id(web):

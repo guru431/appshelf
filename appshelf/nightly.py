@@ -14,6 +14,9 @@ from .jobs import Env, LowSpace, describe, fetch_version, low_space, mark_expire
 
 STAMP = "nightly.stamp"
 EXPIRED = "остановлена: истёк вход в Apple ID"
+NO_LOGIN = "пропущена: нет входа ни в один Apple ID"
+NOT_IN_RUN = "пропущена: не было входа в этот Apple ID"
+SEP = " | "
 
 
 def run(env: Env, c) -> str:
@@ -30,10 +33,10 @@ def _run(env: Env, c) -> str:
     store.fail_stale_updates(c, env.now())
     accounts = [a for a in people.all_accounts(c) if a.session == "ok"]
     if not accounts:
-        return _finish(env, c, "пропущена: нет входа ни в один Apple ID")
+        return _finish(env, c, NO_LOGIN)
     # справочник удалённых целиком (~205 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
     weekday = datetime.fromisoformat(env.now()).weekday()
-    return _finish(env, c, " | ".join(
+    return _finish(env, c, SEP.join(
         f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts))
 
 
@@ -90,6 +93,16 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
                 store.finish_job(c, job_id, "error", env.now(), msg)
             store.set_app_status(c, acct.id, app_id, "error", msg)
     return "; ".join([f"обновлено {updated}, без изменений {same}, ошибок {errors}", *notes])
+
+
+def result_for(result: str, email: str) -> str:
+    """Итог для полки одного Apple ID: его часть «<email>: …» без адреса — адреса других Apple ID участникам не
+    показываем. Итог без адресов (пропущена целиком, прогон до перехода на несколько Apple ID) — как есть."""
+    prefix = f"{email}: "
+    for part in result.split(SEP):
+        if part.startswith(prefix):
+            return part[len(prefix):]
+    return result if "@" not in result else NOT_IN_RUN
 
 
 def _finish(env: Env, c, result: str) -> str:

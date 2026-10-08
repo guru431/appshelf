@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, people, store
-from .accounts import ARCHIVE_DOWN
+from .accounts import ACCOUNT_BUSY, ARCHIVE_DOWN
 from .common import WebCtx, back
 
 SELF = "Себя удалить нельзя"
@@ -90,6 +90,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                 jobs.remove_user(w.cfg, c, uid)
         except jobs.ArchiveUnavailable:
             return confirm(request, uid, ARCHIVE_DOWN, 503)
+        except jobs.AccountBusy:
+            return confirm(request, uid, ACCOUNT_BUSY, 409)
         return back("/admin")
 
     app.include_router(router)

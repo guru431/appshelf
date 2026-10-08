@@ -288,7 +288,39 @@ def test_remove_account_deletes_rows_dirs_and_last_user(ctx, cfg, conn, clock):
     assert people.get_account(conn, petr.id) is None and people.get_user(conn, petr.user_id) is None
     assert store.list_purchases(conn, petr.id) == [] and store.shelf_size(conn, petr.id) == 0
     assert not cfg.shelf_root(petr).exists() and not home.parent.exists()
+    assert not (cfg.locks_dir / f"{petr.id}.lock").exists()
     assert people.get_account(conn, 1) is not None
+
+
+def test_remove_refused_while_apple_id_has_running_job(ctx, cfg, conn, clock):
+    petr = member(conn, clock, session="ok")
+    seed_app(conn, cfg, clock, app_id=7, acct=petr, versions=("1.0",), make_dirs=True)
+    store.take_job(conn)                                    # публикация Петра качается
+    with pytest.raises(jobs.AccountBusy):
+        jobs.remove_account(cfg, conn, petr)
+    with pytest.raises(jobs.AccountBusy):
+        jobs.remove_user(cfg, conn, petr.user_id)
+    assert people.get_account(conn, petr.id) is not None and cfg.shelf_root(petr).is_dir()
+
+
+def test_remove_refused_while_ipatool_of_apple_id_runs(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    with ipatool.hold(cfg.locks_dir / f"{petr.id}.lock"):  # вход или проверка этого Apple ID идёт
+        with pytest.raises(jobs.AccountBusy):
+            jobs.remove_account(cfg, conn, petr)
+    assert people.get_account(conn, petr.id) is not None
+
+
+def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
+    (cfg.accounts_dir / ".new-0123456789abcdef" / ".ipatool").mkdir(parents=True)
+    (cfg.accounts_dir / "1").mkdir()
+    cfg.locks_dir.mkdir(parents=True)
+    (cfg.locks_dir / ".new-0123456789abcdef.lock").write_text("")
+    (cfg.locks_dir / "1.lock").write_text("")
+    worker(ctx, cfg).recover()
+    assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"]
+    assert [p.name for p in cfg.locks_dir.iterdir()] == ["1.lock"]
 
 
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):

@@ -2,8 +2,8 @@ import re
 
 from starlette.testclient import TestClient
 
-from appshelf import people
-from helpers import HOST, make_account, seed_app, sign_in
+from appshelf import people, store
+from helpers import HOST, make_account, seed_app, set_session, sign_in
 
 BASE = f"https://{HOST}"
 
@@ -68,6 +68,15 @@ def test_delete_member_with_shelves(web, conn, cfg, clock):
     assert web.client.post(f"/admin/users/{p.user_id}/delete", follow_redirects=False).status_code == 303
     assert people.get_user(conn, p.user_id) is None and people.get_account(conn, p.id) is None
     assert not cfg.shelf_root(p).exists() and not (cfg.accounts_dir / str(p.id)).exists()
+
+
+def test_delete_member_refused_while_downloading(web, conn, cfg, clock):
+    p = petr(conn, clock)
+    seed_app(conn, cfg, clock, app_id=7, acct=p)
+    set_session(conn, p.id, "ok")
+    store.take_job(conn)                                   # публикация Петра качается
+    r = web.client.post(f"/admin/users/{p.user_id}/delete")
+    assert r.status_code == 409 and "Идёт скачивание" in r.text and people.get_user(conn, p.user_id)
 
 
 def test_owner_cannot_delete_self(web, conn):

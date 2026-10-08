@@ -75,6 +75,14 @@ def test_delete_needs_archive(web, conn, cfg, clock):
     assert r.status_code == 503 and "Архив недоступен" in r.text and people.get_account(conn, second.id)
 
 
+def test_delete_refused_while_downloading(web, conn, cfg, clock):
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=1, session="ok")
+    seed_app(conn, cfg, clock, app_id=5, acct=second)
+    store.take_job(conn)                                   # публикация второго Apple ID качается
+    r = web.client.post(f"/apple/{second.id}/delete")
+    assert r.status_code == 409 and "Идёт скачивание" in r.text and people.get_account(conn, second.id)
+
+
 def test_foreign_apple_id_cannot_be_deleted(web, conn, clock):
     petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
     assert web.client.post(f"/apple/{petr.id}/delete").status_code == 404 and people.get_account(conn, petr.id)

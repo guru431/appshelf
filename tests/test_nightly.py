@@ -100,6 +100,15 @@ def test_error_app_with_same_version_back_to_ok(ctx, cfg, conn, clock):
     assert store.list_apps(conn, 1)[0].status == "ok"
 
 
+def test_result_for_shows_only_own_apple_id():
+    both = "owner@example: обновлено 1, без изменений 0, ошибок 0 | petr@example: остановлена: истёк вход в Apple ID"
+    assert nightly.result_for(both, "petr@example") == "остановлена: истёк вход в Apple ID"
+    assert nightly.result_for(both, "ivan@example") == nightly.NOT_IN_RUN       # не было входа — в прогон не попал
+    assert nightly.result_for(nightly.NO_LOGIN, "petr@example") == nightly.NO_LOGIN
+    v1 = "обновлено 0, без изменений 3, ошибок 0"                                # итог до перехода — без адресов
+    assert nightly.result_for(v1, "owner@example") == v1
+
+
 def test_second_nightly_does_nothing_while_first_runs(ctx, cfg, conn, clock):
     ready(conn, cfg, clock)
     with jobs.nightly_lock(cfg) as got:

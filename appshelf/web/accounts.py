@@ -11,6 +11,7 @@ from .common import ACCT_COOKIE, WebCtx, back
 from .signin import login_page, relogin_query, submit
 
 ARCHIVE_DOWN = "Архив недоступен — удалить сейчас нельзя"
+ACCOUNT_BUSY = "Идёт скачивание или проверка этого Apple ID — удалить можно, когда закончится"
 LAST_OWNER_ID = "Последний Apple ID владельца удалить нельзя"
 
 
@@ -67,6 +68,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                 jobs.remove_account(w.cfg, c, a)
         except jobs.ArchiveUnavailable:
             return confirm(request, a, ARCHIVE_DOWN, 503)
+        except jobs.AccountBusy:
+            return confirm(request, a, ACCOUNT_BUSY, 409)
         if len(request.state.accounts) > 1:
             return back("/apple")
         resp = back("/login")  # был последний Apple ID — человека больше нет

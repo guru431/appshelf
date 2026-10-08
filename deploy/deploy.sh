@@ -12,6 +12,11 @@ if [ -n "${APPSHELF_SSH_KEY:-}" ]; then SSH+=(-i "$APPSHELF_SSH_KEY" -o Identiti
 SSH+=("$APPSHELF_SSH")
 tar -C "$D" --exclude=__pycache__ -czf - pyproject.toml appshelf deploy ipatool | "${SSH[@]}" '
   set -e
+  # spec 2026-10-08 §6: без Apple ID владельца новый код не стартует (MigrationError) — не ставим его вовсе
+  if ! sudo grep -qE "^APPSHELF_OWNER=.+" /etc/appshelf/appshelf.env; then
+    echo "ОШИБКА: в /etc/appshelf/appshelf.env нет APPSHELF_OWNER=<Apple ID владельца>" >&2
+    exit 1
+  fi
   sudo tar -xzf - -C /var/_sh/appshelf
   sudo chown -R appshelf:'"${APPSHELF_CODE_GROUP:-appshelf}"' /var/_sh/appshelf/appshelf /var/_sh/appshelf/deploy /var/_sh/appshelf/ipatool /var/_sh/appshelf/pyproject.toml
   sudo -u appshelf /var/_sh/appshelf/.venv/bin/pip install --quiet --no-deps --force-reinstall /var/_sh/appshelf
@@ -19,11 +24,7 @@ tar -C "$D" --exclude=__pycache__ -czf - pyproject.toml appshelf deploy ipatool 
     sudo install -m 0644 "/var/_sh/appshelf/deploy/$u" "/etc/systemd/system/$u"
   done
   sudo systemctl daemon-reload
-  # spec 2026-10-08 §6: Apple ID владельца, HOME ipatool на каждый Apple ID
-  if ! sudo grep -qE "^APPSHELF_OWNER=.+" /etc/appshelf/appshelf.env; then
-    echo "ОШИБКА: в /etc/appshelf/appshelf.env нет APPSHELF_OWNER=<Apple ID владельца>" >&2
-    exit 1
-  fi
+  # spec 2026-10-08 §6: HOME ipatool на каждый Apple ID
   sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
   if sudo test -d /etc/appshelf/.ipatool && ! sudo test -e /etc/appshelf/accounts/1; then
     sudo systemctl stop appshelf-web       # учётка ipatool переезжает — служба её в это время не трогает

@@ -513,6 +513,12 @@ def has_running(c, kind: str) -> bool:
     return c.execute("SELECT 1 FROM jobs WHERE kind=? AND status='running' LIMIT 1", (kind,)).fetchone() is not None
 
 
+def account_running(c, aid: int) -> bool:
+    """Идёт ли задание Apple ID (скачивание обработчика или ночной проверки, история, справочник)."""
+    return c.execute("SELECT 1 FROM jobs WHERE account_id=? AND status='running' LIMIT 1",
+                     (aid,)).fetchone() is not None
+
+
 def refresh_status(c, aid: int) -> tuple[str, str, str]:
     """Для страницы «История»: (что идёт — "refresh_history" | "check_removed" | "", ошибка последнего
     обновления истории, её время)."""

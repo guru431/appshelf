@@ -96,6 +96,8 @@ def register(w: WebCtx, c, intent: Intent, info: dict, now: str) -> tuple[int, i
                 raise Refused(INVITE_GONE)
             if intent.owner and people.owner_exists(c):
                 raise Refused(NOT_REGISTERED)
+            if intent.user_id is not None and people.get_user(c, intent.user_id) is None:
+                raise Refused(NOT_REGISTERED)  # человека удалили, пока он добавлял Apple ID
             uid = intent.user_id
             if uid is None:
                 role = people.OWNER if intent.owner else people.MEMBER
@@ -118,8 +120,11 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
     now = w.now()
     with w.conn() as c:
         if intent.account_id is not None:
-            people.mark_login(c, intent.account_id, info, now)
-            aid, uid = intent.account_id, people.get_account(c, intent.account_id).user_id
+            acct = people.get_account(c, intent.account_id)
+            if acct is None:  # Apple ID удалили, пока ждали код
+                return login_page(w, request, email=intent.email, next_=next_, error=NOT_REGISTERED, status_code=403)
+            people.mark_login(c, acct.id, info, now)
+            aid, uid = acct.id, acct.user_id
         else:
             try:
                 aid, uid = register(w, c, intent, info, now)

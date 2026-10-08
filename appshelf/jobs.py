@@ -24,6 +24,7 @@ BANNER_FREE = 3 * GB   # баннер на каталоге
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 EXPIRED_SUBJECT = "appshelf: нужен вход в Apple ID"
 LOW_SPACE_SUBJECT = f"appshelf: мало места на {notify.HOST}"
+REMOVE_LOCK_WAIT = 10.0  # идёт вызов ipatool этого Apple ID — ждём, как вход; скачивание отсекает проверка заданий
 
 
 class LowSpace(Exception):
@@ -32,6 +33,10 @@ class LowSpace(Exception):
 
 class ArchiveUnavailable(Exception):
     """Каталога архива нет: шара не смонтирована. Писать под пустую точку монтирования — забить локальный диск."""
+
+
+class AccountBusy(Exception):
+    """У Apple ID идёт задание или вызов ipatool: удали его сейчас — каталог полки и HOME появятся снова без хозяина."""
 
 
 def now_iso() -> str:
@@ -173,20 +178,36 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
 def remove_account(cfg: Config, c, acct) -> None:
     """Apple ID целиком: строки полки, каталог в архиве, HOME ipatool (учётка и cookies). Был последним у
     человека — удаляется и человек. Архив недоступен — ArchiveUnavailable и ничего не удалено: IPA с данными
-    покупателя не должен остаться без хозяина."""
+    покупателя не должен остаться без хозяина. Идёт задание или вызов ipatool этого Apple ID — AccountBusy."""
     _archive(cfg)
-    with store.tx(c):
-        store.delete_shelf(c, acct.id)
-        c.execute("DELETE FROM accounts WHERE id=?", (acct.id,))
-        if not people.accounts_of(c, acct.user_id):
-            people.delete_user_row(c, acct.user_id)
-    shutil.rmtree(cfg.shelf_root(acct), ignore_errors=True)
-    shutil.rmtree(cfg.accounts_dir / str(acct.id), ignore_errors=True)
+    lock = cfg.locks_dir / f"{acct.id}.lock"
+    try:
+        with hold(lock, REMOVE_LOCK_WAIT):
+            with store.tx(c):  # проверка и удаление — одной транзакцией: обработчик не возьмёт задание посередине
+                if store.account_running(c, acct.id):
+                    raise AccountBusy(acct.email)
+                store.delete_shelf(c, acct.id)
+                c.execute("DELETE FROM accounts WHERE id=?", (acct.id,))
+                if not people.accounts_of(c, acct.user_id):
+                    people.delete_user_row(c, acct.user_id)
+            shutil.rmtree(cfg.shelf_root(acct), ignore_errors=True)
+            shutil.rmtree(cfg.accounts_dir / str(acct.id), ignore_errors=True)
+    except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
+        raise AccountBusy(acct.email) from e
+    try:
+        lock.unlink(missing_ok=True)
+    except OSError:  # файл блокировки открыт другим процессом — останется пустым, Apple ID уже нет
+        pass
 
 
 def remove_user(cfg: Config, c, uid: int) -> None:
-    """Человек со всеми Apple ID: удаление последнего удаляет и строку человека."""
-    for acct in people.accounts_of(c, uid):
+    """Человек со всеми Apple ID: удаление последнего удаляет и строку человека. Задание у любого его Apple ID —
+    AccountBusy до удаления первого."""
+    accounts = people.accounts_of(c, uid)
+    busy = next((a for a in accounts if store.account_running(c, a.id)), None)
+    if busy is not None:
+        raise AccountBusy(busy.email)
+    for acct in accounts:
         remove_account(cfg, c, acct)
 
 
@@ -213,13 +234,19 @@ class Worker:
             self.sleep(self.interval)
 
     def recover(self) -> None:
-        """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь."""
+        """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь, как и временные HOME входов
+        новых Apple ID: их пароли ушли вместе с прежним процессом."""
         c = self.connect()
         try:
             store.requeue_running(c)
         finally:
             c.close()
-        shutil.rmtree(self.env.cfg.tmp_dir / "web", ignore_errors=True)
+        cfg = self.env.cfg
+        shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
+        for home in cfg.accounts_dir.glob(".new-*"):
+            shutil.rmtree(home, ignore_errors=True)
+        for lock in cfg.locks_dir.glob(".new-*.lock"):
+            lock.unlink(missing_ok=True)
 
     def tick(self) -> bool:
         """Одно задание Apple ID с входом. True — что-то сделано; задания Apple ID без входа ждут (spec §7.6)."""

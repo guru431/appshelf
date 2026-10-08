@@ -15,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import ipatool, jobs, notify, people, removed, store, webauth
 from ..config import GB, Config, from_env
+from ..nightly import result_for
 from . import accounts, admin, pwa, signin
 from .common import ACCT_COOKIE, THEMES, WebCtx, back, referer_path
 from .login import Limiter, LoginFlow
@@ -130,7 +131,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         a = request.state.acct
         with w.conn() as c:
             apps = store.list_apps(c, a.id)
-            nightly = (store.get_state(c, "nightly_last"), store.get_state(c, "nightly_result"))
+            nightly = (store.get_state(c, "nightly_last"), result_for(store.get_state(c, "nightly_result"), a.email))
             busy = store.has_active_jobs(c, a.id)
         banners = []
         try:

@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from starlette.testclient import TestClient
 
-from appshelf import people, store
+from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
 from helpers import HOST, FakeTool, make_account, seed_app, sign_in
 
@@ -48,6 +48,14 @@ def test_known_apple_id_logs_in_with_2fa_code(make_web, cfg, conn, acct):  # Rev
         for f in (root.rglob("*") if root.exists() else []):
             if f.is_file():
                 assert b"S3cret-pw" not in f.read_bytes(), f
+
+
+def test_foreign_next_after_login_stays_on_site(make_web, cfg, conn, acct):  # open redirect
+    wb = make_web(cfg, conn)
+    for target in ("https://evil.example/x", "//evil.example/x", "/\\evil.example"):
+        r = wb.client.post("/login", data={"email": "owner@example", "password": "pw", "next": target},
+                           follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/", target
 
 
 def test_unknown_apple_id_without_invite_never_reaches_apple(make_web, cfg, conn, acct):
@@ -129,6 +137,29 @@ def test_code_after_ttl_asks_to_start_over(make_web, cfg, conn, acct, clock):
     clock.advance(601)
     assert "Срок шага истёк" in wb.client.post("/login/code", data={"code": "123456"}).text
     assert len(t.calls) == 1 and not t.home.exists()
+
+
+def test_apple_id_deleted_between_login_steps(make_web, cfg, conn, acct, clock):
+    wb = make_web(cfg, conn)
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=acct.user_id)
+    wb.tools.setdefault(second.id, FakeTool()).errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "second@example", "password": "pw"})
+    jobs.remove_account(cfg, conn, second)                    # удалили, пока ждали код
+    r = wb.client.post("/login/code", data={"code": "123456"})
+    assert r.status_code == 403 and "не зарегистрирован" in r.text and "appshelf_auth=" not in cookies(r)
+
+
+def test_person_deleted_while_adding_apple_id(web, conn, cfg, clock):
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    member = TestClient(web.app, base_url=BASE)
+    sign_in(member, cfg, conn, clock, petr.user_id)
+    t = FakeTool()
+    t.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    web.queue.append(t)
+    member.post("/apple/add", data={"email": "petr2@example", "password": "pw"})
+    jobs.remove_user(cfg, conn, petr.user_id)                 # владелец удалил Петра, пока тот вводил код
+    r = member.post("/login/code", data={"code": "123456"})
+    assert r.status_code == 403 and people.account_by_email(conn, "petr2@example") is None and not t.home.exists()
 
 
 def test_bad_code_format_keeps_step(make_web, cfg, conn, acct):
