@@ -25,6 +25,6 @@ def main(argv=None) -> int:
         cfg.web_auth.parent.mkdir(parents=True, exist_ok=True)
         webauth.set_password(cfg.web_auth, args.user, password)
         return 0
-    with closing(store.connect(cfg.db)) as c:
-        print(nightly.run(jobs.Env(cfg, ipatool.from_config(cfg)), c))
+    with closing(store.connect(cfg.db, cfg.owner_email)) as c:
+        print(nightly.run(jobs.Env(cfg, lambda acct: ipatool.for_account(cfg, acct)), c))
     return 0

@@ -43,8 +43,9 @@ def acct(conn, clock):
 
 @pytest.fixture
 def ctx(cfg, clock):
-    """Env с подменами: ipatool, письма (только темы), свободное место."""
-    tool, sent, free = FakeTool(), [], {"bytes": 50 * GB}
-    env = jobs.Env(cfg, tool, now=clock.iso, send=lambda subject, body, to: sent.append(subject),
-                   disk_free=lambda path: free["bytes"])
-    return SimpleNamespace(env=env, tool=tool, sent=sent, free=free)
+    """Env с подменами: ipatool на каждый Apple ID (tools[id]; tool — у Apple ID №1), письма (только темы),
+    свободное место."""
+    tools, sent, free = {}, [], {"bytes": 50 * GB}
+    env = jobs.Env(cfg, lambda acct: tools.setdefault(acct.id, FakeTool()), now=clock.iso,
+                   send=lambda subject, body, to: sent.append(subject), disk_free=lambda path: free["bytes"])
+    return SimpleNamespace(env=env, tools=tools, sent=sent, free=free, tool=tools.setdefault(1, FakeTool()))

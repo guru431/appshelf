@@ -1,16 +1,19 @@
-"""Ночная проверка (spec §7.4): история, новые версии опубликованного, отметка для Zabbix.
+"""Ночная проверка (spec 2026-10-05 §7.4, 2026-10-08 §8): по каждому Apple ID с входом — история, справочник
+удалённых, новые версии опубликованного; отметка для Zabbix.
 
-Без входа в Apple ID ничего не вызывает и только обновляет отметку: о входе пишет письмо, а Zabbix
-срабатывает, лишь если сама проверка не отработала (нет nightly.stamp > 26 ч)."""
+Apple ID без входа пропускаются: о входе пишет письмо (владельцу), а Zabbix срабатывает, лишь если сама
+проверка не отработала (нет nightly.stamp > 26 ч)."""
 from __future__ import annotations
 
 import shutil
+from datetime import datetime
 
-from . import removed, store
+from . import people, removed, store
 from .ipatool import SessionExpired
 from .jobs import Env, LowSpace, describe, fetch_version, low_space, mark_expired, nightly_lock, refresh_history
 
 STAMP = "nightly.stamp"
+EXPIRED = "остановлена: истёк вход в Apple ID"
 
 
 def run(env: Env, c) -> str:
@@ -25,47 +28,56 @@ def _run(env: Env, c) -> str:
     work = env.cfg.tmp_dir / "nightly"
     shutil.rmtree(work, ignore_errors=True)
     store.fail_stale_updates(c, env.now())
-    if store.get_state(c, "session") != "ok":
-        return _finish(env, c, "пропущена: нет входа в Apple ID")
+    accounts = [a for a in people.all_accounts(c) if a.session == "ok"]
+    if not accounts:
+        return _finish(env, c, "пропущена: нет входа ни в один Apple ID")
+    # справочник удалённых целиком (~205 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
+    weekday = datetime.fromisoformat(env.now()).weekday()
+    return _finish(env, c, " | ".join(
+        f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts))
+
+
+def _run_account(env: Env, c, acct, work, full: bool) -> str:
     notes = []
     try:
-        refresh_history(env, c)
+        refresh_history(env, c, acct)
     except SessionExpired:
-        mark_expired(env, c)
-        return _finish(env, c, "остановлена: истёк вход в Apple ID")
+        mark_expired(env, c, acct)
+        return EXPIRED
     except Exception as e:  # история не обновилась — версии всё равно проверяем
         notes.append(f"история: {describe(e)}")
     try:
-        added, _, _ = removed.check(env, c, full=True)  # ночью — весь справочник, кнопка пропускает «нет лицензии»
+        added, _, _ = removed.check(env, c, acct, full=full)
         if added:
             notes.append(f"удалённых из App Store добавлено в историю: {added}")
     except SessionExpired:
-        mark_expired(env, c)
-        return _finish(env, c, "остановлена: истёк вход в Apple ID")
+        mark_expired(env, c, acct)
+        return EXPIRED
     except Exception as e:
         notes.append(f"справочник удалённых: {describe(e)}")
+    tool = env.tools(acct)
     updated = same = errors = 0
-    for app in store.apps_to_check(c):
+    for app in store.apps_to_check(c, acct.id):
         app_id, job_id = app["app_id"], None
         try:
-            latest = env.tool.latest_version_id(app_id)
-            cur = store.current_version(c, app_id)
+            latest = tool.latest_version_id(app_id)
+            cur = store.current_version(c, acct.id, app_id)
             if cur is not None and cur["external_version_id"] == latest:
                 same += 1
-                store.set_app_status(c, app_id, "ok")
+                store.set_app_status(c, acct.id, app_id, "ok")
             else:
-                job_id = store.start_job(c, "update", app_id, env.now())
-                store.set_app_status(c, app_id, "downloading")
-                fetch_version(env, c, app_id, work)
+                job_id = store.start_job(c, acct.id, "update", app_id, env.now())
+                store.set_app_status(c, acct.id, app_id, "downloading")
+                fetch_version(env, c, acct, app_id, work)
                 store.finish_job(c, job_id, "done", env.now())
                 updated += 1
-            store.set_checked(c, app_id, env.now())
+            store.set_checked(c, acct.id, app_id, env.now())
         except SessionExpired:
             if job_id is not None:
                 store.finish_job(c, job_id, "error", env.now(), "истёк вход в Apple ID")
-            store.set_app_status(c, app_id, app["status"], app["last_error"])
-            mark_expired(env, c)
-            return _finish(env, c, f"остановлена: истёк вход в Apple ID (обновлено {updated})")
+            store.set_app_status(c, acct.id, app_id, app["status"], app["last_error"])
+            mark_expired(env, c, acct)
+            return f"{EXPIRED} (обновлено {updated})"
         except store.AppGone:
             if job_id is not None:
                 store.finish_job(c, job_id, "cancelled", env.now(), "снято с публикации во время скачивания")
@@ -76,8 +88,8 @@ def _run(env: Env, c) -> str:
             msg = describe(e)
             if job_id is not None:
                 store.finish_job(c, job_id, "error", env.now(), msg)
-            store.set_app_status(c, app_id, "error", msg)
-    return _finish(env, c, "; ".join([f"обновлено {updated}, без изменений {same}, ошибок {errors}", *notes]))
+            store.set_app_status(c, acct.id, app_id, "error", msg)
+    return "; ".join([f"обновлено {updated}, без изменений {same}, ошибок {errors}", *notes])
 
 
 def _finish(env: Env, c, result: str) -> str:
