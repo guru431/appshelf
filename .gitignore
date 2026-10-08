@@ -19,3 +19,5 @@ build/
 .work/
 # Рабочие файлы исполнения планов (superpowers)
 .superpowers/
+# Планы реализации — локально: в публичный github не уезжают (.github-push-deny)
+docs/superpowers/plans/
