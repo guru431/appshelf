@@ -63,7 +63,7 @@ rm -f /var/lib/appshelf/web-auth /var/lib/appshelf/ipatool.lock
 want="$(cat "$R/ipatool/UPSTREAM" "$R"/ipatool/patches/*.patch | sha256sum | cut -d' ' -f1)"
 if [ "$want" != "$(cat "$R/bin/ipatool.src-sha256" 2>/dev/null || true)" ]; then
   echo "ВНИМАНИЕ: bin/ipatool собран не из выложенных ipatool/UPSTREAM и патчей — нужна пересборка:" >&2
-  echo "  sudo bash $R/deploy/build-ipatool.sh" >&2
+  echo "  на своей машине: bash deploy/build-ipatool.sh" >&2
 fi
 
 systemctl restart appshelf-web

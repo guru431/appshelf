@@ -28,6 +28,17 @@ def test_code_and_binary_belong_to_root():
 
 def test_ipatool_source_hash_matches_between_build_and_deploy():
     install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    docker = (DEPLOY / "build-ipatool-docker.sh").read_text(encoding="utf-8")
     build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")
-    assert SRC_HASH in install and SRC_HASH.replace("$R", "$D") in build
-    assert '"$OUT.src-sha256"' in build and '"$R/bin/ipatool.src-sha256"' in install
+    assert SRC_HASH in install and SRC_HASH.replace("$R", "$D") in docker
+    assert '"$OUT.src-sha256"' in docker
+    assert '"$R/bin/ipatool.src-sha256"' in install and '"$R/bin/ipatool.src-sha256"' in build
+
+
+def test_ipatool_built_from_deployed_sources_and_checked_on_server_before_swap():
+    # сумма сверяется с выложенным: из рабочего дерева бинарник разошёлся бы с ipatool/ на сервере;
+    # библиотеки проверяются на сервере (на хосте сборки они свои), и до замены рабочего бинарника
+    build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")
+    assert '"tar -C $R -cf - ipatool"' in build
+    swap = build.index('mv -f "$T/ipatool" "$R/bin/ipatool"')
+    assert build.index('sudo ldd "$T/bin/ipatool"') < swap and build.index('"$T/bin/ipatool" help') < swap

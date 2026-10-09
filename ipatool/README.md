@@ -1,9 +1,10 @@
 # Форк ipatool-cpp для appshelf
 
 Upstream и закреплённый коммит — `UPSTREAM`. Наши изменения — `patches/NN-*.patch`, применяются по
-порядку (`git apply`). Собирает `deploy/build-ipatool.sh` на сервере в одноразовом контейнере
-`debian:trixie`, результат — `/var/_sh/appshelf/bin/ipatool` (root) и рядом `ipatool.src-sha256` — сумма
-`UPSTREAM` и патчей: `deploy/install.sh` сверяет её с выложенными и при расхождении просит пересборку.
+порядку (`git apply`). Собирает `deploy/build-ipatool.sh` с машины разработчика: выложенные на сервер
+`UPSTREAM` и патчи — в одноразовом контейнере `debian:trixie` на хосте с Docker (`APPSHELF_BUILD_SSH` в `.env`,
+не задан — на самом сервере). Результат — `/var/_sh/appshelf/bin/ipatool` (root) и рядом `ipatool.src-sha256` —
+сумма `UPSTREAM` и патчей: `deploy/install.sh` сверяет её с выложенными и при расхождении просит пересборку.
 
 | Патч | Что меняет |
 |---|---|
@@ -48,7 +49,8 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 1. `git -C "$W" fetch origin` и дифф `git -C "$W" diff "$COMMIT"..origin/main`: в первую очередь новые
    адреса (`https://`, сырые IP), вызовы процессов (`system`, `popen`, `exec`), новые зависимости сборки.
 2. `git -C "$W" rebase --onto origin/main "$COMMIT" appshelf`; конфликты решаются в коммитах патчей.
-3. Новый коммит — в `UPSTREAM`, перегенерация патчей, сборка и проверки (`deploy/build-ipatool.sh`),
+3. Новый коммит — в `UPSTREAM`, перегенерация патчей, выкладка (`deploy/deploy.sh`), сборка и проверки
+   (`deploy/build-ipatool.sh`),
    живая проверка `auth info` / `list-purchases` / `list-versions` от `appshelf` — и `list-versions` по
    приложению, которого нет в покупках Apple ID: выход `5`, `license_not_found` (на этом коде держится
    справочник удалённых, офлайн его не проверить).

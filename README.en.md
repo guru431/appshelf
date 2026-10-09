@@ -57,7 +57,8 @@ Sign-in and multiple Apple IDs: [docs/superpowers/specs/2026-10-08-multi-apple-i
 - A Linux server (tested on Debian 13), Python ≥ 3.11 with `venv`.
 - Apache 2.4 with `mod_ssl`, `mod_proxy`, `mod_proxy_http`, `mod_headers` and a domain with a valid HTTPS
   certificate: iOS installs over `itms-services` only from trusted HTTPS.
-- Docker, only to build `bin/ipatool`; the host needs the `libunicorn2t64` package.
+- Docker, only to build `bin/ipatool`: on the server or on a separate host (`APPSHELF_BUILD_SSH` in `.env`) with
+  passwordless sudo; the server needs the `libunicorn2t64` package.
 - Optional: a local `sendmail` (e.g. exim4) for emails.
 
 ## Installation
@@ -83,7 +84,7 @@ Run the server commands as a user with sudo.
    dependencies, units; it warns that `bin/ipatool` is not built yet), then on the server
    `sudo systemctl enable appshelf-web && sudo systemctl enable --now appshelf-nightly.timer`.
 
-5. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
+5. `bin/ipatool`: on your machine run `bash deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
 
 6. Apache: a vhost based on `deploy/apache-appshelf.conf` (domain, certificate, archive path), then
    `sudo a2enmod ssl proxy proxy_http headers && sudo apache2ctl configtest && sudo systemctl reload apache2`.
@@ -105,12 +106,14 @@ www-data to the `appshelf` group**: Apache reaches the socket through the `www-d
 ## Deploy and build
 
     bash deploy/deploy.sh                                          # code + restart; target is in .env (.env.example)
-    ssh … 'sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh'   # bin/ipatool (after changing ipatool/)
+    bash deploy/build-ipatool.sh                                   # bin/ipatool (after changing ipatool/ and deploying)
 
 What ships is the committed `HEAD` (`git archive`): with uncommitted changes in the code `deploy.sh` refuses. The new
 code replaces the old one as a whole and only after `pip` succeeds; to roll back, deploy the previous commit. If
 `bin/ipatool` was not built from the deployed patches, `deploy.sh` reminds you to rebuild; when to rebuild without
-changes — [ipatool/README.md](ipatool/README.md).
+changes — [ipatool/README.md](ipatool/README.md). `build-ipatool.sh` builds the `ipatool/` deployed on the server
+in a throwaway `debian:trixie` container on the `APPSHELF_BUILD_SSH` host (or on the server itself if unset) and
+installs the binary on the server only if the server has all its libraries.
 
 ## Sign-in and people
 

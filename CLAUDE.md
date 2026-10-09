@@ -10,7 +10,8 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
   `notify.py`, `webauth.py` (cookie человека), `web/` (вход — `signin.py`), `cli.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
-  `install.sh` (установка на сервере от root), `build-ipatool.sh`.
+  `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker
+  `build-ipatool-docker.sh`.
 - Сервер: код `/var/_sh/appshelf`, данные `/var/lib/appshelf` (ссылка `data`), секреты `/etc/appshelf`;
   архив IPA — `APPSHELF_PUB` (сетевая шара, CIFS). База и `tmp/` — только локально: SQLite на CIFS портится,
   а `os.replace` из `tmp/` в архив — EXDEV.
@@ -19,7 +20,8 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
 
 ## Команды
 - Тесты (Windows): `.venv/Scripts/python -m pytest -q`; живые на сервере: `.venv/Scripts/python -m pytest -q -m integration`.
-- Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — на сервере: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh`.
+- Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
+  `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
   <Apple ID>` (на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется).
 

@@ -55,7 +55,8 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 - Linux-сервер (проверено на Debian 13), Python ≥ 3.11 с `venv`.
 - Apache 2.4 с `mod_ssl`, `mod_proxy`, `mod_proxy_http`, `mod_headers` и домен с действительным
   HTTPS-сертификатом: iOS ставит по `itms-services` только с доверенного HTTPS.
-- Docker — только для сборки `bin/ipatool`; на хосте нужен пакет `libunicorn2t64`.
+- Docker — только для сборки `bin/ipatool`: на сервере или на отдельном хосте (`APPSHELF_BUILD_SSH` в `.env`)
+  с sudo без пароля; на сервере нужен пакет `libunicorn2t64`.
 - Необязательно: локальный `sendmail` (например, exim4) для писем.
 
 ## Установка
@@ -81,7 +82,7 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
    зависимости, юниты; предупредит, что `bin/ipatool` ещё не собран), затем на сервере
    `sudo systemctl enable appshelf-web && sudo systemctl enable --now appshelf-nightly.timer`.
 
-5. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
+5. `bin/ipatool`: на своей машине `bash deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
 
 6. Apache: vhost по образцу `deploy/apache-appshelf.conf` (домен, сертификат, путь архива), затем
    `sudo a2enmod ssl proxy proxy_http headers && sudo apache2ctl configtest && sudo systemctl reload apache2`.
@@ -103,12 +104,14 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 ## Выкладка и сборка
 
     bash deploy/deploy.sh                                          # код + перезапуск; куда — .env (.env.example)
-    ssh … 'sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh'   # bin/ipatool (после правки ipatool/)
+    bash deploy/build-ipatool.sh                                   # bin/ipatool (после правки ipatool/ и выкладки)
 
 Уезжает закоммиченный `HEAD` (`git archive`): с незакоммиченными правками в коде `deploy.sh` откажется. Новый
 код встаёт на место прежнего целиком и только после `pip`; откат — выложить прежний коммит. Если `bin/ipatool`
 собран не из выложенных патчей, `deploy.sh` напомнит о пересборке; когда пересобирать без правок —
-[ipatool/README.md](ipatool/README.md).
+[ipatool/README.md](ipatool/README.md). `build-ipatool.sh` собирает выложенные на сервер `ipatool/`, в
+одноразовом контейнере `debian:trixie` на хосте `APPSHELF_BUILD_SSH` (не задан — на самом сервере), и ставит
+бинарник на сервер, только если там хватает библиотек.
 
 ## Вход и участники
 
