@@ -22,6 +22,12 @@ ExecStartPost=+/bin/sh -c 'until [ -S /run/appshelf/web.sock ]; do sleep 0.1; do
 LimitCORE=0
 # Данные и токен магазина — только владельцу; публичные файлы /d/ jobs.py открывает явно (0644/0755)
 UMask=0077
+# /usr, /boot, /etc — только чтение, кроме HOME ipatool; код, .venv и bin/ — root (deploy/install.sh).
+# /var открыт: архив (APPSHELF_PUB) бывает где угодно, а sendmail (exim4) пишет очередь в /var/spool.
+# NoNewPrivileges не ставим: с ним setuid-sendmail не отправит ни одного письма.
+ProtectSystem=full
+ReadWritePaths=/etc/appshelf/accounts
+PrivateTmp=yes
 # Один процесс обязателен: пароль между шагами входа и обработчик заданий живут в его памяти
 ExecStart=/var/_sh/appshelf/.venv/bin/uvicorn --factory appshelf.web.app:main --uds /run/appshelf/web.sock --workers 1 --log-level warning
 Restart=on-failure

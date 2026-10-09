@@ -10,6 +10,10 @@ WorkingDirectory=/var/_sh/appshelf
 EnvironmentFile=/etc/appshelf/appshelf.env
 UMask=0077
 LimitCORE=0
+# как у appshelf-web: /usr, /boot, /etc — только чтение, кроме HOME ipatool; без NoNewPrivileges — ради sendmail
+ProtectSystem=full
+ReadWritePaths=/etc/appshelf/accounts
+PrivateTmp=yes
 ExecStart=/var/_sh/appshelf/.venv/bin/python -m appshelf nightly
 # скачивания по 30 мин на приложение и ожидание блокировки ipatool
 TimeoutStartSec=4h

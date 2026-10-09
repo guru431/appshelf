@@ -2,6 +2,7 @@
 # Сборка bin/ipatool: upstream ipatool-cpp + патчи appshelf (spec §5). Запуск на сервере:
 #   sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh
 # Docker — только здесь: пользователь appshelf в группу docker не входит (это равносильно root).
+# OpenSSL вшивается из образа на день сборки — после DSA на openssl пересобрать (ipatool/README.md).
 set -euo pipefail
 D="$(cd "$(dirname "$0")/.." && pwd)"
 . "$D/ipatool/UPSTREAM"                       # URL, COMMIT
@@ -32,34 +33,39 @@ docker run --rm --network host -v /etc/machine-id:/etc/machine-id:ro -v "$WORK:/
   # проверки без обращения к Apple
   ./build/ipatool help > /dev/null
   HOME=/work/h1 ./build/ipatool --format json kbsync --dsid 1 | grep -q "\"success\":true"
-  # коды выхода патча 04 — без обращения к Apple: учётки нет
+  # коды выхода патча 04 — без обращения к Apple: учётки нет (на list-versions держится справочник удалённых)
   set +e
   HOME=/work/h2 ./build/ipatool --format json list-purchases > /work/lp.txt; rc1=$?
   HOME=/work/h2 ./build/ipatool --format json download -i 1 -o /work > /work/dl.txt; rc2=$?
   printf "pw\n" | HOME=/work/h2 ./build/ipatool --format json auth login --password-stdin > /work/li.txt; rc3=$?
+  HOME=/work/h2 ./build/ipatool --format json list-versions -i 1 > /work/lv.txt; rc4=$?
   set -e
   test "$rc1" = 3; grep -q "\"error\":\"not_logged_in\"" /work/lp.txt
   test "$rc2" = 3; grep -q "\"error\":\"not_logged_in\"" /work/dl.txt
   test "$rc3" = 1; grep -q "\"error\":\"usage\"" /work/li.txt
+  test "$rc4" = 3; grep -q "\"error\":\"not_logged_in\"" /work/lv.txt
   # патч 05: MAC из IPATOOL_DEVICE_MAC — без обращения к Apple
   IPATOOL_DEVICE_MAC=00:03:93:12:34:56 HOME=/work/h3 ./build/ipatool --format json kbsync --dsid 1 --debug \
     2> /work/mac.txt | grep -q "\"success\":true"
   grep -q "device ID: OK (IPATOOL_DEVICE_MAC)" /work/mac.txt
   set +e
-  IPATOOL_DEVICE_MAC=00:00:00:00:00:00 HOME=/work/h3 ./build/ipatool --format json kbsync --dsid 1 > /work/bad.txt; rc4=$?
+  IPATOOL_DEVICE_MAC=00:00:00:00:00:00 HOME=/work/h3 ./build/ipatool --format json kbsync --dsid 1 > /work/bad.txt; rc5=$?
   set -e
-  test "$rc4" = 1; grep -q "\"error\":\"bad_device_mac\"" /work/bad.txt
+  test "$rc5" = 1; grep -q "\"error\":\"bad_device_mac\"" /work/bad.txt
   ldd build/ipatool | tee /work/ldd.txt
   if grep -v -E "linux-vdso|ld-linux|libc\.so|libm\.so|libstdc\+\+|libgcc_s|libunicorn\.so" /work/ldd.txt | grep -q .; then
     echo "ОШИБКА: в ldd несистемные библиотеки" >&2; exit 1
   fi
   cp build/ipatool /work/ipatool
 '
-install -o appshelf -g appshelf -m 0755 "$WORK/ipatool" "$OUT"
+# root: appshelf бинарник только исполняет — подменённый ipatool перехватывал бы пароли Apple ID
+install -o root -g root -m 0755 "$WORK/ipatool" "$OUT"
 if ldd "$OUT" | grep -q "not found"; then
   echo "ОШИБКА: на хосте не хватает библиотек (обычно: sudo apt-get install -y libunicorn2t64):" >&2
   ldd "$OUT" | grep "not found" >&2
   exit 1
 fi
 "$OUT" help > /dev/null
+# из каких UPSTREAM и патчей собран — deploy/install.sh сверяет с выложенными и просит пересборку
+cat "$D/ipatool/UPSTREAM" "$D"/ipatool/patches/*.patch | sha256sum | cut -d' ' -f1 > "$OUT.src-sha256"
 echo "OK: $OUT"

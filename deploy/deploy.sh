@@ -1,50 +1,28 @@
 #!/bin/bash
-# Выкладка appshelf на сервер: код, пакет в .venv, юниты, перезапуск appshelf-web, проверка сокета.
-# Первичная установка — README «Установка»; bin/ipatool собирает deploy/build-ipatool.sh.
-# Куда — .env в корне проекта (не в git, образец .env.example): APPSHELF_SSH=user@host,
-# необязательные APPSHELF_SSH_PORT, APPSHELF_SSH_KEY, APPSHELF_CODE_GROUP (группа каталога кода).
+# Выкладка appshelf на сервер: закоммиченный HEAD (git archive, не рабочее дерево) → /var/_sh/appshelf/.incoming
+# → deploy/install.sh от root (код и .venv — root, юниты, перезапуск appshelf-web, проверка сокета).
+# Откат — выложить прежний коммит. Первичная установка — README «Установка»; bin/ipatool собирает
+# deploy/build-ipatool.sh. Куда — .env в корне проекта (не в git, образец .env.example): APPSHELF_SSH=user@host,
+# необязательные APPSHELF_SSH_PORT, APPSHELF_SSH_KEY, APPSHELF_CODE_GROUP (группа каталога кода: только чтение).
 set -euo pipefail
 D="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -f "$D/.env" ]; then set -a; . "$D/.env"; set +a; fi
 : "${APPSHELF_SSH:?нет APPSHELF_SSH=user@host в .env (образец — .env.example)}"
+PARTS=(pyproject.toml appshelf deploy ipatool)
+if [ -n "$(git -C "$D" status --porcelain -- "${PARTS[@]}")" ]; then
+  echo "ОШИБКА: незакоммиченные изменения в ${PARTS[*]} — выкладывается только закоммиченный HEAD" >&2
+  exit 1
+fi
 SSH=(ssh -o BatchMode=yes -p "${APPSHELF_SSH_PORT:-22}")
 if [ -n "${APPSHELF_SSH_KEY:-}" ]; then SSH+=(-i "$APPSHELF_SSH_KEY" -o IdentitiesOnly=yes); fi
 SSH+=("$APPSHELF_SSH")
-tar -C "$D" --exclude=__pycache__ -czf - pyproject.toml appshelf deploy ipatool | "${SSH[@]}" '
+git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
   set -e
-  # spec 2026-10-08 §6: без Apple ID владельца новый код не стартует (MigrationError) — не ставим его вовсе
-  if ! sudo grep -qE "^APPSHELF_OWNER=.+" /etc/appshelf/appshelf.env; then
-    echo "ОШИБКА: в /etc/appshelf/appshelf.env нет APPSHELF_OWNER=<Apple ID владельца>" >&2
-    exit 1
-  fi
-  sudo tar -xzf - -C /var/_sh/appshelf
-  sudo chown -R appshelf:'"${APPSHELF_CODE_GROUP:-appshelf}"' /var/_sh/appshelf/appshelf /var/_sh/appshelf/deploy /var/_sh/appshelf/ipatool /var/_sh/appshelf/pyproject.toml
-  sudo -u appshelf /var/_sh/appshelf/.venv/bin/pip install --quiet --no-deps --force-reinstall /var/_sh/appshelf
-  for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer; do
-    sudo install -m 0644 "/var/_sh/appshelf/deploy/$u" "/etc/systemd/system/$u"
-  done
-  sudo systemctl daemon-reload
-  # spec 2026-10-08 §6: HOME ipatool на каждый Apple ID
-  sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
-  if sudo test -d /etc/appshelf/.ipatool && ! sudo test -e /etc/appshelf/accounts/1; then
-    sudo systemctl stop appshelf-web       # учётка ipatool переезжает — служба её в это время не трогает
-    sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts/1
-    sudo mv /etc/appshelf/.ipatool /etc/appshelf/accounts/1/.ipatool
-  fi
-  sudo systemctl restart appshelf-web
-  if sudo -u www-data test -r /etc/appshelf/appshelf.env; then
-    echo "ОШИБКА: www-data читает /etc/appshelf/appshelf.env (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
-    exit 1
-  fi
-  # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
-  # От www-data — так к сокету ходит Apache; /healthz без пароля.
-  code=000
-  for i in $(seq 1 20); do
-    code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null || true)
-    if [ "$code" = 200 ]; then echo "OK: appshelf-web отвечает на /run/appshelf/web.sock"; exit 0; fi
-    sleep 0.5
-  done
-  echo "ОШИБКА: appshelf-web не ответил 200 на /healthz за 10 с (от www-data, последний код $code)" >&2
-  systemctl status appshelf-web --no-pager 2>&1 | tail -n 15 >&2
-  sudo journalctl -u appshelf-web -n 20 --no-pager >&2
-  exit 1'
+  R=/var/_sh/appshelf
+  # каталог кода — root: будь он у appshelf, тот подменил бы .incoming между распаковкой и запуском от root
+  sudo chown root:root "$R"
+  sudo chmod 0755 "$R"
+  sudo rm -rf "$R/.incoming"
+  sudo install -d -o root -g root -m 0700 "$R/.incoming"
+  sudo tar -xzf - -C "$R/.incoming"
+  sudo bash "$R/.incoming/deploy/install.sh" "'"${APPSHELF_CODE_GROUP:-root}"'"'
