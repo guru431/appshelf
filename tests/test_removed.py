@@ -60,7 +60,7 @@ def test_missing_licenses_are_remembered_until_full_check(ctx, conn, clock):  # 
 
 
 def test_nightly_full_recheck_only_on_own_weekday(ctx, cfg, conn, clock, monkeypatch):
-    # ~205 запросов к Apple на Apple ID: всё заново — раз в неделю, в «свой» день (id % 7)
+    # ~480 запросов к Apple на Apple ID: всё заново — раз в неделю, в «свой» день (id % 7)
     monkeypatch.setattr(removed, "load", lambda: CATALOG[:1])
     acct = owner(conn, clock)
     set_session(conn, 1, "ok")

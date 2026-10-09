@@ -64,31 +64,47 @@ td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top
   {% if user and user.role == 'owner' %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Участники</a>{% endif %}
   <span class="session">
     {%- if accounts and accounts | length > 1 %}
-      {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}">{{ a.email }}</a>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
+      {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
     {%- elif acct %}{{ acct.email }}{% endif %}
     {%- if acct %} —
       {% if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
-      {%- elif acct.session == 'expired' %}<span class="err">вход истёк</span>
+      {%- elif acct.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк</a>
       {%- else %}нет входа{% endif %}
     {%- endif -%}
   </span>
   <form method="post" action="/logout" style="display:inline"><button class="secondary">Выйти</button></form>
   <span class="theme">Тема:
-    <a href="/theme?set=auto"{% if not theme %} class="on"{% endif %}>авто</a>
-    <a href="/theme?set=light"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
-    <a href="/theme?set=dark"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a></span>
+    <a href="/theme?set=auto&amp;back={{ here | urlencode }}"{% if not theme %} class="on"{% endif %}>авто</a>
+    <a href="/theme?set=light&amp;back={{ here | urlencode }}"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
+    <a href="/theme?set=dark&amp;back={{ here | urlencode }}"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a></span>
 </header>
 {% endif %}
-<main>{% block main %}{% endblock %}</main>
+<main>
+{%- if acct and acct.session == 'expired' and nav in ('catalog', 'history', 'blocked') %}
+<div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
+{%- endif %}
+{% block main %}{% endblock %}</main>
 {% if busy %}
 <script>
 (function () {
   var seen = {{ statuses | default('null') | safe }};
-  setInterval(function () {
+  var timer = setInterval(function () {
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
-      if (!s.busy || (seen !== null && JSON.stringify(s.apps) !== JSON.stringify(seen))) location.reload();
+      if (s.busy && (seen === null || JSON.stringify(s.apps) === JSON.stringify(seen))) return;
+      clearInterval(timer);
+      if (!editing()) { location.reload(); return; }
+      var done = document.createElement('div');   // человек вставляет ссылку или ищет — не стираем ввод
+      done.className = 'banner';
+      done.innerHTML = 'Готово — <a href="">обновить страницу</a>';
+      document.querySelector('main').prepend(done);
     }).catch(function () {});
   }, 3000);
+  function editing() {
+    if (document.querySelector('details[open]')) return true;
+    return Array.prototype.some.call(document.querySelectorAll('input'), function (i) {
+      return i === document.activeElement || i.value !== i.defaultValue;
+    });
+  }
 })();
 </script>
 {% endif %}

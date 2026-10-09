@@ -2,9 +2,18 @@
 {% block main %}
 <div style="max-width:360px;margin:24px auto">
   <p><b>appshelf</b>{% if add %} — добавить Apple ID{% endif %}</p>
-  {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID.</div>{% endif %}
+  {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID.
+    Откройте эту ссылку в Safari: во встроенном браузере Telegram или WhatsApp установка не работает, а вход
+    придётся повторить.
+    {%- if user %} Вы уже вошли как {{ user.name }}: новый Apple ID станет отдельным участником, и это устройство
+    перейдёт к нему. Добавить Apple ID к себе — <a href="/apple/add">«Apple ID» → «Добавить»</a>.{% endif %}</div>{% endif %}
   {% if error %}<p class="err">{{ error }}</p>{% endif %}
-  {% if step == 2 %}
+  {% if link %}
+  <form method="post">
+    <p>Запасная ссылка входа для {{ link }}: одноразовая, после входа перестанет работать.</p>
+    <button>Войти как {{ link }}</button>
+  </form>
+  {% elif step == 2 %}
   <form method="post" action="/login/code">
     <p>Apple отправила код на ваши устройства ({{ email }}). Apple покажет запрос входа с картой — на ней город сервера,
       а не ваш. Нажмите «Разрешить» и введите код. Шаг действует 10 минут.</p>
@@ -12,6 +21,11 @@
     <input type="hidden" name="next" value="{{ next }}">
     <button>Войти</button>
   </form>
+  <form method="post" action="/login/cancel" style="margin-top:12px">
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="secondary">Начать заново</button>
+  </form>
+  <p class="hint">Код не пришёл — на iPhone: Настройки → [ваше имя] → Вход и безопасность → Получить код проверки.</p>
   {% else %}
   <form method="post" action="{{ action }}">
     <label>Apple ID<input name="email" type="email" value="{{ email }}" autocomplete="username" autocapitalize="off"></label>
@@ -22,6 +36,8 @@
   <p class="hint">Вход — вашим Apple ID и паролем от него. Пароль на сервере не сохраняется: он нужен только для входа
     и живёт в памяти не дольше 10 минут. Вход запоминается на год на этом устройстве; в приложении на экране «Домой»
     войти нужно отдельно.</p>
+  {% if not invited %}<p class="hint">Открывайте страницу в Safari: во встроенном браузере Telegram или WhatsApp
+    установка не работает, а вход придётся повторить.</p>{% endif %}
   {% endif %}
 </div>
 {% endblock %}

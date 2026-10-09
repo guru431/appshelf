@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block main %}
-{% if acct.session == 'expired' %}<div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>{% endif %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% if not apps %}<p class="hint">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
 {% for a in apps %}
 <div class="card">
   {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon"></div>{% endif %}
   <div class="body">
-    <div><b>{{ a.name }}</b></div>
+    <div><b>{{ a.name }}</b>
+      {%- if a.app_id in fresh %}{% set d = a.current['downloaded_at'] %} <span class="tag">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}</div>
     {% if a.current %}
     <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ (a.current['size'] / 1048576) | round | int }} МБ
       {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}</div>
@@ -18,6 +18,8 @@
     {% elif a.status == 'downloading' %}<div class="meta">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     <form method="post" action="/apps/{{ a.app_id }}/retry"><button>Повторить</button></form>
+    {% elif a.status == 'nolicense' %}<div class="err">{{ a.last_error }}</div>
+    {% elif a.last_error %}<div class="meta">не удалось обновить: {{ a.last_error }}</div>
     {% endif %}
   </div>
   <details><summary>⋯</summary>

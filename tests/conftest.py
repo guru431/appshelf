@@ -11,7 +11,7 @@ from helpers import HOST, TOKEN, Clock, FakeTool, owner, sign_in
 
 @pytest.fixture(autouse=True)
 def empty_removed_catalog(request, monkeypatch):
-    """Настоящий справочник (205 id) — только в test_removed; остальным он бы добавлял вызовы ipatool."""
+    """Настоящий справочник (~480 id) — только в test_removed; остальным он бы добавлял вызовы ipatool."""
     if request.module.__name__ != "test_removed":
         monkeypatch.setattr(removed, "load", lambda: [])
 
@@ -55,8 +55,9 @@ def ctx(cfg, clock):
 
 @pytest.fixture
 def make_web(clock):
-    """Приложение с подменами. tools[id] — ipatool Apple ID; queue — ipatool первых входов новых Apple ID по
-    порядку (пусто — свежий FakeTool), выданные — в new_tools (у каждого .home и .mac); sent — (тема, текст)."""
+    """Приложение с подменами. tools[id] — ipatool Apple ID (HOME — accounts/<id>); queue — ipatool первых входов
+    новых Apple ID по порядку (пусто — свежий FakeTool), выданные — в new_tools (у каждого .home и .mac);
+    sent — (тема, текст)."""
     def make(cfg, conn):
         wb = SimpleNamespace(tools={}, queue=[], new_tools=[], sent=[], free={"bytes": 50 * GB})
 
@@ -66,7 +67,10 @@ def make_web(clock):
             wb.new_tools.append(t)
             return t
 
-        wb.app = create_app(cfg, lambda acct: wb.tools.setdefault(acct.id, FakeTool()), new_tool=new_tool,
+        def tool(acct):
+            return wb.tools.setdefault(acct.id, FakeTool(cfg.accounts_dir / str(acct.id)))
+
+        wb.app = create_app(cfg, tool, new_tool=new_tool,
                             now=clock.iso, clock=clock.monotonic,
                             send=lambda subject, body, to: wb.sent.append((subject, body)),
                             disk_free=lambda path: wb.free["bytes"], start_worker=False)
@@ -80,5 +84,5 @@ def web(make_web, cfg, conn, clock, acct):
     """Владелец вошёл: cookie человека 1, активная полка — Apple ID №1; web.tool — его ipatool."""
     wb = make_web(cfg, conn)
     sign_in(wb.client, cfg, conn, clock, acct.user_id)
-    wb.tool = wb.tools.setdefault(acct.id, FakeTool())
+    wb.tool = wb.tools.setdefault(acct.id, FakeTool(cfg.accounts_dir / str(acct.id)))
     return wb

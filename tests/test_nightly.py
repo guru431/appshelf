@@ -67,7 +67,7 @@ def test_expired_apple_id_does_not_stop_others(ctx, cfg, conn, clock, tmp_path):
     petr_tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7, version="1.1", external_id="901")
     result = nightly.run(ctx.env, conn)
     assert result == ("owner@example: остановлена: истёк вход в Apple ID | "
-                      "petr@example: обновлено 1, без изменений 0, ошибок 0")
+                      "petr@example: обновлено 1, без изменений 0, ошибок 0; новые версии: СберБанк Онлайн")
     assert people.get_account(conn, 1).session == "expired"
     assert store.current_version(conn, petr.id, 7)["version"] == "1.1"
     assert ctx.sent == ["appshelf: нужен вход в Apple ID"]
@@ -78,7 +78,8 @@ def test_low_space_skips_download(ctx, cfg, conn, clock):
     ctx.tool.latest[123] = "901"
     ctx.free["bytes"] = 2 * GB
     assert "ошибок 1" in nightly.run(ctx.env, conn)
-    assert store.list_apps(conn, 1)[0].status == "error"
+    app = store.list_apps(conn, 1)[0]
+    assert app.status == "ok" and "мало места" in app.last_error   # прежняя версия ставится, «Повторить» не нужен
     assert store.current_version(conn, 1, 123)["external_version_id"] == "900"
     assert ctx.sent == [f"appshelf: мало места на {socket.gethostname()}"]
 

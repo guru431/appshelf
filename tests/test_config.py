@@ -17,7 +17,8 @@ def test_defaults_and_paths():
     assert cfg.db == Path("/var/lib/appshelf/appshelf.db")
     assert cfg.archive == Path("/var/lib/appshelf/pub")
     assert cfg.ipatool_home == Path("/etc/appshelf")
-    assert cfg.shelf_url(SimpleNamespace(id=1, legacy_pub=True), "123-1.0", "app.ipa") == f"{BASE}/d/{TOKEN}/123-1.0/app.ipa"
+    assert cfg.shelf_url(SimpleNamespace(id=1, legacy_pub=True, shelf=""), "123-1.0", "app.ipa") == \
+        f"{BASE}/d/{TOKEN}/123-1.0/app.ipa"
 
 
 def test_overrides():
@@ -55,12 +56,14 @@ def test_owner_and_shelves():
     assert cfg.accounts_dir == Path("/etc/appshelf/accounts")
     assert cfg.locks_dir == Path("/var/lib/appshelf/locks")
     assert cfg.download_lock == Path("/var/lib/appshelf/locks/download.lock")
-    legacy, new = SimpleNamespace(id=1, legacy_pub=True), SimpleNamespace(id=2, legacy_pub=False)
+    shelf = "fedcba9876543210fedcba9876543210"
+    legacy, new = SimpleNamespace(id=1, legacy_pub=True, shelf=""), SimpleNamespace(id=2, legacy_pub=False, shelf=shelf)
     assert cfg.shelf_token(legacy) == TOKEN                  # перенесённый из версии 1 — прежний каталог
-    token = hmac.new(TOKEN.encode(), b"account:2", hashlib.sha256).hexdigest()[:32]
-    assert cfg.shelf_token(new) == token and cfg.shelf_root(new) == Path("/var/lib/appshelf/pub") / token
-    assert cfg.shelf_url(new, "5-1.0", "app.ipa") == f"{BASE}/d/{token}/5-1.0/app.ipa"
-    assert cfg.shelf_token(SimpleNamespace(id=3, legacy_pub=False)) not in (token, TOKEN)
+    assert cfg.shelf_token(new) == shelf and cfg.shelf_root(new) == Path("/var/lib/appshelf/pub") / shelf
+    assert cfg.shelf_url(new, "5-1.0", "app.ipa") == f"{BASE}/d/{shelf}/5-1.0/app.ipa"
+    # Apple ID версии 2, ещё не перенесённый на случайный токен, — прежний HMAC от PUB_TOKEN
+    token = hmac.new(TOKEN.encode(), b"account:3", hashlib.sha256).hexdigest()[:32]
+    assert cfg.shelf_token(SimpleNamespace(id=3, legacy_pub=False, shelf="")) == cfg.hmac_token(3) == token
 
 
 def test_owner_is_optional():

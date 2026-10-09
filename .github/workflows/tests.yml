@@ -1,0 +1,14 @@
+# Быстрый набор на Linux: сервер — Linux, а локально тесты идут на Windows, где flock, killpg и права файлов
+# (tests/test_ipatool.py, skipif posix) не исполняются.
+name: tests
+on: [push, pull_request]
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"   # как на сервере (Debian 13)
+      - run: pip install -e ".[test]"
+      - run: pytest -q

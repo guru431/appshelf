@@ -78,6 +78,24 @@ def test_empty_database_gets_schema_without_owner(tmp_path):
     c.close()
 
 
+def test_v2_accounts_get_shelf_columns(tmp_path):
+    db = tmp_path / "appshelf.db"
+    shelf_columns = ",\n    shelf TEXT NOT NULL DEFAULT '',\n    shelf_next TEXT NOT NULL DEFAULT ''"
+    assert shelf_columns in store.SCHEMA
+    c = sqlite3.connect(db)
+    c.executescript(store.SCHEMA.replace(shelf_columns, ""))
+    c.execute("INSERT INTO users (id, name, role, created_at) VALUES (2, 'Пётр', 'member', 't0')")
+    c.execute("INSERT INTO accounts (id, user_id, email, created_at) VALUES (2, 2, 'petr@example', 't0')")
+    c.execute("PRAGMA user_version = 2")
+    c.commit()
+    c.close()
+    c = store.connect(db)
+    a = people.get_account(c, 2)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert (a.email, a.shelf, a.shelf_next) == ("petr@example", "", "")   # каталог переносит jobs.move_shelves
+    c.close()
+
+
 def test_oldest_v1_without_version_columns(tmp_path, clock):
     db = tmp_path / "old.db"
     old = sqlite3.connect(db)

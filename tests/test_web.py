@@ -220,3 +220,57 @@ def test_theme_switch_sets_cookie(web):
                        follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/history?q=x" and "theme=light" in r.headers["set-cookie"]
     assert 'data-theme="light"' in web.client.get("/").text
+
+
+def test_theme_switch_returns_without_referer(web):
+    # Apache шлёт Referrer-Policy: no-referrer — браузер Referer не отправит, путь возврата — в ссылке
+    page = web.client.get("/history", params={"q": "x", "sort": "date"}).text
+    assert "/theme?set=dark&amp;back=/history%3Fq%3Dx%26sort%3Ddate" in page
+    r = web.client.get("/theme", params={"set": "dark", "back": "/history?q=x&sort=date"}, follow_redirects=False)
+    assert r.headers["location"] == "/history?q=x&sort=date"
+    r = web.client.get("/theme", params={"set": "dark", "back": "https://evil.example/"}, follow_redirects=False)
+    assert r.headers["location"] == "/"
+
+
+def test_unpublish_refused_while_archive_unavailable(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    cfg.archive.rmdir()                                    # шара отвалилась: файлы остались бы без строк
+    r = web.client.post("/apps/123/unpublish")
+    assert r.status_code == 503 and "снять с публикации сейчас нельзя" in r.text
+    assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
+
+
+def test_expired_banner_on_history_and_removed(web, conn):
+    set_session(conn, 1, "expired")
+    for path, back in (("/history", "%2Fhistory"), ("/blocked", "%2Fblocked")):
+        text = web.client.get(path).text
+        assert f'Вход в Apple ID owner@example истёк — <a href="/login?email=owner%40example&amp;next={back}">' in text
+    assert '<a class="err" href="/login?email=owner%40example&amp;next=%2Fapple">вход истёк</a>' in \
+        web.client.get("/apple").text                      # в шапке — ссылка, на «Apple ID» баннера нет
+    assert "задания ждут" not in web.client.get("/apple").text
+
+
+def test_catalog_states_of_failed_downloads(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, app_id=1, name="Работает", versions=("1.0",))
+    store.set_app_status(conn, 1, 1, "ok", "ipatool: timeout")
+    seed_app(conn, cfg, clock, app_id=2, name="Ошибка ID", bundle_id="b2")
+    store.set_app_status(conn, 1, 2, "nolicense", "этого приложения нет в покупках Apple ID — проверьте ссылку или ID")
+    text = web.client.get("/").text
+    assert "не удалось обновить: ipatool: timeout" in text and "нет в покупках Apple ID" in text
+    assert "/apps/1/retry" not in text and "/apps/2/retry" not in text
+
+
+def test_catalog_marks_versions_downloaded_this_week(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, app_id=1, name="Новое", versions=("1.0", "1.1"))
+    seed_app(conn, cfg, clock, app_id=2, name="Первая", bundle_id="b2", versions=("1.0",))
+    text = web.client.get("/").text
+    assert text.count("новая версия ·") == 1 and f"новая версия · {clock.iso()[8:10]}.{clock.iso()[5:7]}" in text
+    clock.advance(8 * 86400)
+    assert "новая версия" not in web.client.get("/").text
+
+
+def test_reload_after_jobs_keeps_typed_text(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock)
+    set_session(conn, 1, "ok")
+    text = web.client.get("/blocked").text                 # пока идёт задание, страница опрашивает /api/status
+    assert "/api/status" in text and "обновить страницу" in text and "i.value !== i.defaultValue" in text

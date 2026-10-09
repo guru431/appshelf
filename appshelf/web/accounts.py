@@ -7,8 +7,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, people, store, webauth
 from ..config import GB
-from .common import ACCT_COOKIE, WebCtx, back
-from .signin import login_page, relogin_query, submit
+from .common import ACCT_COOKIE, WebCtx, back, relogin_query
+from .signin import login_page, submit
 
 ARCHIVE_DOWN = "Архив недоступен — удалить сейчас нельзя"
 ACCOUNT_BUSY = "Идёт скачивание или проверка этого Apple ID — удалить можно, когда закончится"

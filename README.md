@@ -21,7 +21,8 @@
 - Справочник ~480 удалённых из App Store приложений (банки и их клоны, VK, Почта Mail.ru и другие):
   appshelf проверяет, на какие из них у вашего Apple ID есть лицензия.
 - Каталог с кнопкой «Установить»; хранятся текущая и предыдущая версии.
-- Ночная проверка новых версий; владельцу — письмо, если истёк вход его Apple ID или кончается место.
+- Ночная проверка новых версий (скачанные за неделю отмечены в каталоге: удалённое из App Store обновляют
+  только отсюда); владельцу — письмо, если истёк вход его Apple ID или кончается место.
 - PWA: полка на экране «Домой».
 
 ## Как устроено
@@ -43,9 +44,9 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 
 | Что | Где |
 |---|---|
-| Код, `.venv`, `bin/ipatool` | `/var/_sh/appshelf` (путь зашит в `deploy/*.service` и скриптах `deploy/`) |
+| Код, `.venv`, `bin/ipatool` | `/var/_sh/appshelf`, владелец root: appshelf только читает и исполняет (путь зашит в `deploy/*.service` и скриптах `deploy/`) |
 | Данные | `/var/lib/appshelf`: `appshelf.db`, `tmp/`, `locks/`, `status/nightly.stamp`, `cookie-key` |
-| Архив IPA | `<архив>/<токен Apple ID>/` (HMAC от `PUB_TOKEN`; Apple ID, перенесённый из первой версии, — `<архив>/<PUB_TOKEN>/`); `<архив>` — `APPSHELF_PUB` или `/var/lib/appshelf/pub`. Может быть сетевой шарой; база и `tmp/` — только локально (SQLite на CIFS портится) |
+| Архив IPA | `<архив>/<токен полки>/`: у каждого Apple ID свой случайный токен (`accounts.shelf` в базе; Apple ID, перенесённый из первой версии, — `<архив>/<PUB_TOKEN>/`); `<архив>` — `APPSHELF_PUB` или `/var/lib/appshelf/pub`. Может быть сетевой шарой — тогда `APPSHELF_PUB` — подкаталог внутри неё, не сама точка монтирования (пустая точка монтирования — тоже каталог, и IPA легли бы на локальный диск). База и `tmp/` — только локально (SQLite на CIFS портится) |
 | Настройки | `/etc/appshelf/appshelf.env` (образец — `deploy/appshelf.env.example`), токены App Store — `/etc/appshelf/accounts/<id>/.ipatool/` |
 | Службы | `appshelf-web.service`, `appshelf-nightly.service` + `.timer` |
 
@@ -61,41 +62,39 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 
 Команды на сервере — от пользователя с sudo.
 
-1. Пользователь и каталоги:
+1. Пользователь и каталоги. Каталог кода — root: appshelf его только читает и исполняет.
 
        sudo useradd --system --home /var/_sh/appshelf --shell /usr/sbin/nologin appshelf
-       sudo install -d -o appshelf -g appshelf -m 0755 /var/_sh/appshelf /var/_sh/appshelf/bin
+       sudo install -d -o root -g root -m 0755 /var/_sh/appshelf /var/_sh/appshelf/bin
        sudo install -d -o appshelf -g appshelf -m 0711 /var/lib/appshelf /var/lib/appshelf/pub /var/lib/appshelf/status
        sudo install -d -o appshelf -g appshelf -m 0700 /var/lib/appshelf/tmp
        sudo install -d -o root -g appshelf -m 0711 /etc/appshelf
        sudo install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
 
-2. Код и зависимости. На своей машине:
-
-       tar -czf - pyproject.toml appshelf deploy ipatool | ssh user@server 'sudo tar -xzf - -C /var/_sh/appshelf && sudo chown -R appshelf:appshelf /var/_sh/appshelf'
-
-   На сервере:
-
-       sudo -u appshelf python3 -m venv /var/_sh/appshelf/.venv
-       sudo -u appshelf /var/_sh/appshelf/.venv/bin/pip install /var/_sh/appshelf
+2. Python: `sudo python3 -m venv /var/_sh/appshelf/.venv` (от root, как и всё в каталоге кода).
 
 3. Настройки: `deploy/appshelf.env.example` → `/etc/appshelf/appshelf.env` (`root:appshelf 0640`),
    заполнить `PUB_TOKEN` (`python3 -c "import secrets; print(secrets.token_hex(16))"`),
    `APPSHELF_PUBLIC_BASE`, `MAIL_TO`, `APPSHELF_OWNER` (ваш Apple ID).
 
-4. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
-
-5. Службы: на своей машине `.env` по образцу `.env.example` и `bash deploy/deploy.sh`, затем на сервере
+4. Код и службы: на своей машине `.env` по образцу `.env.example` и `bash deploy/deploy.sh` (код,
+   зависимости, юниты; предупредит, что `bin/ipatool` ещё не собран), затем на сервере
    `sudo systemctl enable appshelf-web && sudo systemctl enable --now appshelf-nightly.timer`.
 
-6. Первый вход: откройте сайт и войдите Apple ID из `APPSHELF_OWNER` (пароль и код 2FA) — вы владелец.
-   Участников приглашайте на странице «Участники».
+5. `bin/ipatool`: `sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh` → `OK: /var/_sh/appshelf/bin/ipatool`.
 
-7. Apache: vhost по образцу `deploy/apache-appshelf.conf` (домен, сертификат, путь архива), затем
+6. Apache: vhost по образцу `deploy/apache-appshelf.conf` (домен, сертификат, путь архива), затем
    `sudo a2enmod ssl proxy proxy_http headers && sudo apache2ctl configtest && sudo systemctl reload apache2`.
    Проверка: `https://<домен>/healthz` → 200, `/` → форма входа.
 
-**Права.** `/var/lib/appshelf` и `status/` — `0711`: Apache и мониторинг проходят, не читая список.
+7. Первый вход: откройте сайт и войдите Apple ID из `APPSHELF_OWNER` (пароль и код 2FA) — вы владелец.
+   Участников приглашайте на странице «Участники».
+
+**Права.** Код, `.venv` и `bin/` — root (`deploy/install.sh` ставит это при каждой выкладке): иначе любое
+выполнение кода от appshelf (картинка из IPA, ipatool) стало бы root при ближайшей выкладке или сборке.
+Группа кода (`APPSHELF_CODE_GROUP` в `.env`) получает только чтение, appshelf в неё не входит. Службы видят
+`/usr` и `/etc` только для чтения, кроме `/etc/appshelf/accounts` (`ProtectSystem=full`).
+`/var/lib/appshelf` и `status/` — `0711`: Apache и мониторинг проходят, не читая список.
 `/etc/appshelf` — `root:appshelf 0711`, Apache не читает `appshelf.env`. **www-data не входит в группу
 `appshelf`**: к сокету Apache пускает группа `www-data` на `/run/appshelf` (`ExecStartPost` в юните),
 иначе RCE в любом PHP-сайте на сервере читало бы `PUB_TOKEN` (`deploy.sh` это проверяет). Архив на шаре
@@ -105,6 +104,11 @@ IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.c
 
     bash deploy/deploy.sh                                          # код + перезапуск; куда — .env (.env.example)
     ssh … 'sudo bash /var/_sh/appshelf/deploy/build-ipatool.sh'   # bin/ipatool (после правки ipatool/)
+
+Уезжает закоммиченный `HEAD` (`git archive`): с незакоммиченными правками в коде `deploy.sh` откажется. Новый
+код встаёт на место прежнего целиком и только после `pip`; откат — выложить прежний коммит. Если `bin/ipatool`
+собран не из выложенных патчей, `deploy.sh` напомнит о пересборке; когда пересобирать без правок —
+[ipatool/README.md](ipatool/README.md).
 
 ## Вход и участники
 
@@ -118,7 +122,8 @@ stdin, в appshelf-web живёт в памяти не дольше 10 мину�
 история, каталог, IPA (в IPA — данные покупателя, ставится он на iPhone с тем же Apple ID в App Store).
 
 Истёк токен магазина — баннер на полке и «Войти заново»; владельцу — письмо о его Apple ID. Если Apple сломает
-вход — запасная ссылка (одноразовая, 24 ч): «Участники» → «Ссылка входа» или на сервере
+вход — запасная ссылка (одноразовая, 24 ч; открывает страницу с кнопкой «Войти», так что превью мессенджера
+её не расходует): «Участники» → «Ссылка входа» или на сервере
 
     sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf login-link --email <Apple ID>'
 
@@ -140,8 +145,9 @@ stdin, в appshelf-web живёт в памяти не дольше 10 мину�
 есть и по id приложение скачивается. Банки к тому же выпускали десятки клонов под чужими названиями.
 Поэтому «Обновить историю» ещё и проверяет справочник `appshelf/data/removed_apps.json` (источники — в поле
 `source`) по Apple ID: свои добавляются в «Историю» с меткой «удалено из App Store». Кнопка не перепроверяет
-то, на что лицензии не было, — это делает ночная проверка, она же дозаполняет версии. Весь справочник с
-отметкой «есть / нет в аккаунте» — страница «Удалённые» (`/blocked`); там же поле «Добавить»: ссылка
+то, на что лицензии не было, — это делает ночная проверка раз в неделю, в свой день недели Apple ID; тогда же
+она дозаполняет версии. Весь справочник с отметкой «есть / нет в аккаунте» — страница «Удалённые»
+(`/blocked`); там же поле «Добавить»: ссылка
 `apps.apple.com/…/id492224193` или ID, имя подставится из IPA. Пополнить справочник — дописать
 `{"id", "name", "aliases"}` в JSON (алиасы — для поиска латиницей: vk, sber…). Снят ли ID с RU App Store —
 `itunes.apple.com/lookup?id=…&country=ru` (пусто — снят).
@@ -157,11 +163,30 @@ Safari → «Поделиться» → «На экран „Домой“»: п
 формой `/login` с cookie на год. Service worker нет: iOS ставит веб-приложение и без него, а без сети
 полка бесполезна.
 
-## Смена PUB_TOKEN
+## Новый токен полки
 
-Токены каталогов всех Apple ID вычисляются из `PUB_TOKEN`, а ссылки установки и manifest их содержат: снять с
-публикации все приложения на всех полках, записать новый токен в `appshelf.env`, перезапустить `appshelf-web`,
-опубликовать заново; каталоги прежних токенов в архиве удалить вручную.
+У каждого Apple ID свой случайный токен каталога в архиве; он же — в ссылках установки и manifest. Утекли ссылки
+полки — дайте ей новый токен (каталог переименуется, manifest поправятся, прежние ссылки перестанут работать,
+установленные приложения останутся):
+
+    sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf rotate-token --email <Apple ID>'
+
+`PUB_TOKEN` — каталог только полки, перенесённой из первой версии; после `rotate-token` для неё он не нужен
+ни одной полке. Каталоги, которые версия 2 считала HMAC от `PUB_TOKEN`, `appshelf-web` при старте сам переносит
+на случайные токены.
+
+## Резервная копия
+
+- База — только снимком, не копией файла на ходу (WAL), например по таймеру (или `sqlite3 … ".backup …"`):
+
+      sudo -u appshelf /var/_sh/appshelf/.venv/bin/python -c "import sqlite3; sqlite3.connect('/var/lib/appshelf/appshelf.db').backup(sqlite3.connect('/backup/appshelf.db'))"
+
+  В ней люди, Apple ID и токены полок.
+- `/etc/appshelf/appshelf.env` (`PUB_TOKEN`) и `/var/lib/appshelf/cookie-key` — в защищённое место: без них
+  каталоги архива и вход на устройствах не восстановить как были.
+- Архив IPA — копией каталога; без базы его каталоги не сопоставить с Apple ID.
+- Учётки ipatool (`/etc/appshelf/accounts`) зашифрованы ключом от `machine-id`: на другой машине они не
+  читаются — после переноса каждый Apple ID входит заново, архив переносится вместе с базой и `appshelf.env`.
 
 ## Разработка
 
@@ -169,7 +194,9 @@ Safari → «Поделиться» → «На экран „Домой“»: п
     .venv/bin/python -m pytest -q                                 # быстрый набор, без сети
     .venv/bin/python -m pytest -q -m integration                  # живые проверки bin/ipatool по SSH (.env)
 
-Правка и обновление патчей ipatool-cpp — [ipatool/README.md](ipatool/README.md).
+Быстрый набор гоняет и GitHub Actions на Linux (`.github/workflows/tests.yml`): flock, группы процессов
+и права файлов, как на сервере, на Windows не проверить. Правка и обновление патчей ipatool-cpp —
+[ipatool/README.md](ipatool/README.md).
 
 ## Лицензия
 

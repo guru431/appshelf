@@ -1,3 +1,7 @@
+import os
+
+import pytest
+
 from appshelf import cli, jobs, people, store
 from helpers import TOKEN
 
@@ -35,3 +39,25 @@ def test_login_link_unknown_apple_id(monkeypatch, tmp_path, capsys):
     env(monkeypatch, tmp_path)
     assert cli.main(["login-link", "--email", "nobody@example"]) == 2
     assert "нет" in capsys.readouterr().err
+
+
+def test_rotate_token_moves_shelf(monkeypatch, tmp_path, capsys):
+    env(monkeypatch, tmp_path)
+    c = store.connect(tmp_path / "data" / "appshelf.db")
+    uid = people.create_user(c, "Пётр", people.MEMBER, None, "2026-10-08T00:00:00+00:00")
+    aid = people.create_account(c, uid, "petr@example", {}, "", "2026-10-08T00:00:00+00:00")
+    old = people.get_account(c, aid).shelf
+    (tmp_path / "data" / "pub" / old / "7-1.0").mkdir(parents=True)
+    assert cli.main(["rotate-token", "--email", "petr@example"]) == 0
+    new = people.get_account(c, aid).shelf
+    c.close()
+    assert new != old and (tmp_path / "data" / "pub" / new / "7-1.0").is_dir()
+    assert not (tmp_path / "data" / "pub" / old).exists() and "готово" in capsys.readouterr().out
+
+
+def test_refuses_to_run_as_root(monkeypatch, tmp_path):
+    env(monkeypatch, tmp_path)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(SystemExit, match="sudo -u appshelf"):
+        cli.main(["nightly"])
+    assert not (tmp_path / "data" / "status" / "nightly.stamp").exists()

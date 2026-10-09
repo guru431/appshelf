@@ -49,7 +49,8 @@ def test_login_link_for_member(web, conn, cfg, clock):
     r = web.client.post(f"/admin/users/{p.user_id}/login-link")
     [link] = re.findall(rf"{re.escape(BASE)}/l/[\w-]+", r.text)
     anon = TestClient(web.app, base_url=BASE)
-    assert anon.get(link.removeprefix(BASE), follow_redirects=False).status_code == 303
+    assert "Войти как Пётр" in anon.get(link.removeprefix(BASE)).text
+    assert anon.post(link.removeprefix(BASE), follow_redirects=False).status_code == 303
     assert "petr@example" in anon.get("/").text
 
 
@@ -68,6 +69,31 @@ def test_delete_member_with_shelves(web, conn, cfg, clock):
     assert web.client.post(f"/admin/users/{p.user_id}/delete", follow_redirects=False).status_code == 303
     assert people.get_user(conn, p.user_id) is None and people.get_account(conn, p.id) is None
     assert not cfg.shelf_root(p).exists() and not (cfg.accounts_dir / str(p.id)).exists()
+
+
+def test_delete_member_can_disable_their_invite(web, conn, cfg, clock):
+    # бессрочное приглашение пережило бы удаление: по той же ссылке удалённый зарегистрировался бы снова
+    token = people.create_link(conn, people.INVITE, "Пете", None, clock.iso())
+    invite = people.active_invite(conn, token)
+    p = petr(conn, clock)
+    conn.execute("UPDATE users SET invite_id=? WHERE id=?", (invite["id"], p.user_id))
+    page = web.client.get(f"/admin/users/{p.user_id}/delete").text
+    assert "Отключить приглашение «Пете»" in page and " checked>" in page   # пришёл им один — галочка сразу
+    web.client.post(f"/admin/users/{p.user_id}/delete", data={"disable_invite": "1"})
+    assert people.get_user(conn, p.user_id) is None and people.active_invite(conn, token) is None
+    assert TestClient(web.app, base_url=BASE).get(f"/join/{token}").status_code == 400
+
+
+def test_shared_invite_is_not_disabled_silently(web, conn, cfg, clock):
+    token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
+    invite_id = people.active_invite(conn, token)["id"]
+    p = petr(conn, clock)
+    other = people.create_user(conn, "Анна", people.MEMBER, invite_id, clock.iso())
+    conn.execute("UPDATE users SET invite_id=? WHERE id=?", (invite_id, p.user_id))
+    page = web.client.get(f"/admin/users/{p.user_id}/delete").text
+    assert "им пришли ещё 1" in page and " checked>" not in page           # ссылкой пользуются другие
+    web.client.post(f"/admin/users/{p.user_id}/delete")
+    assert people.active_invite(conn, token) is not None and people.get_user(conn, other)
 
 
 def test_delete_member_refused_while_downloading(web, conn, cfg, clock):

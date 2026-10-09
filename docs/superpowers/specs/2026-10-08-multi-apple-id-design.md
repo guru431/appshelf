@@ -51,8 +51,8 @@ appshelf сделан и проверен для одного человека �
 | Первый владелец | `APPSHELF_OWNER=<Apple ID>` в `appshelf.env`: вход этим ID без приглашения, пока владельца нет; при переходе — владелец нынешних данных | Без командной строки и без окна, в которое успеет влезть чужой |
 | «Устройство» для Apple | Свой MAC на каждый новый Apple ID (патч `05-device-mac`); у перенесённого ID — настоящий MAC сервера | Apple узнаёт устройство по MAC (§3); один «Mac» с десятком Apple ID — то, за что блокируют |
 | User-Agent на пользователя | Нет | UA — тип клиента, одинаковый у всех Mac с Configurator; самодельный UA Apple отклоняет на edge |
-| Архив | Каталог на каждый Apple ID, токен — HMAC от `PUB_TOKEN` | С общим токеном участник подобрал бы путь к чужому IPA; новых секретов нет |
-| Справочник удалённых ночью | Полная перепроверка — раз в неделю на Apple ID, по дням недели | ~205 запросов на ID за ночь; с десятью ID — ~2000 с одного IP |
+| Архив | Каталог на каждый Apple ID, токен — случайный, в `accounts.shelf` (*уточнение 2026-10-09*; было — HMAC от `PUB_TOKEN`) | С общим токеном участник подобрал бы путь к чужому IPA; с HMAC `PUB_TOKEN` из ссылки полки владельца раскрывал все полки |
+| Справочник удалённых ночью | Полная перепроверка — раз в неделю на Apple ID, по дням недели | ~480 запросов на ID за ночь; с десятью ID — ~4800 с одного IP |
 
 Отвергнуто: «Apple ID и есть пользователь» без сущности человека (на новом устройстве — вход каждым ID с 2FA,
 нечего отозвать целиком), общий пароль страниц как запасной вход (владелец: других паролей нет), passkey
@@ -125,7 +125,9 @@ SameSite=Lax) → редирект на `/login` с плашкой «Пригл�
   не действует (нет строки).
 - Запасная ссылка: владелец создаёт для человека (в т. ч. для себя) → `/l/<токен>`, одноразовая, 24 ч → cookie
   `appshelf_auth` этого человека без Apple. CLI `appshelf login-link --email <Apple ID>` печатает такую же
-  ссылку — для владельца, у которого нет ни живой cookie, ни работающего входа Apple.
+  ссылку — для владельца, у которого нет ни живой cookie, ни работающего входа Apple. *Уточнение 2026-10-09:*
+  GET `/l/` только показывает кнопку «Войти как …», ссылка расходуется POST — превью мессенджеров открывают
+  ссылки сами.
 
 ### Лимиты
 
@@ -144,7 +146,7 @@ SQLite, версия схемы — `PRAGMA user_version` (было 0, стан�
 | Таблица | Поля |
 |---|---|
 | `users` | `id` PK AUTOINCREMENT, `name`, `role` (`owner`/`member`), `invite_id`, `created_at`, `epoch` |
-| `accounts` | `id` PK AUTOINCREMENT, `user_id`, `email` UNIQUE, `name`, `storefront`, `session` (`none`/`ok`/`expired`), `session_since`, `expired_mail_sent`, `device_mac` (`''` — настоящий MAC сервера), `legacy_pub` (0/1), `last_login_at`, `created_at` |
+| `accounts` | `id` PK AUTOINCREMENT, `user_id`, `email` UNIQUE, `name`, `storefront`, `session` (`none`/`ok`/`expired`), `session_since`, `expired_mail_sent`, `device_mac` (`''` — настоящий MAC сервера), `legacy_pub` (0/1), `last_login_at`, `created_at`; со схемы 3 — `shelf`, `shelf_next` (токен каталога, §5 «Архив») |
 | `links` | `id` PK, `kind` (`invite`/`login`), `token_hash` UNIQUE (SHA-256 hex), `label`, `user_id` (у `login` — кому), `created_at`, `expires_at`, `used_at`, `disabled_at` |
 | `purchases` | + `account_id`; PK `(account_id, app_id)` |
 | `apps` | + `account_id`; PK `(account_id, app_id)` |
@@ -162,6 +164,11 @@ SQLite, версия схемы — `PRAGMA user_version` (было 0, стан�
 токен учётки = `HMAC-SHA256(PUB_TOKEN, "account:<id>")`, первые 32 hex. У `legacy_pub = 1` — сам `PUB_TOKEN`
 (нынешний каталог, без переноса файлов и пересборки manifest). `dir_in_use` и имена каталогов версий — в
 пределах Apple ID. `PUB_TOKEN` по-прежнему только в `appshelf.env` и имени каталога владельца.
+
+*Уточнение 2026-10-09 (схема 3):* токен учётки — случайные 32 hex в `accounts.shelf`; каталоги с HMAC
+`appshelf-web` при старте переименовывает и правит в них manifest (`jobs.move_shelves`, новый токен сначала в
+`accounts.shelf_next` — прерванный перенос доделывается). `appshelf rotate-token --email` даёт полке новый токен
+так же, в том числе полке `legacy_pub`.
 
 ### Удаление
 

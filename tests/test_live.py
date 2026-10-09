@@ -1,5 +1,6 @@
 """Живые проверки bin/ipatool на сервере (-m integration). Куда ходить — APPSHELF_SSH* из .env, как у
-deploy/deploy.sh; нужен вход Apple ID №1 (владельца) от appshelf. flock — тот же, что у appshelf-web и ночной проверки."""
+deploy/deploy.sh; нужен вход Apple ID №1 (владельца) от appshelf. flock и IPATOOL_DEVICE_MAC — те же, что у
+appshelf-web и ночной проверки: без своего MAC Apple ID пошёл бы в Apple с MAC сервера, как второй «Mac»."""
 import json
 import os
 import subprocess
@@ -27,13 +28,25 @@ KEY = ENV.get("APPSHELF_SSH_KEY", "")
 SSH = ["ssh", "-o", "BatchMode=yes", "-p", ENV.get("APPSHELF_SSH_PORT", "22"),
        *(["-i", str(Path(KEY).expanduser()), "-o", "IdentitiesOnly=yes"] if KEY else []), ENV.get("APPSHELF_SSH", "")]
 BIN = "/var/_sh/appshelf/bin/ipatool"
-AS_APPSHELF = f"sudo -u appshelf env HOME=/etc/appshelf/accounts/1 flock /var/lib/appshelf/locks/1.lock {BIN} --format json"
+# accounts.device_mac Apple ID №1: '' у перенесённого из версии 1 (настоящий MAC сервера), иначе — свой
+DEVICE_MAC = ("sudo -u appshelf /var/_sh/appshelf/.venv/bin/python -c \"import sqlite3; print(sqlite3.connect("
+              "'file:/var/lib/appshelf/appshelf.db?mode=ro', uri=True).execute("
+              "'SELECT device_mac FROM accounts WHERE id=1').fetchone()[0])\"")
 
 
 def remote(cmd: str) -> subprocess.CompletedProcess:
     if not ENV.get("APPSHELF_SSH"):
         pytest.skip("нет APPSHELF_SSH в .env")
     return subprocess.run([*SSH, cmd], capture_output=True, text=True, encoding="utf-8", timeout=200)
+
+
+def as_appshelf() -> str:
+    """ipatool Apple ID №1 — как его зовёт служба: HOME, MAC (если задан) и flock."""
+    r = remote(DEVICE_MAC)
+    assert r.returncode == 0, r.stdout + r.stderr
+    mac = r.stdout.strip()
+    return (f"sudo -u appshelf env HOME=/etc/appshelf/accounts/1 {f'IPATOOL_DEVICE_MAC={mac} ' if mac else ''}"
+            f"flock /var/lib/appshelf/locks/1.lock {BIN} --format json")
 
 
 def last_json(out: str):
@@ -53,13 +66,13 @@ def test_device_mac_override_without_apple():
 
 
 def test_password_not_stored():
-    r = remote(f"{AS_APPSHELF} auth info")
+    r = remote(f"{as_appshelf()} auth info")
     assert r.returncode == 0, r.stdout + r.stderr
     assert last_json(r.stdout)["passwordStored"] is False
 
 
 def test_list_purchases_live():
-    r = remote(f"{AS_APPSHELF} list-purchases")
+    r = remote(f"{as_appshelf()} list-purchases")
     assert r.returncode == 0, r.stdout + r.stderr
     apps = last_json(r.stdout)
     assert apps and {"id", "bundleId", "name", "version", "purchaseDate"} <= set(apps[0])

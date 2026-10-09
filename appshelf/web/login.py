@@ -3,6 +3,7 @@
 Входить могут несколько человек сразу — у каждого входа свой id (cookie браузера)."""
 from __future__ import annotations
 
+import hmac
 import secrets
 import shutil
 import threading
@@ -11,10 +12,11 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..ipatool import AuthCodeRequired
+from ..ipatool import AuthCodeRequired, IpatoolError
 
 TTL = 600.0
 MAX_PENDING = 20
+JOIN_WAIT = 150.0  # шаг 1 ждёт ipatool до 130 с (10 с блокировки и 120 с входа)
 
 
 def _timer(delay: float, fn):
@@ -31,6 +33,18 @@ class LoginExpired(Exception):
 
 class LoginBusy(Exception):
     """Незавершённых входов уже MAX_PENDING."""
+
+
+class LoginInProgress(Exception):
+    """Этим Apple ID уже входят с другим паролем — ждём ответа Apple на первый вход."""
+
+
+class LoginJoined(Exception):
+    """Повторное «Продолжить»: первый вход того же Apple ID отказан — его ошибка, неудача уже посчитана."""
+
+    def __init__(self, error: IpatoolError):
+        super().__init__(str(error))
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -61,11 +75,22 @@ class _Pending:
     expires: float = 0.0
 
 
+@dataclass
+class _Running:
+    """Шаг 1, который сейчас ждёт Apple: повторное «Продолжить» с тем же паролем получит его итог."""
+    password: str = field(repr=False)
+    done: threading.Event = field(default_factory=threading.Event)
+    result: tuple | None = None          # (intent, flow_id, info)
+    error: IpatoolError | None = None
+
+
 class LoginFlow:
     def __init__(self, clock=time.monotonic, ttl: float = TTL, schedule=_timer, limit: int = MAX_PENDING,
-                 discard=drop_home):
+                 discard=drop_home, join_wait: float = JOIN_WAIT):
         self.clock, self.ttl, self.schedule, self.limit, self.discard = clock, ttl, schedule, limit, discard
+        self.join_wait = join_wait
         self._pending: dict[str, _Pending] = {}
+        self._running: dict[str, _Running] = {}
         self._lock = threading.Lock()
 
     def _expire(self, flow_id: str, p: _Pending) -> None:
@@ -90,27 +115,54 @@ class LoginFlow:
             p = self._pending.get(flow_id)
         return None if p is None else p.intent
 
-    def start(self, tool, intent: Intent, password: str) -> tuple[str, dict | None]:
-        """Шаг 1. ("", info) — вход без кода; (flow_id, None) — Apple ждёт код 2FA. Отказ — исключение, intent
-        отброшен (discard)."""
+    def start(self, tool, intent: Intent, password: str) -> tuple[Intent, str, dict | None]:
+        """Шаг 1. (intent, "", info) — вход без кода; (intent, flow_id, None) — Apple ждёт код 2FA. Отказ —
+        исключение, intent отброшен (discard).
+
+        Тем же Apple ID уже входят (двойное «Продолжить»: браузер бросает первый запрос, а с ним и cookie шага кода) —
+        к Apple второй раз не идём: с тем же паролем ждём первый вход и отдаём его итог, с другим — LoginInProgress."""
         self.purge()
         with self._lock:
-            full = len(self._pending) >= self.limit
-        if full:
+            other = self._running.get(intent.email)
+            same = other is not None and hmac.compare_digest(password.encode(), other.password.encode())
+            full = other is None and len(self._pending) >= self.limit
+            if other is None and not full:
+                mine = self._running[intent.email] = _Running(password)
+        if other is not None or full:
             self.discard(intent)
-            raise LoginBusy()
+            if full:
+                raise LoginBusy()
+            if not same or not other.done.wait(self.join_wait) or (other.result is None and other.error is None):
+                raise LoginInProgress()
+            if other.error is not None:
+                raise LoginJoined(other.error)
+            return other.result
         try:
-            return "", tool.login(intent.email, password)
+            mine.result = (intent, "", tool.login(intent.email, password))
         except AuthCodeRequired:
             flow_id = secrets.token_urlsafe(16)
             p = _Pending(tool, intent, password, self.clock() + self.ttl)
             with self._lock:
                 self._pending[flow_id] = p
             self.schedule(self.ttl, lambda: self._expire(flow_id, p))
-            return flow_id, None
-        except BaseException:
+            mine.result = (intent, flow_id, None)
+        except BaseException as e:
+            mine.error = e if isinstance(e, IpatoolError) else None
             self.discard(intent)
             raise
+        finally:
+            with self._lock:
+                del self._running[intent.email]
+                mine.password = ""
+            mine.done.set()
+        return mine.result
+
+    def cancel(self, flow_id: str) -> None:
+        """«Начать заново» на шаге кода: пароль и временный HOME нового Apple ID — прочь."""
+        with self._lock:
+            p = self._pending.pop(flow_id, None)
+        if p is not None:
+            self.discard(p.intent)
 
     def finish(self, flow_id: str, code: str) -> tuple[Intent, dict]:
         """Шаг 2. Пароль удаляется из памяти при любом исходе; отказ — intent отброшен."""

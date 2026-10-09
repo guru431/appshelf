@@ -8,12 +8,13 @@ from __future__ import annotations
 import re
 import shutil
 import sqlite3
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +36,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     device_mac TEXT NOT NULL DEFAULT '',
     legacy_pub INTEGER NOT NULL DEFAULT 0,
     last_login_at TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    shelf TEXT NOT NULL DEFAULT '',
+    shelf_next TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS links (
     id INTEGER PRIMARY KEY,
@@ -169,10 +172,14 @@ def _create(c) -> None:
 def _upgrade(c, owner_email: str) -> None:
     """Одной транзакцией: второй процесс ждёт и, проверив версию внутри, видит готовую схему."""
     with tx(c):
-        if _version(c) >= SCHEMA_VERSION:
+        version = _version(c)
+        if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "purchases" in tables:
+        if version == 2:  # токен каталога полки — в базе; каталоги переносит jobs.move_shelves
+            c.execute("ALTER TABLE accounts ADD COLUMN shelf TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE accounts ADD COLUMN shelf_next TEXT NOT NULL DEFAULT ''")
+        elif "purchases" in tables:
             _from_v1(c, tables, owner_email)
         else:
             _create(c)
@@ -335,6 +342,16 @@ def add_known(c, aid: int, app_id: int, name: str) -> None:
               (aid, app_id, name))
 
 
+def no_bundle(c, aid: int, app_id: int) -> bool:
+    """Строка «Истории» без bundle id: ни разу не скачивалась (имя и bundle id даёт первое скачивание)."""
+    return c.execute("SELECT 1 FROM purchases WHERE account_id=? AND app_id=? AND bundle_id=''",
+                     (aid, app_id)).fetchone() is not None
+
+
+def drop_purchase(c, aid: int, app_id: int) -> None:
+    c.execute("DELETE FROM purchases WHERE account_id=? AND app_id=?", (aid, app_id))
+
+
 def fill_names(c, aid: int, app_id: int, name: str, bundle_id: str) -> None:
     """Имя и bundle id из IPA — для строк, добавленных по ссылке (bundle id пуст)."""
     with tx(c):
@@ -422,7 +439,20 @@ def add_version(c, aid: int, root: Path, app_id: int, v: NewVersion, now: str) -
 def remove_dirs(root: Path, names) -> None:
     for name in names:
         if DIR_RE.match(name):  # имя из базы, но rmtree без проверки формы не делаем
-            shutil.rmtree(root / name, ignore_errors=True)
+            rmtree_logged(root / name)
+
+
+def rmtree_logged(path: Path) -> None:
+    """Удаление каталога на шаре после коммита: строк в базе уже нет, повторить удаление нечем — ошибка
+    (EBUSY, EIO, шара отвалилась) идёт в журнал службы, чтобы остаток было видно. Каталога нет — не ошибка."""
+    def log(func, p, exc):
+        if not isinstance(exc, FileNotFoundError):
+            print(f"appshelf: не удалось удалить {p}: {exc}", file=sys.stderr)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=log)
+    else:
+        shutil.rmtree(path, onerror=lambda func, p, info: log(func, p, info[1]))
 
 
 def shelf_size(c, aid: int) -> int:

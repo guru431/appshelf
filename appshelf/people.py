@@ -40,6 +40,8 @@ class Account:
     device_mac: str      # IPATOOL_DEVICE_MAC; '' — настоящий MAC сервера (перенесённый из версии 1)
     legacy_pub: bool     # каталог архива — <PUB_TOKEN> (перенесённый из версии 1)
     last_login_at: str
+    shelf: str = ""      # токен каталога в архиве (config.shelf_token); '' — legacy_pub или Apple ID версии 2
+    shelf_next: str = ""  # новый токен, пока каталог переезжает (jobs.move_shelf)
 
 
 def _user(r) -> User | None:
@@ -49,7 +51,7 @@ def _user(r) -> User | None:
 def _account(r) -> Account | None:
     return None if r is None else Account(r["id"], r["user_id"], r["email"], r["name"], r["storefront"],
                                           r["session"], r["session_since"], r["device_mac"], bool(r["legacy_pub"]),
-                                          r["last_login_at"])
+                                          r["last_login_at"], r["shelf"], r["shelf_next"])
 
 
 def normalize_email(email: str) -> str:
@@ -103,11 +105,25 @@ def all_accounts(c) -> list[Account]:
 
 
 def create_account(c, uid: int, email: str, info: dict, device_mac: str, now: str) -> int:
-    """Apple ID после первого успешного входа: токен магазина уже есть — session=ok."""
+    """Apple ID после первого успешного входа: токен магазина уже есть — session=ok. Каталог полки в архиве —
+    случайный токен: ни из своего токена, ни из ссылок владельца чужой не вычислить."""
     return c.execute("""INSERT INTO accounts (user_id, email, name, storefront, session, session_since, device_mac,
-                            last_login_at, created_at) VALUES (?, ?, ?, ?, 'ok', ?, ?, ?, ?)""",
+                            last_login_at, created_at, shelf) VALUES (?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?)""",
                      (uid, normalize_email(email), str(info.get("name", "")), str(info.get("storefront", "")),
-                      now, device_mac, now, now)).lastrowid
+                      now, device_mac, now, now, new_shelf_token())).lastrowid
+
+
+def new_shelf_token() -> str:
+    return secrets.token_hex(16)
+
+
+def set_shelf_next(c, aid: int, token: str) -> None:
+    c.execute("UPDATE accounts SET shelf_next=? WHERE id=?", (token, aid))
+
+
+def set_shelf(c, aid: int, token: str) -> None:
+    """Каталог переехал: новый токен — рабочий, связь с PUB_TOKEN (legacy_pub) — в прошлом."""
+    c.execute("UPDATE accounts SET shelf=?, shelf_next='', legacy_pub=0 WHERE id=?", (token, aid))
 
 
 def mark_login(c, aid: int, info: dict, now: str) -> None:
@@ -177,18 +193,35 @@ def list_invites(c) -> list:
                         FROM links l WHERE l.kind=? ORDER BY l.id DESC""", (INVITE,)).fetchall()
 
 
+def invite_of(c, uid: int):
+    """Приглашение, по которому пришёл человек, и сколько людей им пришло (joined); None — пришёл без него."""
+    return c.execute("""SELECT l.*, (SELECT COUNT(*) FROM users x WHERE x.invite_id = l.id) AS joined
+                        FROM users u JOIN links l ON l.id = u.invite_id WHERE u.id=? AND l.kind=?""",
+                     (uid, INVITE)).fetchone()
+
+
 def disable_invite(c, link_id: int, now: str) -> None:
     c.execute("UPDATE links SET disabled_at=? WHERE id=? AND kind=? AND disabled_at=''", (now, link_id, INVITE))
 
 
+def _login_link(c, token: str, now: str):
+    """Запасная ссылка, ещё годная: не использована и не истекла."""
+    row = c.execute("SELECT id, user_id, expires_at FROM links WHERE token_hash=? AND kind=? AND used_at=''",
+                    (hash_token(token), LOGIN)).fetchone() if token else None
+    return row if row is not None and row["expires_at"] > now else None
+
+
+def login_link_user(c, token: str, now: str) -> int | None:
+    """Кому годна запасная ссылка — без расхода: страница по ссылке только показывает кнопку входа."""
+    row = _login_link(c, token, now)
+    return None if row is None else row["user_id"]
+
+
 def use_login_link(c, token: str, now: str) -> int | None:
     """Запасной вход: одноразовая ссылка на 24 ч. user_id — ссылка годна и теперь использована."""
-    if not token:
-        return None
     with store.tx(c):
-        row = c.execute("SELECT id, user_id, expires_at FROM links WHERE token_hash=? AND kind=? AND used_at=''",
-                        (hash_token(token), LOGIN)).fetchone()
-        if row is None or row["expires_at"] <= now:
+        row = _login_link(c, token, now)
+        if row is None:
             return None
         c.execute("UPDATE links SET used_at=? WHERE id=?", (now, row["id"]))
     return row["user_id"]

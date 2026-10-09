@@ -1,3 +1,7 @@
+import threading
+
+import pytest
+
 from appshelf import people, webauth
 
 KEY = b"k" * 32
@@ -32,3 +36,33 @@ def test_key_file_created_once(tmp_path):
     path = tmp_path / "cookie-key"
     key = webauth.load_key(path)
     assert len(key) == 32 and webauth.load_key(path) == key
+    assert [p.name for p in tmp_path.iterdir()] == ["cookie-key"]          # временный файл не остался
+
+
+@pytest.mark.parametrize("content", [b"", b"short"])
+def test_empty_or_short_key_refused(tmp_path, content):
+    # пустой ключ (сбой записи, гонка первого создания) — подпись cookie владельца посчитал бы кто угодно
+    path = tmp_path / "cookie-key"
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match="перезапустите appshelf-web"):
+        webauth.load_key(path)
+
+
+def test_failed_write_leaves_no_key_file(tmp_path, monkeypatch):
+    def full_disk(fd):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(webauth.os, "fsync", full_disk)
+    with pytest.raises(OSError):
+        webauth.load_key(tmp_path / "cookie-key")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_concurrent_first_load_gets_one_full_key(tmp_path):
+    path, keys = tmp_path / "cookie-key", []
+    threads = [threading.Thread(target=lambda: keys.append(webauth.load_key(path))) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(keys) == 8 and set(keys) == {path.read_bytes()} and len(keys[0]) == 32

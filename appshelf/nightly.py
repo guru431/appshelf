@@ -10,7 +10,8 @@ from datetime import datetime
 
 from . import people, removed, store
 from .ipatool import SessionExpired
-from .jobs import Env, LowSpace, describe, fetch_version, low_space, mark_expired, nightly_lock, refresh_history
+from .jobs import (Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired, move_shelves,
+                   nightly_lock, refresh_history)
 
 STAMP = "nightly.stamp"
 EXPIRED = "остановлена: истёк вход в Apple ID"
@@ -31,10 +32,11 @@ def _run(env: Env, c) -> str:
     work = env.cfg.tmp_dir / "nightly"
     shutil.rmtree(work, ignore_errors=True)
     store.fail_stale_updates(c, env.now())
+    move_shelves(env.cfg, c)  # не перенёс старт appshelf-web (архив не был смонтирован) — пробуем каждую ночь
     accounts = [a for a in people.all_accounts(c) if a.session == "ok"]
     if not accounts:
         return _finish(env, c, NO_LOGIN)
-    # справочник удалённых целиком (~205 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
+    # справочник удалённых целиком (~480 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
     weekday = datetime.fromisoformat(env.now()).weekday()
     return _finish(env, c, SEP.join(
         f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts))
@@ -60,6 +62,7 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
         notes.append(f"справочник удалённых: {describe(e)}")
     tool = env.tools(acct)
     updated = same = errors = 0
+    names = []
     for app in store.apps_to_check(c, acct.id):
         app_id, job_id = app["app_id"], None
         try:
@@ -74,6 +77,7 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
                 fetch_version(env, c, acct, app_id, work)
                 store.finish_job(c, job_id, "done", env.now())
                 updated += 1
+                names.append(app["name"].replace("|", "/"))  # « | » делит итог по Apple ID (result_for)
             store.set_checked(c, acct.id, app_id, env.now())
         except SessionExpired:
             if job_id is not None:
@@ -88,10 +92,11 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
             if isinstance(e, LowSpace):
                 low_space(env, c, e)
             errors += 1
-            msg = describe(e)
             if job_id is not None:
-                store.finish_job(c, job_id, "error", env.now(), msg)
-            store.set_app_status(c, acct.id, app_id, "error", msg)
+                store.finish_job(c, job_id, "error", env.now(), describe(e))
+            app_failed(c, acct.id, app_id, e)
+    if names:  # удалённое из App Store сам App Store не обновит — новую версию ставят с полки
+        notes.append("новые версии: " + ", ".join(names))
     return "; ".join([f"обновлено {updated}, без изменений {same}, ошибок {errors}", *notes])
 
 

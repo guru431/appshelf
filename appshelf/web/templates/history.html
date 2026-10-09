@@ -29,7 +29,7 @@
     <form method="post" action="/apps/{{ r['app_id'] }}/publish"><button>Опубликовать</button></form>{% endif %}</td>
 </tr>
 {% else %}
-<tr><td class="hint">{{ 'Ничего не найдено' if q else 'История пуста — нажмите «Обновить историю» (нужен вход в Apple ID).' }}</td></tr>
+<tr><td class="hint">{% if q %}Ничего не найдено{% elif refreshing %}Загружаю историю…{% else %}История пуста — нажмите «Обновить историю» (нужен вход в Apple ID).{% endif %}</td></tr>
 {% endfor %}
 </table>
 {% endblock %}

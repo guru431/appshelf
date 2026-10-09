@@ -29,14 +29,23 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         return w.page(request, "admin.html", "admin", invites=invites, persons=persons, created_link=created_link)
 
     def confirm(request: Request, uid: int, error: str = "", status_code: int = 200, refused: bool = False):
+        """Подтверждение удаления. Приглашение, по которому человек пришёл, бессрочное: не отключи его —
+        удалённый зарегистрируется по той же ссылке снова. Пришёл им один — галочка «отключить» стоит сразу."""
         with w.conn() as c:
             user = people.get_user(c, uid)
             emails = ", ".join(a.email for a in people.accounts_of(c, uid))
+            invite = people.invite_of(c, uid)
+        option = None
+        if invite is not None and not invite["disabled_at"]:
+            others = invite["joined"] - 1
+            option = {"name": "disable_invite", "checked": others == 0,
+                      "text": f"Отключить приглашение «{invite['label']}» — по нему можно зарегистрироваться снова"
+                              + (f" (им пришли ещё {others}: для новых участников создайте другое)" if others else "")}
         return w.page(request, "confirm.html", "admin", status_code,
                       question=f"Удалить участника «{user.name}» ({emails})? Полки, история, вход этих Apple ID "
                                "на сервере и доступ к панели удалятся.",
                       action=f"/admin/users/{uid}/delete", button="Удалить", cancel="/admin", error=error,
-                      refused=refused)
+                      refused=refused, option=option)
 
     def exists(uid: int) -> bool:
         with w.conn() as c:
@@ -80,14 +89,17 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         return confirm(request, uid, SELF if me else "", refused=me)
 
     @router.post("/users/{uid}/delete", response_class=HTMLResponse)
-    def delete(request: Request, uid: int):
+    def delete(request: Request, uid: int, disable_invite: str = Form("")):
         if not exists(uid):
             return PlainTextResponse("not found", status_code=404)
         if uid == request.state.user.id:
             return confirm(request, uid, SELF, 400, refused=True)
         try:
             with w.conn() as c:
+                invite = people.invite_of(c, uid)  # после удаления человека его приглашение уже не найти
                 jobs.remove_user(w.cfg, c, uid)
+                if disable_invite and invite is not None:
+                    people.disable_invite(c, invite["id"], w.now())
         except jobs.ArchiveUnavailable:
             return confirm(request, uid, ARCHIVE_DOWN, 503)
         except jobs.AccountBusy:

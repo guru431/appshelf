@@ -79,15 +79,18 @@ def seed_app(conn, cfg, clock, app_id=123, name="СберБанк Онлайн",
 
 
 class FakeTool:
-    """Подмена ipatool.Ipatool: ответы — из полей, исключения — из errors (каждое бросается один раз)."""
+    """Подмена ipatool.Ipatool: ответы — из полей, исключения — из errors (каждое бросается один раз).
+    С home вход, как настоящий ipatool, создаёт $HOME/.ipatool, а удачный — и учётку в нём."""
 
-    def __init__(self):
+    def __init__(self, home: Path | None = None):
+        self.home = home
         self.calls: list[tuple] = []
         self.purchases: list[dict] = []
         self.latest: dict[int, str] = {}
         self.ipas: dict[int, Path] = {}
         self.errors: dict[str, Exception] = {}
         self.on_download = None
+        self.on_login = None
         self.versions: dict[int, str] = {}       # display_version
         self.no_license: set[int] = set()   # latest_version_id → LicenseNotFound
         self.account = {"name": "Иван Петров", "email": "owner@example", "storefront": "RU", "success": True}
@@ -99,7 +102,14 @@ class FakeTool:
             raise exc
 
     def login(self, email, password, auth_code="", lock_wait=None):
+        if self.home is not None:
+            (self.home / ".ipatool").mkdir(parents=True, exist_ok=True)
+        if self.on_login is not None:
+            self.on_login(email)
         self._call("login", email, password, auth_code)
+        if self.home is not None:  # save_account: каталог учётки создаётся заново, если его успели удалить
+            (self.home / ".ipatool").mkdir(parents=True, exist_ok=True)
+            (self.home / ".ipatool" / "account").write_bytes(b"store token")
         return self.account
 
     def list_purchases(self):

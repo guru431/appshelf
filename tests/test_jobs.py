@@ -2,11 +2,12 @@ import errno
 import os
 import plistlib
 import socket
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from appshelf import ipatool, jobs, people, store
+from appshelf import ipa, ipatool, jobs, people, removed, store
 from appshelf.config import GB
 from appshelf.ipatool import LicenseNotFound, SessionExpired
 from helpers import TOKEN, FakeTool, make_account, owner, seed_app, set_session
@@ -61,6 +62,10 @@ def test_new_apple_id_publishes_into_own_shelf(ctx, cfg, conn, clock, tmp_path, 
     worker(ctx, cfg).tick()
     root = cfg.shelf_root(petr)
     assert modes[root] == 0o711                          # Apache (www-data) проходит в каталог Apple ID
+    # UMask служб 0077: без явных прав Apache отдал бы 403 на каждую установку
+    assert {p.name: m for p, m in modes.items() if p.parent.name == ".7-1.2.3.partial"} == \
+        {"app.ipa": 0o644, "icon.png": 0o644, "manifest.plist": 0o644}
+    assert modes[root / ".7-1.2.3.partial"] == 0o755
     assets = plistlib.loads((root / "7-1.2.3" / "manifest.plist").read_bytes())["items"][0]["assets"]
     assert assets[0]["url"] == f"https://apps.example/d/{cfg.shelf_token(petr)}/7-1.2.3/app.ipa"
     assert not (cfg.archive / TOKEN).exists() and ctx.tool.calls == []   # полка владельца не тронута
@@ -173,10 +178,13 @@ def test_same_version_keeps_current(ctx, cfg, conn, clock, tmp_path):
     acct = owner(conn, clock)
     seed_app(conn, cfg, clock, versions=("1.2.3",), make_dirs=True)  # ext 900, задание publish в очереди
     set_session(conn, 1, "ok")
+    ctx.tool.latest[123] = "900"
     ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123, version="1.2.3", external_id="900")
     worker(ctx, cfg).tick()
     assert [r["role"] for r in conn.execute("SELECT role FROM versions")] == ["current"]
     assert list(cfg.shelf_root(acct).iterdir()) == [cfg.shelf_root(acct) / "123-1.2.3"]
+    assert all(c[0] != "download" for c in ctx.tool.calls)   # «Повторить» при той же версии IPA не качает
+    assert store.list_apps(conn, 1)[0].status == "ok"
 
 
 def test_unpublish_during_download_leaves_no_files(ctx, cfg, conn, clock, tmp_path):
@@ -217,6 +225,7 @@ def test_same_version_string_new_build_gets_own_dir(ctx, cfg, conn, clock, tmp_p
     acct = owner(conn, clock)
     seed_app(conn, cfg, clock, versions=("1.2.3",), make_dirs=True)  # ext 900
     set_session(conn, 1, "ok")
+    ctx.tool.latest[123] = "901"
     ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123, version="1.2.3", external_id="901")
     worker(ctx, cfg).tick()
     assert store.current_version(conn, 1, 123)["dir"] == "123-1.2.3-901"
@@ -313,14 +322,16 @@ def test_remove_refused_while_ipatool_of_apple_id_runs(ctx, cfg, conn, clock, mo
 
 
 def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
+    owner(conn, clock)
     (cfg.accounts_dir / ".new-0123456789abcdef" / ".ipatool").mkdir(parents=True)
     (cfg.accounts_dir / "1").mkdir()
+    (cfg.accounts_dir / "7" / ".ipatool").mkdir(parents=True)   # Apple ID №7 удалили посреди входа
     cfg.locks_dir.mkdir(parents=True)
-    (cfg.locks_dir / ".new-0123456789abcdef.lock").write_text("")
-    (cfg.locks_dir / "1.lock").write_text("")
+    for name in (".new-0123456789abcdef.lock", "1.lock", "7.lock", "download.lock"):
+        (cfg.locks_dir / name).write_text("")
     worker(ctx, cfg).recover()
     assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"]
-    assert [p.name for p in cfg.locks_dir.iterdir()] == ["1.lock"]
+    assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "download.lock"]
 
 
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):
@@ -344,3 +355,175 @@ def test_remove_user_with_all_apple_ids(ctx, cfg, conn, clock):
     make_account(conn, clock, email="petr2@example", legacy=False, user_id=petr.user_id)
     jobs.remove_user(cfg, conn, petr.user_id)
     assert people.get_user(conn, petr.user_id) is None and people.accounts_of(conn, petr.user_id) == []
+
+
+def test_failed_copy_to_share_leaves_nothing_on_shelf(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    acct = published(conn, clock)
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123)
+
+    def broken_move(src, dst):  # шара отвалилась посреди копирования
+        Path(dst).write_bytes(b"half of ipa")
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(jobs.shutil, "move", broken_move)
+    worker(ctx, cfg).tick()
+    assert store.list_apps(conn, 1)[0].status == "error" and list(cfg.shelf_root(acct).iterdir()) == []
+    assert not (cfg.tmp_dir / "web" / "dl-1-123").exists()
+
+
+def test_failed_db_write_removes_version_dir(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    acct = published(conn, clock)
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123)
+
+    def locked(*args, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "add_version", locked)
+    worker(ctx, cfg).tick()
+    assert list(cfg.shelf_root(acct).iterdir()) == []        # каталог версии без строки не остался
+
+
+def test_big_ipa_does_not_eat_share_reserve(ctx, cfg, conn, clock, tmp_path):
+    # до скачивания размер неизвестен (нужно 4 ГБ), после — запас 3 ГБ сверяется с настоящим размером
+    acct = published(conn, clock)
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123)
+    size = ctx.tool.ipas[123].stat().st_size
+    ctx.tool.on_download = lambda app_id: ctx.free.update(bytes=size + 2 * GB)
+    worker(ctx, cfg).tick()
+    app = store.list_apps(conn, 1)[0]
+    assert app.status == "error" and "мало места в архиве" in app.last_error
+    assert list(cfg.shelf_root(acct).iterdir()) == [] and not (cfg.tmp_dir / "web" / "dl-1-123").exists()
+    assert ctx.sent == [f"appshelf: мало места на {socket.gethostname()}"]
+
+
+def test_failed_update_keeps_working_version_installable(ctx, cfg, conn, clock):
+    seed_app(conn, cfg, clock, versions=("1.0",), make_dirs=True)
+    set_session(conn, 1, "ok")
+    store.set_app_status(conn, 1, 123, "error", "старый сбой")      # «Повторить» из прежней ошибки
+    ctx.tool.latest[123] = "901"
+    ctx.tool.errors["download"] = ipatool.IpatoolError("timeout", "ipatool не уложился в 1800 с")
+    worker(ctx, cfg).tick()
+    app = store.list_apps(conn, 1)[0]
+    assert (app.status, app.last_error) == ("ok", "ipatool: ipatool не уложился в 1800 с")
+
+
+def test_link_to_app_not_in_purchases_is_not_retried(ctx, cfg, conn, clock):
+    acct = owner(conn, clock)
+    set_session(conn, 1, "ok")
+    store.add_manual(conn, 1, 987654321, clock.iso())               # ошиблись в ID
+    ctx.tool.errors["download"] = LicenseNotFound("license_not_found", "no license")
+    worker(ctx, cfg).tick()
+    app = store.list_apps(conn, 1)[0]
+    assert (app.status, app.last_error) == ("nolicense", jobs.NOT_PURCHASED)
+    assert store.retry(conn, 1, 987654321, clock.iso()) is False
+    jobs.unpublish(cfg, conn, acct, 987654321)                       # заглушка уходит и из «Истории»
+    assert store.list_purchases(conn, 1) == []
+
+
+def test_unpublish_keeps_catalog_and_downloaded_history_rows(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 5, "name": "СберБанк Онлайн"}])
+    acct = owner(conn, clock)
+    store.add_manual(conn, 1, 5, clock.iso())                        # из справочника удалённых
+    seed_app(conn, cfg, clock, app_id=6, versions=("1.0",))          # из истории покупок
+    for app_id in (5, 6):
+        jobs.unpublish(cfg, conn, acct, app_id)
+    assert sorted(r["app_id"] for r in store.list_purchases(conn, 1)) == [5, 6]
+
+
+def test_unpublish_needs_archive(ctx, cfg, conn, clock):
+    acct = owner(conn, clock)
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    cfg.archive.rmdir()                                              # шара отвалилась
+    with pytest.raises(jobs.ArchiveUnavailable):
+        jobs.unpublish(cfg, conn, acct, 123)
+    assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
+
+
+def test_failed_share_delete_goes_to_journal(ctx, cfg, conn, clock, monkeypatch, capsys):
+    acct = owner(conn, clock)
+    seed_app(conn, cfg, clock, versions=("1.0",), make_dirs=True)
+    (cfg.shelf_root(acct) / "123-1.0" / "app.ipa").write_bytes(b"ipa")
+    real = os.unlink
+
+    def busy(path, *args, **kw):
+        if str(path).endswith("app.ipa"):
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(os, "unlink", busy)
+    jobs.unpublish(cfg, conn, acct, 123)
+    assert store.list_apps(conn, 1) == [] and "не удалось удалить" in capsys.readouterr().err
+
+
+def test_check_user_refuses_root(cfg, monkeypatch):
+    # от root ipatool не расшифрует ни одну учётку — ночь пометила бы все Apple ID «вход истёк»
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(SystemExit, match="sudo -u appshelf"):
+        jobs.check_user(cfg)
+
+
+def shelf_with_version(cfg, token: str, app_id: int = 7) -> Path:
+    """Каталог полки с одной версией и manifest со ссылками на этот токен."""
+    d = cfg.archive / token / f"{app_id}-1.0"
+    d.mkdir(parents=True)
+    (d / "app.ipa").write_bytes(b"ipa")
+    (d / "manifest.plist").write_bytes(ipa.manifest(f"{cfg.public_base}/d/{token}/{d.name}/app.ipa",
+                                                    f"{cfg.public_base}/d/{token}/{d.name}/icon.png", "b", "1.0", "T"))
+    return d
+
+
+def test_v2_shelves_move_off_pub_token(ctx, cfg, conn, clock):
+    # каталог версии 2 — HMAC от PUB_TOKEN: PUB_TOKEN из ссылки владельца раскрывал бы все полки
+    owner(conn, clock)                                                 # перенесён из версии 1: остаётся <PUB_TOKEN>
+    petr = member(conn, clock)
+    conn.execute("UPDATE accounts SET shelf='' WHERE id=?", (petr.id,))
+    old = cfg.hmac_token(petr.id)
+    shelf_with_version(cfg, old)
+    shelf_with_version(cfg, TOKEN)
+    jobs.move_shelves(cfg, conn)
+    petr = people.get_account(conn, petr.id)
+    assert petr.shelf not in ("", old) and petr.shelf_next == "" and not (cfg.archive / old).exists()
+    manifest = (cfg.archive / petr.shelf / "7-1.0" / "manifest.plist").read_bytes()
+    assert f"/d/{petr.shelf}/7-1.0/app.ipa".encode() in manifest and old.encode() not in manifest
+    assert people.get_account(conn, 1).legacy_pub and (cfg.archive / TOKEN / "7-1.0").is_dir()
+    jobs.move_shelves(cfg, conn)                                       # повторный старт ничего не трогает
+    assert people.get_account(conn, petr.id).shelf == petr.shelf
+
+
+def test_interrupted_move_is_finished_next_time(ctx, cfg, conn, clock):
+    petr = member(conn, clock)
+    new = "ab" * 16
+    shelf_with_version(cfg, petr.shelf)
+    people.set_shelf_next(conn, petr.id, new)
+    os.replace(cfg.archive / petr.shelf, cfg.archive / new)           # упали после переименования
+    jobs.move_shelves(cfg, conn)
+    moved = people.get_account(conn, petr.id)
+    assert (moved.shelf, moved.shelf_next) == (new, "")
+    assert f"/d/{new}/".encode() in (cfg.archive / new / "7-1.0" / "manifest.plist").read_bytes()
+
+
+def test_rotate_owner_shelf_leaves_pub_token(ctx, cfg, conn, clock):
+    acct = owner(conn, clock)
+    shelf_with_version(cfg, TOKEN)
+    jobs.move_shelf(cfg, conn, acct)
+    moved = people.get_account(conn, 1)
+    assert not moved.legacy_pub and cfg.shelf_token(moved) == moved.shelf != TOKEN
+    assert not (cfg.archive / TOKEN).exists() and (cfg.archive / moved.shelf / "7-1.0" / "app.ipa").is_file()
+
+
+def test_move_refused_while_apple_id_downloads(ctx, cfg, conn, clock):
+    petr = member(conn, clock, session="ok")
+    seed_app(conn, cfg, clock, app_id=7, acct=petr)
+    store.take_job(conn)                                               # публикация Петра качается
+    with pytest.raises(jobs.AccountBusy):
+        jobs.move_shelf(cfg, conn, petr)
+    assert people.get_account(conn, petr.id) == petr
+
+
+def test_download_after_move_goes_to_new_shelf(ctx, cfg, conn, clock, tmp_path):
+    petr = published(conn, clock, app_id=7, acct=member(conn, clock))  # задание взяли до переноса,
+    jobs.move_shelf(cfg, conn, petr)                                   # а качать начали после
+    ctx.tools.setdefault(petr.id, FakeTool()).ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "web")
+    moved = people.get_account(conn, petr.id)
+    assert (cfg.shelf_root(moved) / "7-1.2.3").is_dir() and not cfg.shelf_root(petr).exists()

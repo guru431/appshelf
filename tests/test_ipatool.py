@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -126,6 +127,44 @@ def test_other_apple_id_does_not_wait(tmp_path):
             a.run(["list-purchases"], timeout=5, lock_wait=0)
         assert e.value.error == "busy"
     assert a.list_purchases() == []
+
+
+posix = pytest.mark.skipif(os.name != "posix", reason="flock и группы процессов — как на сервере (Linux)")
+
+
+@posix
+def test_flock_holds_until_released(tmp_path):
+    lock = tmp_path / "1.lock"
+    with ipatool.hold(lock):
+        with pytest.raises(IpatoolError) as e:   # второй open того же файла — своя блокировка, она ждёт первую
+            with ipatool.hold(lock, wait=0):
+                pass
+        assert e.value.error == "busy"
+    with ipatool.hold(lock, wait=0):              # отпустили — берётся сразу
+        pass
+
+
+@posix
+def test_timeout_kills_ipatool_children_too(tmp_path):
+    # ipatool запускается в своей сессии: по таймауту убивается вся группа, а не только он сам
+    script = tmp_path / "spawn.py"
+    script.write_text("import os, subprocess, sys, time\n"
+                      "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                      "open(os.path.join(os.environ['HOME'], 'child.pid'), 'w').write(str(child.pid))\n"
+                      "time.sleep(30)\n", encoding="utf-8")
+    tool = Ipatool([sys.executable, str(script)], tmp_path, tmp_path / "1.lock")
+    with pytest.raises(IpatoolError) as e:
+        tool.run(["list-purchases"], timeout=0.8)
+    assert e.value.error == "timeout"
+    pid = int((tmp_path / "child.pid").read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("потомок ipatool пережил таймаут")
 
 
 def test_tools_per_account_and_for_new_login(cfg):

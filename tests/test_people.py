@@ -17,6 +17,7 @@ def test_user_and_accounts(conn, clock):
     assert people.owner_exists(conn) and people.get_user(conn, uid) == people.User(uid, "Иван", "owner", 0)
     a = people.account_by_email(conn, "OWNER@example")
     assert (a.id, a.email, a.name, a.storefront, a.session, a.legacy_pub) == (aid, "owner@example", "Иван Петров", "RU", "ok", False)
+    assert len(a.shelf) == 32 and a.shelf != people.get_account(conn, second).shelf   # каталог полки — случайный
     assert a.session_since == a.last_login_at == clock.iso()
     assert [x.id for x in people.accounts_of(conn, uid)] == [aid, second]
     assert [x.email for x in people.all_accounts(conn)] == ["owner@example", "second@example"]
@@ -64,11 +65,25 @@ def test_invites_stored_as_hash(conn, clock):
     assert people.active_invite(conn, "") is None and people.active_invite(conn, "nope") is None
 
 
+def test_invite_of_person(conn, clock):
+    token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
+    invite = people.active_invite(conn, token)
+    a = people.create_user(conn, "Пётр", people.MEMBER, invite["id"], clock.iso())
+    people.create_user(conn, "Анна", people.MEMBER, invite["id"], clock.iso())
+    uid, _ = owner(conn, clock)
+    row = people.invite_of(conn, a)
+    assert (row["id"], row["label"], row["joined"]) == (invite["id"], "все", 2)
+    assert people.invite_of(conn, uid) is None                       # владелец пришёл без приглашения
+
+
 def test_login_link_once_and_24h(conn, clock):
     uid, _ = owner(conn, clock)
     token = people.create_link(conn, people.LOGIN, "", uid, clock.iso())
     assert people.active_invite(conn, token) is None                 # запасная ссылка — не приглашение
+    assert people.login_link_user(conn, token, clock.iso()) == uid   # показать кнопку — не расход
+    assert people.login_link_user(conn, token, clock.iso()) == uid
     assert people.use_login_link(conn, token, clock.iso()) == uid
+    assert people.login_link_user(conn, token, clock.iso()) is None
     assert people.use_login_link(conn, token, clock.iso()) is None   # одноразовая
     late = people.create_link(conn, people.LOGIN, "", uid, clock.iso())
     clock.advance(24 * 3600)

@@ -99,7 +99,7 @@ appshelf-nightly (systemd timer) ┴─► /var/_sh/appshelf/bin/ipatool (HOME=/
 
 | Что | Где |
 |---|---|
-| Код, `.venv`, `deploy/`, `bin/ipatool` | `/var/_sh/appshelf/`, пользователь `appshelf` |
+| Код, `.venv`, `deploy/`, `bin/ipatool` | `/var/_sh/appshelf/`; с 2026-10-09 владелец root, `appshelf` только читает и исполняет |
 | Данные | `/var/lib/appshelf/` (`appshelf.db`, `tmp/`, `status/`) |
 | Архив IPA | `APPSHELF_PUB` в `appshelf.env` (по умолчанию `/var/lib/appshelf/pub`); может быть сетевой шарой (CIFS из fstab). SQLite и `tmp/` — всегда локально: на CIFS база портится, а перенос из `tmp/` в архив — копированием (EXDEV) |
 | Секреты | `/etc/appshelf/appshelf.env` (`root:appshelf 0640`): адрес писем, `PUB_TOKEN`, `APPSHELF_PUBLIC_BASE`, `IPATOOL_PROXY` (необязательно); `/etc/appshelf/.ipatool/` (`appshelf 0700`) — токен магазина |
@@ -155,7 +155,8 @@ SQLite `/var/lib/appshelf/appshelf.db` (локальный диск):
 
 Файлы версии: `<архив>/<PUB_TOKEN>/<app_id>-<version>/{app.ipa, manifest.plist, icon.png}`.
 `PUB_TOKEN` — 32 hex, только в `appshelf.env` и в имени каталога; в конфигурации Apache его нет.
-Сменить токен = переименовать каталог и пересобрать все manifest.
+Сменить токен = переименовать каталог и пересобрать все manifest. *Устарело 2026-10-09:* у каждой полки свой
+случайный токен, смена — `appshelf rotate-token` (README, «Новый токен полки»).
 
 `manifest.plist`: `software-package` = `<APPSHELF_PUBLIC_BASE>/d/<токен>/<app_id>-<version>/app.ipa`,
 `display-image` = `…/icon.png`, `metadata`: `bundle-identifier`, `bundle-version`

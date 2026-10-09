@@ -2,27 +2,51 @@
 (web/signin.py). Проверяет само приложение: к сокету /run/appshelf/web.sock ходят все процессы www-data
 (php-fpm), и RCE в любом PHP-сайте иначе открывало бы страницы без входа.
 
-Cookie — `<user_id>:<epoch>:<срок>:<HMAC>`. Ключ подписи — cookie-key (0600): удалить файл — выйти на всех
-устройствах всем; epoch человека (+1 — «выйти везде») — только ему."""
+Cookie — `<user_id>:<epoch>:<срок>:<HMAC>`. Ключ подписи — cookie-key (0600), appshelf-web читает его при старте:
+удалить файл и перезапустить appshelf-web — выйти на всех устройствах всем; epoch человека (+1 — «выйти везде») —
+только ему."""
 from __future__ import annotations
 
 import hashlib
 import hmac
 import os
+import secrets
 from pathlib import Path
 
 COOKIE = "appshelf_auth"
 COOKIE_AGE = 365 * 86400
+KEY_LEN = 32
 
 
 def load_key(path: Path) -> bytes:
-    """Ключ подписи cookie (32 байта, 0600); создаётся при первом обращении."""
+    """Ключ подписи cookie (32 байта, 0600); нет файла — создаётся. Файл другой длины — ValueError: с пустым
+    ключом cookie владельца посчитал бы кто угодно, лучше служба не стартует."""
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return path.read_bytes()
-    with os.fdopen(fd, "wb") as f:
-        f.write(key := os.urandom(32))
+        key = path.read_bytes()
+    except FileNotFoundError:
+        key = _create_key(path)
+    if len(key) != KEY_LEN:
+        raise ValueError(f"{path}: {len(key)} байт вместо {KEY_LEN} — удалите файл и перезапустите appshelf-web")
+    return key
+
+
+def _create_key(path: Path) -> bytes:
+    """Ключ пишется во временный файл и появляется под своим именем уже целым (os.link): сбой записи или второй
+    процесс, создающий ключ в ту же секунду, не оставят пустой файл."""
+    key = os.urandom(KEY_LEN)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(8)}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:  # другой процесс успел первым — его ключ уже целиком на диске
+            key = path.read_bytes()
+    finally:
+        tmp.unlink(missing_ok=True)
     return key
 
 

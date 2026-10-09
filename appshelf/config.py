@@ -15,7 +15,7 @@ TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 @dataclass(frozen=True)
 class Config:
     data_dir: Path       # /var/lib/appshelf
-    pub_token: str       # 32 hex: из него — токены каталогов Apple ID (shelf_token); есть только здесь и в appshelf.env
+    pub_token: str       # 32 hex: каталог полки, перенесённой из версии 1; есть только здесь и в appshelf.env
     public_base: str     # https://apps.example.com — адрес сайта, из него собираются ссылки установки
     ipatool_bin: Path
     ipatool_home: Path   # /etc/appshelf: HOME каждого Apple ID — accounts/<id> (учётка и cookies ipatool)
@@ -58,11 +58,17 @@ class Config:
         return self.locks_dir / "download.lock"
 
     def shelf_token(self, acct) -> str:
-        """Каталог Apple ID в архиве — HMAC от PUB_TOKEN: из своего токена чужой не вычислить. Перенесённый из
-        версии 1 Apple ID (legacy_pub) остаётся в каталоге <PUB_TOKEN>: выданные ссылки установки работают."""
+        """Каталог Apple ID в архиве — его случайный токен (accounts.shelf): ни из своего токена, ни из ссылок
+        владельца чужой не вычислить. Перенесённый из версии 1 (legacy_pub) остаётся в каталоге <PUB_TOKEN>:
+        выданные ссылки установки работают. Apple ID версии 2, ещё не перенесённый (shelf пуст), — hmac_token."""
         if acct.legacy_pub:
             return self.pub_token
-        return hmac.new(self.pub_token.encode(), f"account:{acct.id}".encode(), hashlib.sha256).hexdigest()[:32]
+        return acct.shelf or self.hmac_token(acct.id)
+
+    def hmac_token(self, aid: int) -> str:
+        """Каталог Apple ID версии 2 — HMAC от PUB_TOKEN: PUB_TOKEN из ссылки полки владельца раскрывал все полки,
+        поэтому такие каталоги переезжают на случайные токены (jobs.move_shelves)."""
+        return hmac.new(self.pub_token.encode(), f"account:{aid}".encode(), hashlib.sha256).hexdigest()[:32]
 
     def shelf_root(self, acct) -> Path:
         return self.archive / self.shelf_token(acct)

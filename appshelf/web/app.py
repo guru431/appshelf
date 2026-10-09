@@ -6,10 +6,11 @@ from __future__ import annotations
 import json
 import re
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
+from datetime import datetime, timedelta
 from urllib.parse import urlencode, urlsplit
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
@@ -17,11 +18,13 @@ from .. import ipatool, jobs, notify, people, removed, store, webauth
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, pwa, signin
-from .common import ACCT_COOKIE, THEMES, WebCtx, back, referer_path
+from .common import THEMES, WebCtx, back, back_to
 from .login import Limiter, LoginFlow
 
-PUBLIC = ("/healthz", "/login", "/login/code")
+PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel")
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
+NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
+UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 
 
 def version_key(v: str) -> tuple:
@@ -51,7 +54,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID."""
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free)
     flow = LoginFlow(clock=clock)
-    w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now)
+    w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
+               webauth.load_key(cfg.cookie_key))
     worker = jobs.Worker(env, lambda: store.connect(cfg.db, cfg.owner_email), purge=flow.purge)
 
     @asynccontextmanager
@@ -78,18 +82,6 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 return PlainTextResponse("Forbidden: cross-origin POST", status_code=403)
         return await call_next(request)
 
-    def who(request: Request):
-        """(человек, его Apple ID, активный) по cookie или None. Активный — из cookie выбора полки, если этот Apple ID
-        принадлежит человеку, иначе первый."""
-        with w.conn() as c:
-            user = webauth.check_cookie(w.cookie_key(), request.cookies.get(webauth.COOKIE, ""), w.epoch(),
-                                        lambda uid: people.get_user(c, uid))
-            accounts = people.accounts_of(c, user.id) if user is not None else []
-        if not accounts:
-            return None
-        want = request.cookies.get(ACCT_COOKIE, "")
-        return user, accounts, next((a for a in accounts if str(a.id) == want), accounts[0])
-
     @app.middleware("http")
     async def auth(request: Request, call_next):
         # добавлен последним — выполняется первым. Без входа: /healthz (мониторинг), /pwa/ (манифест и иконку iOS
@@ -97,7 +89,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         path = request.url.path
         if path in PUBLIC or path.startswith(PUBLIC_PREFIXES):
             return await call_next(request)
-        found = await run_in_threadpool(who, request)
+        found = await run_in_threadpool(w.person, request)
         if found is None:
             if request.method == "GET" and not path.startswith("/api/"):
                 target = path + (f"?{request.url.query}" if request.url.query else "")
@@ -126,14 +118,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             return PlainTextResponse("not found", status_code=404)
         return Response(pwa.icon_png(size), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
-    @app.get("/", response_class=HTMLResponse)
-    def catalog(request: Request):
+    def catalog_page(request: Request, status_code: int = 200, error: str = ""):
         a = request.state.acct
         with w.conn() as c:
             apps = store.list_apps(c, a.id)
             nightly = (store.get_state(c, "nightly_last"), result_for(store.get_state(c, "nightly_result"), a.email))
             busy = store.has_active_jobs(c, a.id)
-        banners = []
+        banners = [error] if error else []
         try:
             free = jobs.free_space(env)
         except jobs.ArchiveUnavailable:
@@ -143,14 +134,20 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if free < jobs.BANNER_FREE:
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
         statuses = json.dumps({str(x.app_id): x.status for x in apps})
-        return w.page(request, "catalog.html", "catalog", apps=apps, banners=banners, nightly=nightly, busy=busy,
-                      statuses=statuses, public_url=lambda d, f: cfg.shelf_url(a, d, f),
-                      relogin=signin.relogin_query(a, "/"))
+        since = datetime.fromisoformat(now()) - timedelta(days=NEW_VERSION_DAYS)
+        fresh = {x.app_id for x in apps
+                 if x.previous is not None and datetime.fromisoformat(x.current["downloaded_at"]) >= since}
+        return w.page(request, "catalog.html", "catalog", status_code, apps=apps, banners=banners, nightly=nightly,
+                      busy=busy, statuses=statuses, fresh=fresh, public_url=lambda d, f: cfg.shelf_url(a, d, f))
+
+    @app.get("/", response_class=HTMLResponse)
+    def catalog(request: Request):
+        return catalog_page(request)
 
     @app.get("/theme")
-    def theme(request: Request, set: str = ""):
+    def theme(request: Request, set: str = "", back_url: str = Query("", alias="back")):
         """Тема: light / dark / auto (как в системе). Возврат на ту же страницу."""
-        resp = back(referer_path(request))
+        resp = back(back_to(request, back_url))
         if set in THEMES:
             resp.set_cookie("theme", set, max_age=10 * 365 * 86400, samesite="lax", secure=True)
         else:
@@ -259,13 +256,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             store.retry(c, aid, app_id, now())
         return back("/")
 
-    @app.post("/apps/{app_id}/unpublish")
+    @app.post("/apps/{app_id}/unpublish", response_class=HTMLResponse)
     def unpublish(request: Request, app_id: int):
         a = request.state.acct
         with w.conn() as c:
             if not store.has_app(c, a.id, app_id):
                 return not_found()
-            store.unpublish(c, a.id, cfg.shelf_root(a), app_id)
+            try:
+                jobs.unpublish(cfg, c, a, app_id)
+            except jobs.ArchiveUnavailable:
+                return catalog_page(request, 503, UNPUBLISH_ARCHIVE_DOWN)
         return back("/")
 
     @app.get("/api/status")
@@ -283,7 +283,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
 def main() -> FastAPI:
     """uvicorn --factory appshelf.web.app:main — окружение читается при старте службы, не при импорте. Переход схемы —
-    тоже при старте: данные версии 1 без APPSHELF_OWNER не дают службе подняться (MigrationError в журнале)."""
+    тоже при старте: данные версии 1 без APPSHELF_OWNER не дают службе подняться (MigrationError в журнале).
+    До обработчика заданий — перенос каталогов полок на случайные токены (jobs.move_shelves)."""
     cfg = from_env()
-    store.connect(cfg.db, cfg.owner_email).close()
+    jobs.check_user(cfg)
+    with closing(store.connect(cfg.db, cfg.owner_email)) as c:
+        jobs.move_shelves(cfg, c)
     return create_app(cfg, lambda acct: ipatool.for_account(cfg, acct))

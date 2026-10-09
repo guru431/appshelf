@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import traceback
@@ -19,12 +20,14 @@ from . import ipa, notify, people, removed, store
 from .config import GB, Config
 from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, hold, try_lock
 
-FREE_MIN = 4 * GB      # 3 ГБ неприкосновенного запаса + 1 ГБ на файл: размер IPA до скачивания неизвестен
-BANNER_FREE = 3 * GB   # баннер на каталоге
+RESERVE = 3 * GB         # неприкосновенный запас места: архив — общая шара
+FREE_MIN = RESERVE + GB  # + 1 ГБ на файл: размер IPA до скачивания неизвестен
+BANNER_FREE = RESERVE    # баннер на каталоге
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 EXPIRED_SUBJECT = "appshelf: нужен вход в Apple ID"
 LOW_SPACE_SUBJECT = f"appshelf: мало места на {notify.HOST}"
 REMOVE_LOCK_WAIT = 10.0  # идёт вызов ipatool этого Apple ID — ждём, как вход; скачивание отсекает проверка заданий
+NOT_PURCHASED = "этого приложения нет в покупках Apple ID — проверьте ссылку или ID"
 
 
 class LowSpace(Exception):
@@ -58,6 +61,22 @@ def free_space(env: Env) -> int:
     return min(env.disk_free(env.cfg.data_dir), env.disk_free(_archive(env.cfg)))
 
 
+def check_user(cfg: Config) -> None:
+    """Запуск только от владельца accounts/ (appshelf). У root ipatool подмешивает в ключ учётки product_uuid — ни одна
+    учётка не расшифруется, и ночь пометила бы все Apple ID «вход истёк»; файлы базы, созданные root, служба потом
+    не откроет."""
+    euid = getattr(os, "geteuid", lambda: None)()
+    if euid is None:  # Windows: тесты
+        return
+    try:
+        owner = cfg.accounts_dir.stat().st_uid
+    except FileNotFoundError:
+        owner = euid
+    if euid == 0 or euid != owner:
+        raise SystemExit("appshelf: запускайте от пользователя appshelf — sudo -u appshelf … "
+                         "или systemctl start appshelf-nightly")
+
+
 @contextmanager
 def nightly_lock(cfg: Config):
     """Замок ночной проверки на весь её прогон; yield True — взяли, значит другой проверки нет.
@@ -88,6 +107,22 @@ def describe(e: Exception) -> str:
     if isinstance(e, (LowSpace, ArchiveUnavailable, ipa.IpaError)):
         return str(e)[:500]
     return f"{type(e).__name__}: {e}"[:500]
+
+
+def stub(c, aid: int, app_id: int) -> bool:
+    """Добавлено по ссылке или ID и ни разу не скачано: строка «Истории» без bundle id не из справочника."""
+    return store.no_bundle(c, aid, app_id) and app_id not in removed.ids()
+
+
+def app_failed(c, aid: int, app_id: int, e: Exception) -> None:
+    """Ошибка скачивания — у карточки. Есть рабочая версия — приложение остаётся «ok», ошибка — строкой «не удалось
+    обновить»: ставить можно, повторит ночь. Добавленное по ссылке без лицензии — nolicense: повторять бесполезно."""
+    if isinstance(e, LicenseNotFound) and stub(c, aid, app_id):
+        store.set_app_status(c, aid, app_id, "nolicense", NOT_PURCHASED)
+    elif store.current_version(c, aid, app_id) is not None:
+        store.set_app_status(c, aid, app_id, "ok", describe(e))
+    else:
+        store.set_app_status(c, aid, app_id, "error", describe(e))
 
 
 def mark_expired(env: Env, c, acct) -> None:
@@ -126,6 +161,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
     На сервере качается один IPA за раз (download_lock): иначе два скачивания вместе пройдут проверку места."""
     cfg = env.cfg
     with hold(cfg.download_lock):
+        acct = people.get_account(c, acct.id) or acct  # каталог полки мог переехать, пока ждали замок (move_shelf)
         free = free_space(env)
         if free < FREE_MIN:
             raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно 4 ГБ")
@@ -147,32 +183,49 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
             if cur is not None and cur["external_version_id"] == info.external_version_id:
                 store.set_app_status(c, acct.id, app_id, "ok")
                 return "same"
+            size = src.stat().st_size
+            free = env.disk_free(_archive(cfg))  # размер теперь известен: запас шары не трогаем и большим IPA
+            if free - size < RESERVE:
+                raise LowSpace(f"мало места в архиве: свободно {free / GB:.1f} ГБ, IPA — {size / GB:.1f} ГБ, "
+                               f"запас — {RESERVE // GB} ГБ")
             name = version_dir_name(c, acct.id, app_id, info.version, info.external_version_id)
             final, partial = root / name, root / f".{name}.partial"
             shutil.rmtree(partial, ignore_errors=True)
             shutil.rmtree(final, ignore_errors=True)  # остаток прерванной публикации: имя в базе не занято
-            partial.mkdir(parents=True)
-            size = src.stat().st_size
-            shutil.move(src, partial / "app.ipa")  # tmp локально, архив на шаре: os.replace дал бы EXDEV
-            (partial / "icon.png").write_bytes(ipa.extract_icon(partial / "app.ipa"))
-            (partial / "manifest.plist").write_bytes(ipa.manifest(
-                cfg.shelf_url(acct, name, "app.ipa"), cfg.shelf_url(acct, name, "icon.png"),
-                info.bundle_id, info.version, info.title))
-            for f in partial.iterdir():
-                f.chmod(0o644)  # UMask служб 0077, а файлы отдаёт Apache (www-data)
-            partial.chmod(0o755)
-            os.replace(partial, final)
             try:
+                partial.mkdir(parents=True)
+                shutil.move(src, partial / "app.ipa")  # tmp локально, архив на шаре: os.replace дал бы EXDEV
+                (partial / "icon.png").write_bytes(ipa.extract_icon(partial / "app.ipa"))
+                (partial / "manifest.plist").write_bytes(ipa.manifest(
+                    cfg.shelf_url(acct, name, "app.ipa"), cfg.shelf_url(acct, name, "icon.png"),
+                    info.bundle_id, info.version, info.title))
+                for f in partial.iterdir():
+                    f.chmod(0o644)  # UMask служб 0077, а файлы отдаёт Apache (www-data)
+                partial.chmod(0o755)
+                os.replace(partial, final)
                 store.add_version(c, acct.id, root, app_id, store.NewVersion(
                     version=info.version, build=info.build, external_version_id=info.external_version_id,
                     min_ios=info.min_ios, device_family=info.device_family, size=size, dir=name,
                     built=info.built), env.now())
-            except store.AppGone:
+            except BaseException:
+                # обрыв шары, ENOSPC, «database is locked», сняли с публикации (AppGone): строки версии нет, а
+                # .partial с частью IPA или каталог без строки потом не убрал бы никто
+                shutil.rmtree(partial, ignore_errors=True)
                 shutil.rmtree(final, ignore_errors=True)
                 raise
             return "updated"
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+
+def unpublish(cfg: Config, c, acct, app_id: int) -> None:
+    """Снять с публикации. Архив недоступен — ArchiveUnavailable и ничего не тронуто: файлы остались бы на шаре без
+    строк, и удалить их из панели было бы нечем. Добавленное по ошибочному ID и ни разу не скачанное уходит и
+    из «Истории»."""
+    _archive(cfg)
+    store.unpublish(c, acct.id, cfg.shelf_root(acct), app_id)
+    if stub(c, acct.id, app_id):
+        store.drop_purchase(c, acct.id, app_id)
 
 
 def remove_account(cfg: Config, c, acct) -> None:
@@ -190,13 +243,22 @@ def remove_account(cfg: Config, c, acct) -> None:
                 c.execute("DELETE FROM accounts WHERE id=?", (acct.id,))
                 if not people.accounts_of(c, acct.user_id):
                     people.delete_user_row(c, acct.user_id)
-            shutil.rmtree(cfg.shelf_root(acct), ignore_errors=True)
-            shutil.rmtree(cfg.accounts_dir / str(acct.id), ignore_errors=True)
+            store.rmtree_logged(cfg.shelf_root(acct))
+            store.rmtree_logged(cfg.accounts_dir / str(acct.id))
     except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
         raise AccountBusy(acct.email) from e
     try:
         lock.unlink(missing_ok=True)
     except OSError:  # файл блокировки открыт другим процессом — останется пустым, Apple ID уже нет
+        pass
+
+
+def drop_account_files(cfg: Config, aid: int) -> None:
+    """HOME ipatool и блокировка Apple ID, строки которого уже нет (удалили посреди входа)."""
+    shutil.rmtree(cfg.accounts_dir / str(aid), ignore_errors=True)
+    try:
+        (cfg.locks_dir / f"{aid}.lock").unlink(missing_ok=True)
+    except OSError:
         pass
 
 
@@ -209,6 +271,56 @@ def remove_user(cfg: Config, c, uid: int) -> None:
         raise AccountBusy(busy.email)
     for acct in accounts:
         remove_account(cfg, c, acct)
+
+
+def move_shelf(cfg: Config, c, acct) -> None:
+    """Новый случайный токен каталога полки: каталог в архиве переименовать, ссылки в manifest.plist — поправить.
+    appshelf rotate-token (ссылки полки утекли) и перенос каталогов версии 2 (move_shelves). Новый токен сначала
+    ложится в shelf_next: сбой посередине доделает следующий вызов. На время переноса держим замок скачивания —
+    fetch_version не начнёт писать в прежний каталог. Архив недоступен — ArchiveUnavailable; идёт задание Apple ID
+    или чьё-то скачивание — AccountBusy."""
+    _archive(cfg)
+    try:
+        with hold(cfg.download_lock, REMOVE_LOCK_WAIT):
+            with store.tx(c):
+                if store.account_running(c, acct.id):
+                    raise AccountBusy(acct.email)
+                acct = people.get_account(c, acct.id)
+                if not acct.shelf_next:
+                    people.set_shelf_next(c, acct.id, people.new_shelf_token())
+            acct = people.get_account(c, acct.id)
+            old, new = cfg.shelf_token(acct), acct.shelf_next
+            src, dst = cfg.archive / old, cfg.archive / new
+            if src.is_dir() and not dst.exists():
+                os.replace(src, dst)
+            for m in dst.glob("*/manifest.plist"):
+                _relink(m, f"{cfg.public_base}/d/{old}/", f"{cfg.public_base}/d/{new}/")
+            people.set_shelf(c, acct.id, new)
+    except IpatoolError as e:  # не дождались замка скачивания
+        raise AccountBusy(acct.email) from e
+
+
+def _relink(manifest: Path, old: str, new: str) -> None:
+    data = manifest.read_bytes()
+    fixed = data.replace(old.encode(), new.encode())
+    if fixed != data:  # Apache может отдавать manifest прямо сейчас — подмена целиком
+        tmp = manifest.with_name(".manifest.plist.tmp")
+        tmp.write_bytes(fixed)
+        tmp.chmod(0o644)
+        os.replace(tmp, manifest)
+
+
+def move_shelves(cfg: Config, c) -> None:
+    """При старте appshelf-web и ночной проверки: доделать прерванные переносы и перенести каталоги Apple ID
+    версии 2 (HMAC от PUB_TOKEN) на случайные токены. Полка владельца из версии 1 остаётся <PUB_TOKEN>. Архив
+    недоступен, Apple ID занят, сбой шары — в журнал, повторит следующий запуск: служба из-за этого не встаёт."""
+    for acct in people.all_accounts(c):
+        if acct.shelf_next or not (acct.legacy_pub or acct.shelf):
+            try:
+                move_shelf(cfg, c, acct)
+            except (ArchiveUnavailable, AccountBusy, OSError) as e:
+                why = "идёт задание или скачивание" if isinstance(e, AccountBusy) else str(e)  # без адреса Apple ID
+                print(f"appshelf: каталог полки Apple ID №{acct.id} не перенесён: {why}", file=sys.stderr)
 
 
 class Worker:
@@ -235,18 +347,21 @@ class Worker:
 
     def recover(self) -> None:
         """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь, как и временные HOME входов
-        новых Apple ID: их пароли ушли вместе с прежним процессом."""
+        новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME удалённых посреди входа Apple ID."""
         c = self.connect()
         try:
             store.requeue_running(c)
+            known = {str(a.id) for a in people.all_accounts(c)}
         finally:
             c.close()
         cfg = self.env.cfg
         shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
-        for home in cfg.accounts_dir.glob(".new-*"):
-            shutil.rmtree(home, ignore_errors=True)
-        for lock in cfg.locks_dir.glob(".new-*.lock"):
-            lock.unlink(missing_ok=True)
+        for home in cfg.accounts_dir.glob("*"):
+            if home.name.startswith(".new-") or (home.name.isdigit() and home.name not in known):
+                shutil.rmtree(home, ignore_errors=True)
+        for lock in cfg.locks_dir.glob("*.lock"):
+            if lock.stem.startswith(".new-") or (lock.stem.isdigit() and lock.stem not in known):
+                lock.unlink(missing_ok=True)
 
     def tick(self) -> bool:
         """Одно задание Apple ID с входом. True — что-то сделано; задания Apple ID без входа ждут (spec §7.6)."""
@@ -282,7 +397,11 @@ class Worker:
                     return
             else:
                 store.set_app_status(c, acct.id, app_id, "downloading")
-                fetch_version(env, c, acct, app_id, env.cfg.tmp_dir / "web")
+                cur = store.current_version(c, acct.id, app_id)
+                if cur is not None and env.tools(acct).latest_version_id(app_id) == cur["external_version_id"]:
+                    store.set_app_status(c, acct.id, app_id, "ok")  # «Повторить» при той же версии — IPA не качаем
+                else:
+                    fetch_version(env, c, acct, app_id, env.cfg.tmp_dir / "web")
             store.finish_job(c, job["id"], "done", env.now())
         except SessionExpired:
             store.requeue_job(c, job["id"])
@@ -291,10 +410,9 @@ class Worker:
             mark_expired(env, c, acct)
         except store.AppGone:
             store.finish_job(c, job["id"], "cancelled", env.now(), "снято с публикации во время скачивания")
-        except Exception as e:  # ошибка задания — текст у карточки, «Повторить»
+        except Exception as e:  # ошибка задания — текст у карточки
             if isinstance(e, LowSpace):
                 low_space(env, c, e)
-            msg = describe(e)
-            store.finish_job(c, job["id"], "error", env.now(), msg)
+            store.finish_job(c, job["id"], "error", env.now(), describe(e))
             if app_id is not None:
-                store.set_app_status(c, acct.id, app_id, "error", msg)
+                app_failed(c, acct.id, app_id, e)

@@ -27,11 +27,15 @@ def aliases() -> dict[int, str]:
     return {a["id"]: " ".join(a.get("aliases", [])) for a in load() if a.get("aliases")}
 
 
+def ids() -> set[int]:
+    return {a["id"] for a in load()}
+
+
 def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
           stop=lambda: False) -> tuple[int, int, int]:
     """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются;
-    «нет лицензии» запоминается, и кнопка их пропускает (205 проверок — три минуты), полную перепроверку делает
-    ночь — раз в неделю на Apple ID. stop() перед каждым запросом к Apple: True — Interrupted."""
+    «нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
+    делает ночь — раз в неделю на Apple ID. stop() перед каждым запросом к Apple: True — Interrupted."""
     tool = env.tools(acct)
     rows = {r["app_id"]: r for r in store.list_purchases(c, acct.id)}
     skip = set() if full else store.no_license_ids(c, acct.id)
