@@ -74,7 +74,7 @@ fi
 # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
 # От www-data — так к сокету ходит Apache; /healthz без пароля.
 code=000
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
   code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null || true)
   if [ "$code" = 200 ]; then
     rm -rf "$OLD"
