@@ -1,0 +1,87 @@
+diff --git a/main.cpp b/main.cpp
+index 573dcdb..1f987c5 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -41,9 +41,11 @@
+ #include <csignal>
+ #include <nlohmann/json.hpp>
+ #include <filesystem>
++#include <cerrno>
+ #ifndef _WIN32
+ #  include <sys/ioctl.h>
+ #  include <unistd.h>
++#  include <fcntl.h>   // appshelf 06: open/fsync for the atomic account write
+ #else
+ // windows.h was previously pulled in transitively via the old ipatool.h;
+ // that header is now logic-free and no longer includes it, so main.cpp
+@@ -274,6 +276,42 @@ static std::string aes_gcm_decrypt(const std::vector<unsigned char>& blob,
+ // Forward declaration — defined after color init below
+ static void print_red_err(const std::string& msg);
+ 
++// appshelf (06-atomic-account-save): the account file is replaced atomically —
++// written to a temp file next to it, flushed to disk, then renamed over
++// `account`. A full disk or a kill mid-write keeps the old file intact instead
++// of leaving an empty one, which reads as "not logged in".
++static bool write_account_file(const std::vector<unsigned char>& blob) {
++    namespace fs = std::filesystem;
++    const fs::path dst = ipt::fs_path(ACCOUNT_FILE);
++    const fs::path tmp = ipt::fs_path(ACCOUNT_FILE + ".tmp");
++    bool ok;
++#ifndef _WIN32
++    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
++    if (fd < 0) return false;
++    size_t off = 0;
++    while (off < blob.size()) {
++        ssize_t n = ::write(fd, blob.data() + off, blob.size() - off);
++        if (n < 0 && errno == EINTR) continue;
++        if (n <= 0) break;
++        off += (size_t)n;
++    }
++    ok = off == blob.size() && ::fsync(fd) == 0;
++    if (::close(fd) != 0) ok = false;
++#else
++    {
++        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
++        f.write((const char*)blob.data(), (std::streamsize)blob.size());
++        f.flush();
++        ok = (bool)f;
++    }
++#endif
++    std::error_code ec;
++    if (ok) fs::rename(tmp, dst, ec);   // replaces the old file in one step
++    if (ok && !ec) return true;
++    fs::remove(tmp, ec);
++    return false;
++}
++
+ static bool save_account(const Account& acc, const std::string& passphrase = "") {
+     ensure_config_dir();
+ 
+@@ -295,12 +333,10 @@ static bool save_account(const Account& acc, const std::string& passphrase = "")
+ 
+     try {
+         auto blob = aes_gcm_encrypt(data, machine_id, passphrase);
+-        std::ofstream f(ipt::fs_path(ACCOUNT_FILE), std::ios::binary);
+-        if (!f) {
++        if (!write_account_file(blob)) {
+             print_red_err("Error: failed to write account file.\n");
+             return false;
+         }
+-        f.write((const char*)blob.data(), blob.size());
+     } catch (const std::exception& e) {
+         print_red_err(std::string("Error: failed to encrypt account file: ")
+                       + e.what() + "\n");
+@@ -673,9 +709,10 @@ static void cmd_login(const Args& args) {
+                     && !prev.kbsync.empty())
+                     acc.kbsync = prev.kbsync;
+             }
+-            if (!save_account(acc, passphrase)) {
+-                std::cerr << "Warning: could not save account\n";
+-            }
++            // appshelf (06): Apple let us in, but the next run would read "not
++            // logged in" — report a failure instead of success.
++            if (!save_account(acc, passphrase))
++                fail(1, "save_failed", "logged in, but the account file could not be saved");
+             json loginOut;
+             loginOut["name"]    = acc.name;
+             loginOut["email"]   = acc.email;

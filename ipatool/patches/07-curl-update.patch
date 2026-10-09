@@ -1,0 +1,17 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3024cf8..94ae553 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -155,8 +155,11 @@ if(STATIC_BUILD AND NOT WIN32)
+     else()
+         set(_curl_timestamp_opt "")
+     endif()
++    # appshelf (07-curl-update): curl is linked statically, so its security fixes
++    # arrive only through this version; the hash pins the tarball (curl.se/info).
+     ExternalProject_Add(curl_static
+-        URL          https://curl.se/download/curl-8.7.1.tar.gz
++        URL          https://curl.se/download/curl-8.22.0.tar.gz
++        URL_HASH     SHA256=d54dd598bf05927a726deb38df31c6a255ba83ff1de57c5d1464dac3ed8f44a1
+         ${_curl_timestamp_opt}
+         CONFIGURE_COMMAND
+             <SOURCE_DIR>/configure
