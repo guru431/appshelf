@@ -1,6 +1,27 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-09 · Службы: ProtectSystem=strict и NoNewPrivileges вместо ProtectSystem=full [P3]
+**Context:** часть находки «Код, .venv, deploy/ и ipatool/ принадлежат appshelf, а root их исполняет» (аудит 2026-10-09); `deploy/appshelf-web.service`, `deploy/appshelf-nightly.service`.
+**What:** предлагалось `ProtectSystem=strict`, `ReadWritePaths=<данные, accounts, архив>`, `NoNewPrivileges=yes`.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-09 — письма уходят через setuid-sendmail (exim4): с `NoNewPrivileges` он не поднимет права, а со `strict` не запишет очередь в `/var/spool` — уведомления о входе и месте молча пропали бы. Сделано `ProtectSystem=full` + `ReadWritePaths=/etc/appshelf/accounts` + `PrivateTmp`; главное — код, `.venv` и `bin/` теперь root (`deploy/install.sh`). Вернуться, если письма перейдут на SMTP к localhost.
+
+## 2026-10-09 · Сборка ipatool: образ debian:trixie по digest и зеркало upstream [P3]
+**Context:** часть находки «bin/ipatool вшивает OpenSSL на день сборки и curl 8.7.1» (аудит 2026-10-09); `deploy/build-ipatool.sh`.
+**What:** закрепить образ по digest ради воспроизводимой сборки, завести зеркало upstream ipatool-cpp.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-09 — `apt-get` в контейнере всё равно берёт текущие пакеты, так что digest воспроизводимости не даёт, а исправления OpenSSL задерживал бы; upstream закреплён коммитом в `ipatool/UPSTREAM`, патчи лежат в репозитории. Сделано: curl 8.22.0 с `URL_HASH` (патч 07) и правило пересборки в `ipatool/README.md`.
+
+## 2026-10-09 · Блокировать кнопку «Продолжить» по onsubmit [P3]
+**Context:** часть находки «Двойное «Продолжить» на шаге 1» (аудит 2026-10-09); `appshelf/web/templates/login.html`.
+**What:** JS, выключающий кнопку после первого нажатия.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-09 — двойное нажатие решено на сервере (`LoginFlow.start`: второй запрос с тем же паролем ждёт первый вход и получает его шаг кода, к Apple не идёт), а правило spec 2026-10-08 §10 — «JavaScript — только опрос /api/status».
+
 ## 2026-10-09 · Лимит неверных паролей без эскалации: аноним шлёт ~10 неудач в час в Apple на Apple ID [P3]
 **Context:** адверсариальный аудит 2026-10-09, линза «безопасность»; `appshelf/web/login.py:131-170`, `appshelf/web/signin.py:153-177`.
 **What:** окно 5 неудач в час на Apple ID скользящее, без суточного предела; ipatool на неверный пароль шлёт в Apple два запроса; адрес зарегистрированного Apple ID различим по ответу формы.
