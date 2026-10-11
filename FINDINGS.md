@@ -9,13 +9,6 @@
 **Proposal:** Сначала проверить наличие аккаунтов (или хотя бы существование пользователя), и только затем расходовать ссылку в одной транзакции; либо не считать это ошибкой ссылки и показать понятный текст «у участника нет Apple ID — добавьте его заново», не сжигая ссылку. Сверено с кодом 2026-10-11: appshelf/web/signin.py:293-298 (GET /l/{token} в строках 274-286 проверяет только пользователя).
 **Status:** open
 
-## 2026-10-10 · code-review role:review: Regex валидации PUB_TOKEN использует `$`, который в Python с... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/config.py:17, category=correctness
-**What:** Regex валидации PUB_TOKEN использует `$`, который в Python совпадает перед финальным переводом строки: значение из 32 hex-символов с хвостовым '\n' (например, при ручном редактировании appshelf.env или кривом экспорте) пройдёт проверку, и символ новой строки попадёт в pub_token — в имена каталогов архива, в HMAC и в ссылки установки.
-**Evidence:** `TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")`
-**Proposal:** Использовать `re.fullmatch(r"[0-9a-f]{32}", token)` или якорь `\Z` вместо `$`. Сверено с кодом 2026-10-11: appshelf/config.py:12 (проверка — from_env, строка 83).
-**Status:** open
-
 ## 2026-10-10 · code-review role:review: Worker.recover() вызывается до цикла и вне try/except: любое... [P3]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/jobs.py:436-440, category=bug
 **What:** Worker.recover() вызывается до цикла и вне try/except: любое исключение при старте потока (например, таймаут блокировки SQLite при ожившей ночной проверке, сбой шары при обходе accounts_dir) убивает поток обработчика навсегда — задания больше никогда не берутся, служба при этом выглядит работающей. Основной цикл такие сбои переживает (`except Exception` внутри while), а старт — нет.

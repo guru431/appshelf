@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GB = 1024 ** 3
-TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)
@@ -80,7 +80,7 @@ class Config:
 def from_env(env=None) -> Config:
     env = os.environ if env is None else env
     token = env.get("PUB_TOKEN", "")
-    if not TOKEN_RE.match(token):
+    if not TOKEN_RE.fullmatch(token):  # не match с «$»: тот пропускает хвостовой перевод строки
         raise ValueError("PUB_TOKEN в appshelf.env — 32 символа 0-9a-f")
     base = env.get("APPSHELF_PUBLIC_BASE", "")
     if not base.startswith(("https://", "http://")):

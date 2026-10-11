@@ -37,7 +37,7 @@ def test_archive_on_share():
     assert cfg.db == Path("/var/lib/appshelf/appshelf.db")  # SQLite на CIFS портится — база остаётся локально
 
 
-@pytest.mark.parametrize("token", ["", "abc", TOKEN.upper(), "g" * 32, TOKEN + "0"])
+@pytest.mark.parametrize("token", ["", "abc", TOKEN.upper(), "g" * 32, TOKEN + "0", TOKEN + "\n"])
 def test_bad_token_rejected(token):
     with pytest.raises(ValueError):
         from_env({"PUB_TOKEN": token, "APPSHELF_PUBLIC_BASE": BASE})
