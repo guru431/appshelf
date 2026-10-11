@@ -2,13 +2,6 @@
 Побочные находки, только `open`. Ревизия: MonthlyStratReview 1-го числа. Stale >90 дней → alert.
 Новые записи сверху. Выполненные — удаляются (след в `git log`), отклонённые — переносятся в [FINDINGS-archive.md](FINDINGS-archive.md).
 
-## 2026-10-10 · code-review role:review: Значение APPSHELF_CODE_GROUP из .env подставляется в одинарн... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/deploy/deploy.sh:41, category=security
-**What:** Значение APPSHELF_CODE_GROUP из .env подставляется в одинарно-процитированный удалённый скрипт через разрыв кавычек, без экранирования: значение исполняется shell'ом от root на сервере. Любой метасимвол в значении (.env правится вручную) исполнится как команда от root.
-**Evidence:** `sudo bash "$R/.incoming/deploy/install.sh" "'""${APPSHELF_CODE_GROUP:-root}""'"`
-**Proposal:** Передавать значение безопасно: например, экспортировать переменную окружения для ssh (SendEnv/`APPSHELF_CODE_GROUP="$APPSHELF_CODE_GROUP" sudo bash ...` с экранированием через printf %q) или валидировать значение regex'ом ^[a-zA-Z_][a-zA-Z0-9_-]*$ до подстановки. Сверено с кодом 2026-10-11: deploy/deploy.sh:28.
-**Status:** open
-
 ## 2026-10-10 · code-review role:review: POST по запасной ссылке расходует её (use_login_link ставит ... [P3]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/web/signin.py:424-431, category=correctness
 **What:** POST по запасной ссылке расходует её (use_login_link ставит used_at) до проверки, что человеку есть куда впустить: если у пользователя не осталось ни одного Apple ID (все удалены), вход невозможен, но ссылка уже сожжена — повторный клик даст «Ссылка недействительна», и владельцу придётся выдавать новую.

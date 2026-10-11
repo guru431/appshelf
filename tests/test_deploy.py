@@ -10,6 +10,13 @@ def test_only_committed_head_is_deployed():
     assert text.index("status --porcelain") < text.index('git -C "$D" archive --format=tar.gz HEAD')
 
 
+def test_code_group_reaches_server_as_one_shell_word():
+    # значение из .env вставлялось в удалённую команду между кавычками как есть: $(…) или " в нём исполнил бы сервер
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert """GROUP="$(printf '%q' "${APPSHELF_CODE_GROUP:-root}")\"""" in text
+    assert text.count("APPSHELF_CODE_GROUP") == 2 and text.rstrip().endswith("""install.sh" '"$GROUP\"""")
+
+
 def test_new_code_goes_live_only_after_checks_and_pip():
     # проверка после установки оставляла новый код без APPSHELF_OWNER: ближайший перезапуск — MigrationError;
     # упавший pip — новый код со старыми зависимостями

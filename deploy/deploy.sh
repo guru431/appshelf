@@ -16,6 +16,8 @@ fi
 SSH=(ssh -o BatchMode=yes -p "${APPSHELF_SSH_PORT:-22}")
 if [ -n "${APPSHELF_SSH_KEY:-}" ]; then SSH+=(-i "$APPSHELF_SSH_KEY" -o IdentitiesOnly=yes); fi
 SSH+=("$APPSHELF_SSH")
+# имя группы — одним словом удалённой оболочки: вставленное как есть, $(…) или " из .env исполнил бы сервер
+GROUP="$(printf '%q' "${APPSHELF_CODE_GROUP:-root}")"
 git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
   set -e
   R=/var/_sh/appshelf
@@ -25,4 +27,4 @@ git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
   sudo rm -rf "$R/.incoming"
   sudo install -d -o root -g root -m 0700 "$R/.incoming"
   sudo tar -xzf - -C "$R/.incoming"
-  sudo bash "$R/.incoming/deploy/install.sh" "'"${APPSHELF_CODE_GROUP:-root}"'"'
+  sudo bash "$R/.incoming/deploy/install.sh" '"$GROUP"
