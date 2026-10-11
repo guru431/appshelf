@@ -1,6 +1,22 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-10 · code-review role:review: POST по запасной ссылке расходует её (use_login_link ставит ... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/web/signin.py:424-431, category=correctness
+**What:** POST по запасной ссылке расходует её (use_login_link ставит used_at) до проверки, что человеку есть куда впустить: если у пользователя не осталось ни одного Apple ID (все удалены), вход невозможен, но ссылка уже сожжена — повторный клик даст «Ссылка недействительна», и владельцу придётся выдавать новую.
+**Evidence:** `uid = people.use_login_link(c, token, w.now()) user = people.get_user(c, uid) if uid is not None else None accounts = people.accounts_of(c, uid) if user is not None else [] if not accounts: w.limiter.fail() return login_page(w, request, error=LINK_GONE, status_code=400)`
+**Proposal:** Сначала проверить наличие аккаунтов (или хотя бы существование пользователя), и только затем расходовать ссылку в одной транзакции; либо не считать это ошибкой ссылки и показать понятный текст «у участника нет Apple ID — добавьте его заново», не сжигая ссылку. Сверено с кодом 2026-10-11: appshelf/web/signin.py:293-298 (GET /l/{token} в строках 274-286 проверяет только пользователя).
+**Status:** wontfix
+**Resolved:** 2026-10-11 — опровергнуто проверкой: человека без Apple ID в базе не бывает. Строки `users` и `accounts` создаются одной транзакцией (`signin.register`, `store._from_v1`), а удаление последнего Apple ID той же транзакцией удаляет и человека (`jobs.remove_account`; тест `test_remove_account_deletes_rows_dirs_and_last_user`). «Все Apple ID удалены» значит «человека нет»: GET и POST одинаково отвечают «Ссылка недействительна», а ссылка на удалённого человека и так мертва (`users.id` — AUTOINCREMENT, номер другому не достанется) — её расход ничего не меняет.
+
+## 2026-10-10 · code-review role:review: Worker.recover() вызывается до цикла и вне try/except: любое... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/jobs.py:436-440, category=bug
+**What:** Worker.recover() вызывается до цикла и вне try/except: любое исключение при старте потока (например, таймаут блокировки SQLite при ожившей ночной проверке, сбой шары при обходе accounts_dir) убивает поток обработчика навсегда — задания больше никогда не берутся, служба при этом выглядит работающей. Основной цикл такие сбои переживает (`except Exception` внутри while), а старт — нет.
+**Evidence:** `def run_forever(self) -> None: self.recover() while True:`
+**Proposal:** Обернуть recover() в try/except с traceback.print_exc() (и, возможно, повтором попытки в цикле), чтобы сбой восстановления не убивал обработчик навсегда. Сверено с кодом 2026-10-11: appshelf/jobs.py:339-340.
+**Status:** wontfix
+**Resolved:** 2026-10-11 — повтор отклонённого 2026-10-09: «`recover()` — в try с повтором» входило в идею «/healthz не видит смерти или зависания обработчика заданий» ([IDEAS-archive.md](IDEAS-archive.md)), решение прежнее. Примеры из находки не подтверждаются: `accounts_dir` и `locks_dir` — локальные каталоги appshelf, не шара; база к старту потока уже открыта и перенесена (`web/app.py`: `store.connect` и `move_shelves` до `create_app` — сбой там роняет службу, а не поток), запись ждёт блокировку 30 с (busy_timeout), `rmtree` — с `ignore_errors`. С 2026-10-09 в `recover()` добавились только чтение списка Apple ID и более широкие маски уборки — новых источников сбоя нет.
+
 ## 2026-10-10 · code-review role:review: В test-зависимостях указан пакет «httpx2» — это не стандартн... [P2]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/pyproject.toml:18, category=bug
 **What:** В test-зависимостях указан пакет «httpx2» — это не стандартный httpx, который нужен для starlette/fastapi TestClient. Если это опечатка, `pip install -e ".[test]"` в CI (tests.yml ставит именно `.[test]`) либо упадёт на несуществующем пакете, либо установит посторонний пакет, а тесты упадут с ImportError на `import httpx`. На пакете «httpx2» нет поддерживаемой совместимости с httpx API.
