@@ -1,6 +1,13 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-10 · code-review role:review: В test-зависимостях указан пакет «httpx2» — это не стандартн... [P2]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/pyproject.toml:18, category=bug
+**What:** В test-зависимостях указан пакет «httpx2» — это не стандартный httpx, который нужен для starlette/fastapi TestClient. Если это опечатка, `pip install -e ".[test]"` в CI (tests.yml ставит именно `.[test]`) либо упадёт на несуществующем пакете, либо установит посторонний пакет, а тесты упадут с ImportError на `import httpx`. На пакете «httpx2» нет поддерживаемой совместимости с httpx API.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-11 — не опечатка: `httpx2` выбран сознательно, как в subs (решение в `.superpowers/sdd/2026-10-05-appshelf/progress.md`, Task 10): `starlette.testclient` с обычным httpx даёт DeprecationWarning, а вывод тестов должен быть чистым. В `.venv` стоит httpx2 2.13.1, тесты на нём проходят.
+
 ## 2026-10-09 · Службы: ProtectSystem=strict и NoNewPrivileges вместо ProtectSystem=full [P3]
 **Context:** часть находки «Код, .venv, deploy/ и ipatool/ принадлежат appshelf, а root их исполняет» (аудит 2026-10-09); `deploy/appshelf-web.service`, `deploy/appshelf-nightly.service`.
 **What:** предлагалось `ProtectSystem=strict`, `ReadWritePaths=<данные, accounts, архив>`, `NoNewPrivileges=yes`.
