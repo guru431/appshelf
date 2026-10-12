@@ -22,11 +22,14 @@ from .login import TTL, Intent, LoginBusy, LoginExpired, LoginInProgress, LoginJ
 LOGIN_ERRORS = {
     "edge_rejected": "Apple отклонил вход с этого адреса — попробуйте позже",
     "invalid_credentials": "Неверный пароль или код",
+    "account_disabled": "Apple отказал во входе — проверьте пароль: после нескольких неверных попыток Apple на время "
+                        "закрывает вход этим Apple ID",
     "busy": "Этот Apple ID сейчас занят (вход, скачивание или проверка) — попробуйте через пару минут",
     "timeout": "Apple не ответил за 2 минуты — попробуйте позже",
     "bad_device_mac": "Сбой настройки сервера — сообщите владельцу",
     "save_failed": "Apple впустил, но сервер не смог сохранить вход — сообщите владельцу",
 }
+WRONG_PASSWORD = ("invalid_credentials", "account_disabled")  # «account is disabled» Apple отвечал на неверный пароль
 NOT_REGISTERED = "Этот Apple ID на сервере не зарегистрирован — нужна ссылка-приглашение от владельца"
 NOT_CONFIGURED = "Сервер не настроен: не задан APPSHELF_OWNER"
 INVITE_GONE = "Ссылка-приглашение недействительна — попросите новую"
@@ -187,7 +190,7 @@ def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *
     except LoginJoined as e:  # отказ первого из двух одинаковых запросов: неудача уже посчитана
         return again(login_error_text(e.error), 400)
     except IpatoolError as e:
-        if e.error == "invalid_credentials":
+        if e.error in WRONG_PASSWORD:
             w.limiter.fail()
             w.limiter.email_fail(email)
         elif e.error in ("bad_device_mac", "save_failed"):
@@ -240,7 +243,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         except LoginExpired:
             return again(EXPIRED_STEP, 400)
         except IpatoolError as e:
-            if e.error == "invalid_credentials":
+            if e.error in WRONG_PASSWORD:
                 w.limiter.fail()
                 w.limiter.email_fail(pending.email)
             return again(login_error_text(e), 400)

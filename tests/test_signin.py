@@ -1,6 +1,7 @@
 from contextlib import closing
 from dataclasses import replace
 
+import pytest
 from starlette.testclient import TestClient
 
 from appshelf import jobs, people, store
@@ -204,12 +205,15 @@ def test_edge_rejection_text_not_counted_as_wrong_password(make_web, cfg, conn, 
                           follow_redirects=False).status_code == 303
 
 
-def test_wrong_password_closes_apple_id_for_an_hour(make_web, cfg, conn, acct, clock):
+@pytest.mark.parametrize("error", ["invalid_credentials", "account_disabled"])
+def test_wrong_password_closes_apple_id_for_an_hour(make_web, cfg, conn, acct, clock, error):
+    # «account is disabled» Apple ответил на неверный пароль — считается так же, текст ведёт к паролю, не к учётке
     wb = make_web(cfg, conn)
     tool = wb.tools.setdefault(1, FakeTool())
     for _ in range(5):
-        tool.errors["login"] = IpatoolError("invalid_credentials", "")
-        assert wb.client.post("/login", data={"email": "owner@example", "password": "bad"}).status_code == 400
+        tool.errors["login"] = IpatoolError(error, "")
+        r = wb.client.post("/login", data={"email": "owner@example", "password": "bad"})
+        assert r.status_code == 400 and ("Неверный пароль" in r.text or "проверьте пароль" in r.text)
     calls = len(tool.calls)
     r = wb.client.post("/login", data={"email": "owner@example", "password": "good"})
     assert r.status_code == 429 and "закрыт" in r.text and len(tool.calls) == calls   # к Apple не ходили

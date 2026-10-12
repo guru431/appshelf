@@ -50,6 +50,14 @@ def test_exit_codes_map_to_exceptions(tmp_path, code, exc, error):
     assert e.value.error == error and e.value.message == "текст"
 
 
+def test_account_disabled_gets_own_code(tmp_path):
+    # ipatool отдаёт отказ Apple «Your account is disabled.» общим кодом error — а это был неверный пароль
+    tool = make_tool(tmp_path, {"auth login": {"code": 1, "out": {"error": "error", "message": "account is disabled"}}})
+    with pytest.raises(IpatoolError) as e:
+        tool.login("owner@example", "pw")
+    assert e.value.error == "account_disabled"
+
+
 def test_failure_without_json_reports_exit_code(tmp_path):
     tool = make_tool(tmp_path, {"download": {"code": 2}})
     with pytest.raises(IpatoolError) as e:

@@ -173,6 +173,8 @@ class Ipatool:
         error = message = ""
         if isinstance(data, dict):
             error, message = str(data.get("error", "")), str(data.get("message", ""))
+        if error == "error" and message == "account is disabled":  # Apple «Your account is disabled.» на вход
+            error = "account_disabled"
         raise BY_EXIT.get(proc.returncode, IpatoolError)(
             error or "error", message or _tail(err) or f"код выхода {proc.returncode}")
 
