@@ -1,12 +1,14 @@
 {% extends "base.html" %}
 {% block main %}
-<div style="max-width:360px;margin:24px auto">
-  <p><b>appshelf</b>{% if add %} — добавить Apple ID{% endif %}</p>
+<div class="auth">
+  {% if add %}<h2>appshelf — добавить Apple ID</h2>
+  {% else %}<div class="brand"><img src="/pwa/icon-180.png" alt=""><h1>appshelf</h1></div>{% endif %}
   {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID.
     Откройте эту ссылку в Safari: во встроенном браузере Telegram или WhatsApp установка не работает, а вход
     придётся повторить.
     {%- if user %} Вы уже вошли как {{ user.name }}: новый Apple ID станет отдельным участником,
     это устройство войдёт и как он. Добавить Apple ID к себе — <a href="/apple/add">«Apple ID» → «Добавить»</a>.{% endif %}</div>{% endif %}
+  <div class="card">
   {% if error %}<p class="err">{{ error }}</p>{% endif %}
   {% if link %}
   <form method="post">
@@ -17,15 +19,14 @@
   <form method="post" action="/login/code">
     <p>Apple отправила код на ваши устройства ({{ email }}). Apple покажет запрос входа с картой — на ней город сервера,
       а не ваш. Нажмите «Разрешить» и введите код. Шаг действует 10 минут.</p>
-    <label>Код 2FA<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" autofocus></label>
+    <label>Код 2FA<input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" autofocus></label>
     <input type="hidden" name="next" value="{{ next }}">
     <button>Войти</button>
   </form>
-  <form method="post" action="/login/cancel" style="margin-top:12px">
+  <form method="post" action="/login/cancel">
     <input type="hidden" name="next" value="{{ next }}">
     <button class="secondary">Начать заново</button>
   </form>
-  <p class="hint">Код не пришёл — на iPhone: Настройки → [ваше имя] → Вход и безопасность → Получить код проверки.</p>
   {% else %}
   <form method="post" action="{{ action }}">
     <label>Apple ID<input name="email" type="email" value="{{ email }}" autocomplete="username" autocapitalize="off"></label>
@@ -33,6 +34,12 @@
     <input type="hidden" name="next" value="{{ next }}">
     <button>Продолжить</button>
   </form>
+  {% endif %}
+  </div>
+  {% if link %}
+  {% elif step == 2 %}
+  <p class="hint">Код не пришёл — на iPhone: Настройки → [ваше имя] → Вход и безопасность → Получить код проверки.</p>
+  {% else %}
   <p class="hint">Вход — вашим Apple ID и паролем от него. Пароль на сервере не сохраняется: он нужен только для входа
     и живёт в памяти не дольше 10 минут. Вход запоминается на год на этом устройстве; в приложении на экране «Домой»
     войти нужно отдельно.</p>

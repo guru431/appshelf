@@ -2,7 +2,7 @@
 <html lang="ru"{% if theme %} data-theme="{{ theme }}"{% endif %}>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>appshelf</title>
 <link rel="manifest" href="/pwa/manifest.webmanifest">
@@ -11,80 +11,240 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="appshelf">
-{% if theme %}<meta name="theme-color" content="{{ '#f2f2f7' if theme == 'light' else '#111111' }}">
-{% else %}<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
+{% if theme %}<meta name="theme-color" content="{{ '#f2f2f7' if theme == 'light' else '#000000' }}">
+{% else %}<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">{% endif %}
 <style>
-/* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в шапке */
-:root { color-scheme: dark; --bg: #111; --card: #1c1c1e; --line: #2c2c2e; --fg: #f2f2f7; --muted: #8e8e93;
-        --accent: #0a84ff; --err: #ff453a; --warn: #ffd60a; --banner: #3a2e00; --input: #000; --inputline: #3a3a3c; }
+/* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в меню Apple ID */
+:root { color-scheme: dark; --bg: #000; --card: #1c1c1e; --raised: #2c2c2e; --bar: rgba(20,20,22,.74);
+        --line: rgba(255,255,255,.1); --fg: #f5f5f7; --muted: #98989f; --accent: #0a84ff; --link: #4da3ff;
+        --tint: rgba(10,132,255,.22); --fill: rgba(120,120,128,.26); --seg: #636366; --err: #ff6961;
+        --errtint: rgba(255,69,58,.2); --ok: #30d158; --warn: #ffd60a; --banner: rgba(255,214,10,.13);
+        --shadow: inset 0 1px 0 rgba(255,255,255,.06); --pop: 0 0 0 1px rgba(255,255,255,.1), 0 18px 44px rgba(0,0,0,.6); }
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f2f2f7; --card: #fff; --line: #d1d1d6; --fg: #000;
-        --muted: #6c6c70; --accent: #007aff; --err: #d70015; --warn: #7a5c00; --banner: #fff4ce; --input: #fff; --inputline: #c7c7cc; }
+  :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
+        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #6c6c70; --accent: #0071e3; --link: #0066cc;
+        --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
+        --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
+        --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
 }
-:root[data-theme="light"] { color-scheme: light; --bg: #f2f2f7; --card: #fff; --line: #d1d1d6; --fg: #000;
-        --muted: #6c6c70; --accent: #007aff; --err: #d70015; --warn: #7a5c00; --banner: #fff4ce; --input: #fff; --inputline: #c7c7cc; }
+:root[data-theme="light"] { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
+        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #6c6c70; --accent: #0071e3; --link: #0066cc;
+        --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
+        --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
+        --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 -apple-system, system-ui, sans-serif; }
-header { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-header a { color: var(--fg); text-decoration: none; }
-header a.on { color: var(--accent); }
-header .on { color: var(--accent); }
-header .session { margin-left: auto; color: var(--muted); font-size: 14px; }
-main { max-width: 720px; margin: 0 auto; padding: 16px; }
-a { color: var(--accent); }
-.banner { background: var(--banner); color: var(--warn); padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; }
-.card { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
-.card img, .card .noicon { width: 60px; height: 60px; border-radius: 13px; flex: none; background: var(--line); }
-.card .body { flex: 1; min-width: 0; }
-.meta, .hint { color: var(--muted); font-size: 14px; }
-.err { color: var(--err); }
-button, .btn { display: inline-block; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
-               padding: 8px 14px; font-size: 16px; text-decoration: none; }
-button.secondary { background: var(--line); }
-input { width: 100%; margin: 6px 0 12px; padding: 10px; font-size: 16px; color: var(--fg); background: var(--input);
-        border: 1px solid var(--inputline); border-radius: 10px; }
-details summary { list-style: none; cursor: pointer; color: var(--muted); padding: 4px 8px; }
-table { width: 100%; border-collapse: collapse; }
-td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.sortbar { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 14px; margin: 4px 0 8px; }
-.sortbar a { text-decoration: none; }
-.sortbar a.on { font-weight: 600; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; padding-bottom: calc(72px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg);
+       font: 17px/1.4 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+       -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+h1 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+h2 { margin: 22px 4px 8px; font-size: 13px; line-height: 1.3; font-weight: 600; letter-spacing: .04em;
+     text-transform: uppercase; color: var(--muted); }
+p { margin: 0 0 12px; }
+a { color: var(--link); text-decoration: none; }
+p a, .hint a, .meta a, .banner a { text-decoration: underline; text-underline-offset: 2px; }
+form { margin: 0; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* шапка: заголовок страницы и меню Apple ID; разделы — панель внизу, на широком экране — строка под шапкой */
+header { position: -webkit-sticky; position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px;
+         padding: calc(10px + env(safe-area-inset-top)) max(calc(16px + env(safe-area-inset-right)), calc(50% - 344px)) 10px
+                  max(calc(16px + env(safe-area-inset-left)), calc(50% - 344px));
+         background: var(--bar); border-bottom: 1px solid var(--line);
+         -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.pop { position: relative; }
+.pop > summary { display: block; list-style: none; cursor: pointer; -webkit-user-select: none; user-select: none; }
+.pop > summary::-webkit-details-marker { display: none; }
+.sheet { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; width: max-content; max-width: calc(100vw - 32px);
+         padding: 8px; border-radius: 18px; background: var(--raised); box-shadow: var(--pop); }
+.acct { min-width: 0; margin-left: auto; }
+.acct .chip { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 999px;
+              background: var(--fill); font-size: 14px; font-weight: 500; }
+.acct .chip::after { content: ""; flex: none; width: 7px; height: 7px; margin: -3px 2px 0; opacity: .6;
+                     border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.acct .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct .sheet { width: 340px; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); }
+.dot.expired { background: var(--err); }
+.shelves a, .shelves .on { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px;
+                           border-radius: 12px; color: var(--fg); font-size: 15px; overflow-wrap: anywhere; word-break: break-word; }
+.shelves .on { font-weight: 600; }
+.shelves .on::after { content: "✓"; color: var(--link); }
+.sheet .meta { padding: 4px 12px 12px; }
+.seg { display: flex; margin-bottom: 8px; padding: 2px; border-radius: 11px; background: var(--fill); font-size: 14px; }
+.seg a { flex: 1; padding: 7px 4px; border-radius: 9px; color: var(--fg); text-align: center; }
+.seg a.on { background: var(--seg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.sheet button { width: 100%; }
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: flex;
+        padding: 6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left));
+        background: var(--bar); border-top: 1px solid var(--line);
+        -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+.tabs a { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px;
+          color: var(--muted); font-size: 10.5px; font-weight: 500; }
+.tabs a.on { color: var(--link); }
+.tabs svg { flex: none; width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7;
+            stroke-linecap: round; stroke-linejoin: round; }
+.tabs span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+main { max-width: 720px; margin: 0 auto; overflow-wrap: break-word;
+       padding: 16px calc(16px + env(safe-area-inset-right)) 24px calc(16px + env(safe-area-inset-left)); }
+h2:first-child { margin-top: 4px; }
+@media (min-width: 700px) {
+  body { padding-bottom: 0; }
+  .tabs { position: static; gap: 6px; max-width: 720px; margin: 16px auto 0; padding: 0 16px; background: none; border: 0;
+          -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .tabs a { flex: none; flex-direction: row; gap: 8px; padding: 8px 14px; border-radius: 999px; font-size: 15px; }
+  .tabs a.on { background: var(--tint); }
+  .tabs svg { width: 20px; height: 20px; }
+}
+
+/* поверхности: карточка, карточка приложения, список строк */
+.card { margin-bottom: 14px; padding: 16px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow); }
+.app { display: flex; gap: 14px; align-items: flex-start; padding: 14px; }
+.app img, .noicon { flex: none; width: 64px; height: 64px; border-radius: 15px; background: var(--fill);
+                    box-shadow: 0 0 0 1px var(--line), 0 3px 10px rgba(0,0,0,.16); }
+.noicon { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 26px; font-weight: 700; }
+.body { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.body b, .title { font-weight: 600; letter-spacing: -.01em; }
+.install { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 12px 0 0; }
+.more > summary { width: 32px; height: 32px; border-radius: 50%; background: var(--fill); color: var(--muted);
+                  font-weight: 700; line-height: 32px; text-align: center; }
+.list { padding: 0; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .body { flex: 1 1 150px; }
 .row.inactive { opacity: .45; }
-.tag { font-size: 12px; padding: 1px 6px; border-radius: 6px; background: var(--line); color: var(--muted); }
-.theme { font-size: 14px; color: var(--muted); }
+.act { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; }
+.card > .bar { margin: 12px 0 0; }
+
+/* текст */
+.meta { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.45; }
+main > .hint { margin-left: 4px; margin-right: 4px; }
+.sub { margin: 18px 4px 8px; font-size: 15px; font-weight: 600; }
+.err { color: var(--err); }
+.done { color: var(--ok); white-space: nowrap; }
+.empty { padding: 48px 16px; color: var(--muted); text-align: center; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--fill); color: var(--muted);
+       font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; vertical-align: 2px; }
+.tag.new { background: var(--tint); color: var(--link); }
+.stats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.banner { margin-bottom: 14px; padding: 12px 14px; border-radius: 14px; background: var(--banner); color: var(--warn);
+          font-size: 15px; overflow-wrap: anywhere; word-break: break-word; }
+.banner a { color: inherit; font-weight: 600; }
+code { display: block; margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--fill); color: var(--fg);
+       font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all;
+       -webkit-user-select: all; user-select: all; }
+.busy::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -1px;
+                border: 2px solid var(--fill); border-top-color: var(--link); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pop { from { opacity: 0; transform: scale(.95) translateY(-4px); } }
+@media (prefers-reduced-motion: no-preference) {
+  .pop[open] > .sheet { transform-origin: top right; animation: pop .16s ease-out; }
+}
+
+/* кнопки: основная, .secondary, .tint, .danger; .sm — капсула в строке списка */
+button, .btn { -webkit-appearance: none; appearance: none; display: inline-flex; align-items: center; justify-content: center;
+               min-height: 44px; max-width: 100%; margin: 0; padding: 9px 18px; border: 0; border-radius: 13px;
+               background: var(--accent) linear-gradient(rgba(255,255,255,.14), rgba(255,255,255,0)); color: #fff;
+               font: inherit; font-size: 16px; font-weight: 600; line-height: 1.25; text-align: center; text-decoration: none; cursor: pointer;
+               box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 1px 2px rgba(0,0,0,.16); touch-action: manipulation;
+               transition: transform .12s, filter .12s; -webkit-user-select: none; user-select: none; }
+button:active, .btn:active { transform: scale(.97); filter: brightness(.9); }
+@media (hover: hover) { button:hover, .btn:hover { filter: brightness(1.08); } }
+.secondary, .tint, .danger { background-image: none; box-shadow: none; }
+.secondary { background-color: var(--fill); color: var(--fg); }
+.tint { background-color: var(--tint); color: var(--link); }
+.danger { background-color: var(--errtint); color: var(--err); }
+.sm { min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 15px; white-space: nowrap; }
+.pill { padding-left: 22px; padding-right: 22px; border-radius: 999px; }
+
+/* поля */
+input { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-height: 46px; padding: 10px 14px;
+        border: 1px solid transparent; border-radius: 13px; background: var(--fill); color: var(--fg); font: inherit; }
+input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 4px var(--tint); }
+input::placeholder { color: var(--muted); opacity: 1; }
+input[type=search] { padding-left: 40px; background-repeat: no-repeat; background-position: 13px 50%; background-size: 18px;
+                     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M15.5 15.5 21 21'/%3E%3C/svg%3E"); }
+input[type=checkbox] { -webkit-appearance: checkbox; appearance: auto; flex: none; width: 22px; height: 22px; min-height: 0;
+                       padding: 0; accent-color: var(--accent); }
+label { display: block; margin-bottom: 14px; color: var(--muted); font-size: 14px; font-weight: 600; }
+label input { margin-top: 6px; font-weight: 400; }
+.check { display: flex; align-items: flex-start; gap: 10px; margin: 0; color: var(--fg); font-size: 16px; font-weight: 400; }
+.check input { margin: 0; }
+.code { font-size: 26px; font-weight: 600; letter-spacing: .28em; text-align: center; font-variant-numeric: tabular-nums; }
+.search { margin-bottom: 12px; }
+.field { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.field input { flex: 100 1 150px; width: auto; min-width: 0; }
+.field button { flex: 1 0 auto; }
+.sortbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 14px; }
+.sortbar a { padding: 6px 12px; border-radius: 999px; background: var(--fill); color: var(--fg); white-space: nowrap; text-decoration: none; }
+.sortbar a.on { background: var(--tint); color: var(--link); font-weight: 600; }
+
+/* вход */
+.auth { max-width: 400px; margin: 0 auto; }
+.brand { display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 6vh 0 22px; }
+.brand img { width: 76px; height: 76px; border-radius: 18px; box-shadow: 0 8px 24px rgba(10,132,255,.35); }
+.auth form button { width: 100%; min-height: 50px; }
+.auth form + form { margin-top: 10px; }
+.auth .card + .hint, .auth .hint + .hint { margin: 0 4px 12px; }
 </style>
 </head>
 <body>
+{% macro tab(href, key, label, icon) -%}
+  <a href="{{ href }}" class="{{ 'on' if nav == key }}"><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
+{%- endmacro %}
 {% if nav != 'login' %}
 <header>
-  <a href="/" class="{{ 'on' if nav == 'catalog' }}">Каталог</a>
-  <a href="/history" class="{{ 'on' if nav == 'history' }}">История</a>
-  <a href="/blocked" class="{{ 'on' if nav == 'blocked' }}">Удалённые</a>
-  <a href="/apple" class="{{ 'on' if nav == 'apple' }}">Apple ID</a>
-  {% if users and users | selectattr('role', 'equalto', 'owner') | first %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Участники</a>{% endif %}
-  <span class="session">
-    {%- if accounts and accounts | length > 1 %}
-      {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
-    {%- elif acct %}{{ acct.email }}{% endif %}
-    {%- if acct %} —
-      {% if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
-      {%- elif acct.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк</a>
-      {%- else %}нет входа{% endif %}
-    {%- endif -%}
-  </span>
-  <form method="post" action="/logout" style="display:inline"><button class="secondary">Выйти</button></form>
-  <span class="theme">Тема:
-    <a href="/theme?set=auto&amp;back={{ here | urlencode }}"{% if not theme %} class="on"{% endif %}>авто</a>
-    <a href="/theme?set=light&amp;back={{ here | urlencode }}"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
-    <a href="/theme?set=dark&amp;back={{ here | urlencode }}"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a></span>
+  <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Apple ID', 'admin': 'Участники'}[nav] }}</h1>
+  <details class="pop acct">
+    <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else 'Меню' }}</span></span></summary>
+    <div class="sheet">
+      {%- if accounts %}
+      <div class="shelves">
+        {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
+      </div>
+      {%- endif %}
+      {%- if acct %}
+      <div class="meta">
+        {%- if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
+        {%- elif acct.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк</a>
+        {%- else %}нет входа{% endif -%}
+      </div>
+      {%- endif %}
+      <div class="seg">
+        <a href="/theme?set=auto&amp;back={{ here | urlencode }}"{% if not theme %} class="on"{% endif %}>авто</a>
+        <a href="/theme?set=light&amp;back={{ here | urlencode }}"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
+        <a href="/theme?set=dark&amp;back={{ here | urlencode }}"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a>
+      </div>
+      <form method="post" action="/logout"><button class="secondary">Выйти</button></form>
+    </div>
+  </details>
 </header>
+<nav class="tabs">
+  {{ tab('/', 'catalog', 'Каталог', '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>') }}
+  {{ tab('/history', 'history', 'История', '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l2.9 1.8"/>') }}
+  {{ tab('/blocked', 'blocked', 'Удалённые', '<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>') }}
+  {{ tab('/apple', 'apple', 'Apple ID', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
+  {% if users and users | selectattr('role', 'equalto', 'owner') | first %}{{ tab('/admin', 'admin', 'Участники', '<circle cx="9" cy="9" r="3.1"/><path d="M3 19c.7-3 3-4.7 6-4.7s5.3 1.7 6 4.7"/><circle cx="17.2" cy="9.6" r="2.4"/><path d="M17 14.4c2.2.2 3.6 1.5 4.2 3.8"/>') }}{% endif %}
+</nav>
 {% endif %}
 <main>
 {%- if acct and acct.session == 'expired' and nav in ('catalog', 'history', 'blocked') %}
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
+{% if nav != 'login' %}
+<script>
+addEventListener('pointerdown', function (e) {   // меню закрывается касанием мимо него
+  Array.prototype.forEach.call(document.querySelectorAll('details.pop[open]'), function (d) {
+    if (!d.contains(e.target)) d.open = false;
+  });
+});
+</script>
+{% endif %}
 {% if busy %}
 <script>
 (function () {

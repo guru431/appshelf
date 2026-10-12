@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 {% block main %}
-<p><b>{{ 'Apple ID на этом устройстве' if groups | length > 1 else 'Мои Apple ID' }}</b></p>
+<h2>{{ 'Apple ID на этом устройстве' if groups | length > 1 else 'Мои Apple ID' }}</h2>
 {% for g in groups %}
-{% if groups | length > 1 %}<p>{{ g.user.name }} <span class="tag">{{ 'владелец' if g.user.role == 'owner' else 'участник' }}</span></p>{% endif %}
-<table>
+{% if groups | length > 1 %}<p class="sub">{{ g.user.name }} <span class="tag">{{ 'владелец' if g.user.role == 'owner' else 'участник' }}</span></p>{% endif %}
+<div class="card list">
 {% for r in g.rows %}
-<tr>
-  <td>{{ r.a.email }}<div class="meta">{{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
+<div class="row">
+  <div class="body"><div class="title">{{ r.a.email }}</div><div class="meta">{{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
     {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}<span class="err">вход истёк</span>{% else %}нет входа{% endif %}
-    {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ (r.size / 1073741824) | round(1) }} ГБ</div></td>
-  <td style="text-align:right"><a href="/login?{{ r.relogin }}">Войти заново</a><br><a href="/apple/{{ r.a.id }}/delete">Удалить полку</a></td>
-</tr>
+    {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ (r.size / 1073741824) | round(1) }} ГБ</div></div>
+  <div class="act"><a class="btn sm tint" href="/login?{{ r.relogin }}">Войти заново</a><a class="btn sm danger" href="/apple/{{ r.a.id }}/delete">Удалить полку</a></div>
+</div>
 {% endfor %}
-</table>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 20px">
+</div>
+<div class="bar">
   {% if groups | length > 1 %}<form method="post" action="/logout/{{ g.user.id }}"><button class="secondary">Убрать с этого устройства</button></form>{% endif %}
   <form method="post" action="/logout-all/{{ g.user.id }}"><button class="secondary">Выйти на всех устройствах</button></form>
 </div>

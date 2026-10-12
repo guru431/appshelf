@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block main %}
+<div class="card">
 <p>{{ question }}</p>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
-{% if refused %}<p><a href="{{ cancel }}">Назад</a></p>
+{% if refused %}<div class="bar"><a class="btn secondary" href="{{ cancel }}">Назад</a></div>
 {% else %}<form method="post" action="{{ action }}">
-  {% if option %}<p><label><input type="checkbox" name="{{ option.name }}" value="1" style="width:auto;margin:0 8px 0 0"
+  {% if option %}<p><label class="check"><input type="checkbox" name="{{ option.name }}" value="1"
     {%- if option.checked %} checked{% endif %}>{{ option.text }}</label></p>{% endif %}
-  <div style="display:flex;gap:12px;align-items:center"><button>{{ button }}</button><a href="{{ cancel }}">Отмена</a></div></form>{% endif %}
+  <div class="bar"><button class="danger">{{ button }}</button><a class="btn secondary" href="{{ cancel }}">Отмена</a></div></form>{% endif %}
+</div>
 {% endblock %}

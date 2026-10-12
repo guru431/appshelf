@@ -16,8 +16,8 @@ MANIFEST = {
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
-    "background_color": "#111111",
-    "theme_color": "#111111",
+    "background_color": "#000000",
+    "theme_color": "#000000",
     "icons": [{"src": f"/pwa/icon-{s}.png", "sizes": f"{s}x{s}", "type": "image/png", "purpose": "any maskable"}
               for s in (192, 512)],
 }

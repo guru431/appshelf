@@ -130,9 +130,10 @@ the same Apple ID).
 
 One browser can be signed in as several people at once: every further sign-in — the sign-in form, "Add Apple ID"
 with another person's Apple ID, an invite, a fallback link — adds that person to those already signed in, and the
-header switches between everyone's shelves. This is how a shared Apple ID is used: it stays a separate person, and
-signing in with it alone opens only its shelf. "Remove from this device" (the "Apple ID" page) removes one person
-from the browser, "Sign out" removes all; "Sign out on all devices" revokes one person everywhere.
+Apple ID menu in the header switches between everyone's shelves. This is how a shared Apple ID is used: it stays a
+separate person, and signing in with it alone opens only its shelf. "Remove from this device" (the "Apple ID" page)
+removes one person from the browser, "Sign out" (the same menu) removes all; "Sign out on all devices" revokes one
+person everywhere.
 
 When a store token expires there is a banner on the shelf and "Sign in again"; the owner gets an email about
 their Apple ID. If Apple breaks sign-in, use a fallback link (one-time, 24 h; it opens a page with a "Sign in"

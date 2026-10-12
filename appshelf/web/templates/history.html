@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<form method="post" action="/history/refresh" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+<form method="post" action="/history/refresh" class="bar">
   <button>Обновить историю</button>
   <span class="meta">{% if refreshing and acct.session != 'ok' %}ждёт входа в Apple ID
     {%- elif refreshing == 'refresh_history' %}обновляется…
@@ -11,25 +11,25 @@
 <p class="hint">Удалённых из App Store приложений Apple в истории не показывает — те, что есть у вашего Apple ID,
 добавляются сюда из справочника (метка «удалено из App Store»). Весь справочник и добавление по ссылке —
 на странице <a href="/blocked">«Удалённые»</a>.</p>
-<form method="get" action="/history">
-  <input name="q" value="{{ q }}" placeholder="Поиск по названию, bundle id, vk/max/sber…">
+<form method="get" action="/history" class="search">
+  <input type="search" name="q" value="{{ q }}" placeholder="Поиск по названию, bundle id, vk/max/sber…">
   <input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}">
 </form>
 <div class="sortbar"><span class="meta">Сортировка:</span>
   {% for label, url, arrow in sort_links %}<a href="{{ url }}"{% if arrow %} class="on"{% endif %}>{{ label }}{{ arrow }}</a>{% endfor %}
 </div>
-<table>
+<div class="card list">
 {% for r in rows %}
-<tr>
-  <td><b>{{ r['name'] }}</b><div class="meta">
+<div class="row">
+  <div class="body"><b>{{ r['name'] }}</b><div class="meta">
     {%- if r['version'] %}{{ r['version'] }} · {% endif -%}
     {%- if r['bundle_id'] %}{{ r['bundle_id'] }}{% if r['purchase_date'] %} · {{ r['purchase_date'][:10] }}{% endif %}
-    {%- else %}<span class="tag">удалено из App Store</span> ID {{ r['app_id'] }}{% endif %}</div></td>
-  <td style="text-align:right">{% if r['published'] %}<span class="meta">в каталоге</span>{% else %}
-    <form method="post" action="/apps/{{ r['app_id'] }}/publish"><button>Опубликовать</button></form>{% endif %}</td>
-</tr>
+    {%- else %}<span class="tag">удалено из App Store</span> ID {{ r['app_id'] }}{% endif %}</div></div>
+  <div class="act">{% if r['published'] %}<span class="meta done">в каталоге</span>{% else %}
+    <form method="post" action="/apps/{{ r['app_id'] }}/publish"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>
+</div>
 {% else %}
-<tr><td class="hint">{% if q %}Ничего не найдено{% elif refreshing %}Загружаю историю…{% else %}История пуста — нажмите «Обновить историю» (нужен вход в Apple ID).{% endif %}</td></tr>
+<div class="row hint">{% if q %}Ничего не найдено{% elif refreshing %}Загружаю историю…{% else %}История пуста — нажмите «Обновить историю» (нужен вход в Apple ID).{% endif %}</div>
 {% endfor %}
-</table>
+</div>
 {% endblock %}
