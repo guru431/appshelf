@@ -406,7 +406,9 @@ class Worker:
                 else:
                     fetch_version(env, c, acct, app_id, env.cfg.tmp_dir / "web")
             store.finish_job(c, job["id"], "done", env.now())
-        except SessionExpired:
+        except SessionExpired as e:
+            print(f"appshelf: Apple ID #{acct.id}: вход истёк в задании {job['kind']} {app_id or ''} — {e.message}",
+                  file=sys.stderr)
             store.requeue_job(c, job["id"])
             if app_id is not None:
                 store.set_app_status(c, acct.id, app_id, "queued")

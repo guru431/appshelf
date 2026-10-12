@@ -7,6 +7,7 @@ Apple не отдаёт их в истории покупок DAAP, хотя п�
 from __future__ import annotations
 
 import json
+import sys
 from importlib import resources
 
 from . import store
@@ -52,8 +53,17 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
             raise Interrupted
         try:
             latest = tool.latest_version_id(app["id"])
-        except SessionExpired:
-            raise
+        except SessionExpired as e:
+            # list-versions считает «вход истёк» и 2042 AuthTokenResumeFreeBuy на одно приложение — вход проверяем
+            # списком покупок. Истёк — этот id запоминаем: после нового входа проверка не начнёт с него снова
+            alive = _session_alive(tool)
+            print(f"appshelf: Apple ID #{acct.id}: list-versions {app['id']} — {e.message}; "
+                  f"список покупок {'отдаётся' if alive else 'тоже нет'}", file=sys.stderr)
+            store.mark_no_license(c, acct.id, app["id"], env.now())
+            if not alive:
+                raise
+            missing += 1
+            continue
         except LicenseNotFound:
             store.mark_no_license(c, acct.id, app["id"], env.now())
             missing += 1
@@ -66,6 +76,14 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
         _fill_version(env, c, acct, app["id"], latest)
         added += 1
     return added, missing, errors
+
+
+def _session_alive(tool) -> bool:
+    try:
+        tool.list_purchases()
+    except IpatoolError:  # и сбой связи: не знаем — считаем, что вход истёк, как и раньше
+        return False
+    return True
 
 
 def _fill_version(env, c, acct, app_id: int, latest: str = "") -> None:

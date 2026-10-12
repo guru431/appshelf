@@ -29,10 +29,23 @@ def test_check_adds_only_owned_apps_to_history(ctx, conn, clock):
 
 
 def test_check_stops_on_expired_session(ctx, conn, clock):
+    # вход истёк — и список покупок не отдаётся; это id после нового входа первым не спрашиваем: вдруг его и убил
     acct = owner(conn, clock)
     ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "")
+    ctx.tool.errors["list_purchases"] = SessionExpired("session_expired", "")
     with pytest.raises(SessionExpired):
         removed.check(ctx.env, conn, acct, CATALOG)
+    assert store.no_license_ids(conn, 1) == {1}
+
+
+def test_check_goes_on_when_only_one_app_refused(ctx, conn, clock):
+    # Apple ответил «войдите» (2042 AuthTokenResumeFreeBuy) на одно приложение, а вход жив — не «вход истёк»
+    acct = owner(conn, clock)
+    ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "")
+    ctx.tool.latest[2] = "900"
+    ctx.tool.no_license.add(3)
+    assert removed.check(ctx.env, conn, acct, CATALOG) == (1, 2, 0)
+    assert store.no_license_ids(conn, 1) == {1, 3} and ("list_purchases",) in ctx.tool.calls
 
 
 def test_worker_runs_check_job(ctx, cfg, conn, clock, monkeypatch):
