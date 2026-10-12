@@ -2,6 +2,8 @@
 «выйти везде», удаление. Новая ссылка показывается один раз: в базе только хэш."""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
@@ -10,6 +12,8 @@ from .accounts import ACCOUNT_BUSY, ARCHIVE_DOWN
 from .common import WebCtx, back
 
 SELF = "Себя удалить нельзя"
+CREATED = "appshelf_created"  # новая ссылка до показа на /admin: ответ на POST — переход, «обновить» её не повторит
+CREATED_AGE = 300
 
 
 def owner_only(request: Request) -> None:
@@ -51,15 +55,25 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         with w.conn() as c:
             return people.get_user(c, uid) is not None
 
+    def created(prefix: str, token: str):
+        resp = back("/admin")
+        w.set_cookie(resp, CREATED, f"{prefix}:{token}", CREATED_AGE)
+        return resp
+
     @router.get("", response_class=HTMLResponse)
     def admin(request: Request):
-        return admin_page(request)
+        prefix, _, token = request.cookies.get(CREATED, "").partition(":")
+        ok = prefix in ("join", "l") and re.fullmatch(r"[\w-]+", token)
+        resp = admin_page(request, f"{w.cfg.public_base}/{prefix}/{token}" if ok else "")
+        if CREATED in request.cookies:
+            resp.delete_cookie(CREATED, path="/")
+        return resp
 
-    @router.post("/invites", response_class=HTMLResponse)
-    def create_invite(request: Request, label: str = Form("")):
+    @router.post("/invites")
+    def create_invite(label: str = Form("")):
         with w.conn() as c:
             token = people.create_link(c, people.INVITE, label.strip() or "приглашение", None, w.now())
-        return admin_page(request, f"{w.cfg.public_base}/join/{token}")
+        return created("join", token)
 
     @router.post("/invites/{lid}/disable")
     def disable_invite(lid: int):
@@ -67,13 +81,13 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             people.disable_invite(c, lid, w.now())
         return back("/admin")
 
-    @router.post("/users/{uid}/login-link", response_class=HTMLResponse)
-    def login_link(request: Request, uid: int):
+    @router.post("/users/{uid}/login-link")
+    def login_link(uid: int):
         if not exists(uid):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             token = people.create_link(c, people.LOGIN, "", uid, w.now())
-        return admin_page(request, f"{w.cfg.public_base}/l/{token}")
+        return created("l", token)
 
     @router.post("/users/{uid}/logout-all")
     def logout_all(uid: int):

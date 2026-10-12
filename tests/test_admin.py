@@ -37,6 +37,20 @@ def test_invite_link_shown_once_and_stored_as_hash(web, conn):
     assert link not in page and "коллеги" in page and "пришло: 0" in page
 
 
+def test_reload_after_creating_link_creates_nothing(web, conn, clock):
+    # ответ на POST — переход на /admin: «обновить» повторяет GET, а не создаёт ещё одну ссылку
+    r = web.client.post("/admin/invites", data={"label": "Кирилл"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/admin"
+    first = web.client.get("/admin").text
+    assert len(re.findall(rf"{re.escape(BASE)}/join/[\w-]+", first)) == 1
+    assert not re.findall(rf"{re.escape(BASE)}/join/", web.client.get("/admin").text)
+    assert len(people.list_invites(conn)) == 1
+    p = petr(conn, clock)
+    r = web.client.post(f"/admin/users/{p.user_id}/login-link", follow_redirects=False)
+    assert r.status_code == 303 and re.findall(rf"{re.escape(BASE)}/l/[\w-]+", web.client.get("/admin").text)
+    assert conn.execute("SELECT COUNT(*) FROM links WHERE kind='login'").fetchone()[0] == 1
+
+
 def test_disabled_invite_stops_working(web, conn, clock):
     token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
     web.client.post(f"/admin/invites/{people.list_invites(conn)[0]['id']}/disable")
