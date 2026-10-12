@@ -7,7 +7,7 @@ from functools import lru_cache
 
 from PIL import Image, ImageDraw
 
-SIZES = (180, 192, 512)  # 180 — apple-touch-icon iPhone, 192 и 512 — манифест
+SIZES = (32, 180, 192, 512)  # 32 — значок вкладки браузера, 180 — apple-touch-icon iPhone, 192 и 512 — манифест
 BG, FG = (10, 132, 255), (255, 255, 255)
 MANIFEST = {
     "name": "appshelf",

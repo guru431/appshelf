@@ -38,6 +38,15 @@ def test_pages_link_pwa_manifest(web):
     assert '<meta name="apple-mobile-web-app-capable" content="yes">' in r.text
 
 
+def test_browser_tab_icon_is_app_icon(web):
+    # без rel="icon" браузер просит /favicon.ico — его нет (404), а до входа — переход на /login: вкладка без значка
+    anon = TestClient(web.app)
+    for page in (anon.get("/login"), web.client.get("/")):
+        assert '<link rel="icon" type="image/png" sizes="32x32" href="/pwa/icon-32.png">' in page.text
+    r = anon.get("/pwa/icon-32.png")
+    assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size == (32, 32)
+
+
 def test_catalog_banner_when_archive_unavailable(web, cfg):
     cfg.archive.rmdir()  # шара не смонтирована
     r = web.client.get("/")
