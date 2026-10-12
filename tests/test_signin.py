@@ -406,6 +406,17 @@ def test_wrong_code_while_adding_keeps_add_form(web, conn):
     assert 'action="/apple/add"' in r.text
 
 
+def test_add_form_renders_when_browser_session_is_gone(web, conn):  # 2026-10-12, Review Focus 4
+    # вход человека погашен между шагами «Добавить»: форма рисуется с шапкой, но без вошедших
+    t = FakeTool()
+    t.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    web.queue.append(t)
+    web.client.post("/apple/add", data={"email": "second@example", "password": "pw"})
+    people.bump_epoch(conn, 1)                                        # «выйти везде» с другого устройства
+    r = web.client.post("/login/code", data={"code": "12"})
+    assert r.status_code == 400 and "Код — 6 цифр" in r.text and 'href="/admin"' not in r.text
+
+
 def test_code_step_can_be_abandoned(make_web, cfg, conn, acct, clock):
     wb = make_web(cfg, conn)
     wb.client.get(f"/join/{people.create_link(conn, people.INVITE, 'все', None, clock.iso())}")

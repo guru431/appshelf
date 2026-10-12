@@ -17,7 +17,8 @@ CREATED_AGE = 300
 
 
 def owner_only(request: Request) -> None:
-    if request.state.user.role != people.OWNER:
+    """Владелец — среди вошедших в этом браузере; активной может быть и чужая полка (spec 2026-10-12 §6)."""
+    if not any(u.role == people.OWNER for u in request.state.users):
         raise HTTPException(403, "только владельцу")
 
 
@@ -54,6 +55,10 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     def exists(uid: int) -> bool:
         with w.conn() as c:
             return people.get_user(c, uid) is not None
+
+    def is_me(request: Request, uid: int) -> bool:
+        """Себя — значит владельца: сюда пускают только его, а человек активной полки может быть и другим."""
+        return any(u.id == uid and u.role == people.OWNER for u in request.state.users)
 
     def created(prefix: str, token: str):
         resp = back("/admin")
@@ -105,14 +110,14 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     def delete_form(request: Request, uid: int):
         if not exists(uid):
             return PlainTextResponse("not found", status_code=404)
-        me = uid == request.state.user.id
+        me = is_me(request, uid)
         return confirm(request, uid, SELF if me else "", refused=me)
 
     @router.post("/users/{uid}/delete", response_class=HTMLResponse)
     def delete(request: Request, uid: int, disable_invite: str = Form("")):
         if not exists(uid):
             return PlainTextResponse("not found", status_code=404)
-        if uid == request.state.user.id:
+        if is_me(request, uid):
             return confirm(request, uid, SELF, 400, refused=True)
         try:
             with w.conn() as c:

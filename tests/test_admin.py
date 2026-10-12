@@ -142,3 +142,21 @@ def test_people_list_shows_apple_ids_and_space(web, conn, cfg, clock):
     seed_app(conn, cfg, clock, versions=("1.0",))
     page = web.client.get("/admin").text
     assert "owner@example" in page and "владелец" in page and "0.3 ГБ" in page
+
+
+def test_admin_follows_the_owner_not_the_active_shelf(web, conn, cfg, clock):
+    # spec 2026-10-12 §6: владелец среди вошедших — «Участники» открыты и при активной чужой полке
+    p = petr(conn, clock)
+    sign_in(web.client, cfg, conn, clock, p.user_id)
+    web.client.get(f"/acct/{p.id}")
+    page = web.client.get("/").text
+    assert '<span class="on">petr@example</span>' in page and 'href="/admin"' in page
+    admin = web.client.get("/admin")
+    assert admin.status_code == 200
+    assert f"/admin/users/{p.user_id}/delete" in admin.text and "/admin/users/1/delete" not in admin.text
+    assert "Себя удалить нельзя" in web.client.get("/admin/users/1/delete").text
+    assert web.client.post("/admin/users/1/delete").status_code == 400 and people.get_user(conn, 1)
+    r = web.client.post(f"/admin/users/{p.user_id}/delete", follow_redirects=False)   # вошедшего рядом — можно
+    assert r.status_code == 303 and people.get_user(conn, p.user_id) is None
+    r = web.client.get("/", follow_redirects=False)                   # запись Петра погасла, владелец на месте
+    assert r.status_code == 200 and "petr@example" not in r.text

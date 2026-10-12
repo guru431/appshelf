@@ -62,7 +62,7 @@ td { padding: 8px 4px; border-bottom: 1px solid var(--line); vertical-align: top
   <a href="/history" class="{{ 'on' if nav == 'history' }}">История</a>
   <a href="/blocked" class="{{ 'on' if nav == 'blocked' }}">Удалённые</a>
   <a href="/apple" class="{{ 'on' if nav == 'apple' }}">Apple ID</a>
-  {% if user and user.role == 'owner' %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Участники</a>{% endif %}
+  {% if users and users | selectattr('role', 'equalto', 'owner') | first %}<a href="/admin" class="{{ 'on' if nav == 'admin' }}">Участники</a>{% endif %}
   <span class="session">
     {%- if accounts and accounts | length > 1 %}
       {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}

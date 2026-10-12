@@ -27,7 +27,7 @@
   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
     <form method="post" action="/admin/users/{{ p.user.id }}/login-link"><button class="secondary">Ссылка входа</button></form>
     <form method="post" action="/admin/users/{{ p.user.id }}/logout-all"><button class="secondary">Выйти везде</button></form>
-    {% if p.user.id != user.id %}<a class="btn" href="/admin/users/{{ p.user.id }}/delete">Удалить</a>{% endif %}
+    {% if p.user.role != 'owner' %}<a class="btn" href="/admin/users/{{ p.user.id }}/delete">Удалить</a>{% endif %}
   </div>
 </div></div>
 {% endfor %}
