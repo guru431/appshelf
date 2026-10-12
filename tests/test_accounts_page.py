@@ -86,3 +86,30 @@ def test_delete_refused_while_downloading(web, conn, cfg, clock):
 def test_foreign_apple_id_cannot_be_deleted(web, conn, clock):
     petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
     assert web.client.post(f"/apple/{petr.id}/delete").status_code == 404 and people.get_account(conn, petr.id)
+
+
+def test_apple_ids_grouped_by_person(web, conn, cfg, clock):
+    page = web.client.get("/apple").text                   # один человек — как раньше: без групп и без «Убрать»
+    assert "Мои Apple ID" in page and 'action="/logout-all/1"' in page and "Удалить полку" in page
+    assert "Убрать с этого устройства" not in page and '<span class="tag">' not in page
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    sign_in(web.client, cfg, conn, clock, shared.user_id)
+    main = web.client.get("/apple").text.split("<main>")[1]            # в шапке адреса тоже есть
+    assert "Apple ID на этом устройстве" in main
+    assert main.index("Иван Петров") < main.index("owner@example") < main.index("Общий") < main.index("shared@example")
+    assert '<span class="tag">владелец</span>' in main and '<span class="tag">участник</span>' in main
+    for uid in (1, shared.user_id):
+        assert f'action="/logout/{uid}"' in main and f'action="/logout-all/{uid}"' in main
+
+
+def test_owner_last_apple_id_is_judged_by_the_shelf_person(web, conn, cfg, clock):  # 2026-10-12, Review Focus 2
+    # полок в браузере две, но у владельца Apple ID один: его удалить нельзя, полку Общего — можно
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    sign_in(web.client, cfg, conn, clock, shared.user_id)
+    assert "Последний Apple ID владельца удалить нельзя" in web.client.get("/apple/1/delete").text
+    assert web.client.post("/apple/1/delete").status_code == 400 and people.get_account(conn, 1)
+    r = web.client.post(f"/apple/{shared.id}/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/apple"  # в браузере остался владелец
+    assert people.get_user(conn, shared.user_id) is None
+    page = web.client.get("/apple").text
+    assert "owner@example" in page and "shared@example" not in page
