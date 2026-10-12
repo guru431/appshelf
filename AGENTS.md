@@ -7,6 +7,7 @@
 ## Точки входа
 - Дизайн `docs/superpowers/specs/2026-10-05-appshelf-design.md`
 - Вход и несколько Apple ID: docs/superpowers/specs/2026-10-08-multi-apple-id-design.md
+- Несколько участников в одном браузере: docs/superpowers/specs/2026-10-12-multi-signin-design.md
 - Пакет `appshelf/` (FastAPI `web/app.py:main`, ночная проверка `python -m appshelf nightly`)
 - Форк ipatool-cpp: `ipatool/UPSTREAM`, `ipatool/patches/`, сборка `deploy/build-ipatool.sh`
 - Боевые значения (хост, домен, архив, мониторинг) — `.env` (не в git) и вики проекта

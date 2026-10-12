@@ -3,11 +3,12 @@
 IPA из истории покупок основного Apple ID владельца скачиваются на сервер и ставятся на iPhone из
 Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026-10-05-appshelf-design.md`.
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
+Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
   `people.py` (люди, Apple ID, ссылки), `jobs.py` (задания, обработчик, общий путь скачивания), `nightly.py`,
-  `notify.py`, `webauth.py` (cookie человека), `web/` (вход — `signin.py`), `cli.py`.
+  `notify.py`, `webauth.py` (cookie вошедших людей), `web/` (вход — `signin.py`), `cli.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
   `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker
@@ -37,6 +38,9 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
   каталоги остальных Apple ID — свои случайные токены (`accounts.shelf`); не в git, конфиге Apache, выводе команд.
 - Вход в панель — Apple ID (пароля страниц нет); новый Apple ID — только по приглашению. `APPSHELF_OWNER` и адреса
   участников — только в `/etc/appshelf/appshelf.env` и базе, не в git.
+- Вход добавляет участника к вошедшим в браузере, а не заменяет их (cookie — список записей, по одной на
+  участника). Общий Apple ID — отдельный участник: к чужому участнику его не переносить, иначе вход им откроет и
+  личные полки.
 - Каталог кода на сервере получает групповые права по расписанию — данные и секреты там не держать. Код, `.venv`
   и `bin/` — root (`deploy/install.sh`): appshelf только читает и исполняет, иначе его код стал бы root при выкладке.
 - Патчи форка — LF (`*.patch -text`); правка — в `.work/ipatool-src` и перегенерация (`ipatool/README.md`).
