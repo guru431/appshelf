@@ -204,6 +204,12 @@ def disable_invite(c, link_id: int, now: str) -> None:
     c.execute("UPDATE links SET disabled_at=? WHERE id=? AND kind=? AND disabled_at=''", (now, link_id, INVITE))
 
 
+def delete_invite(c, link_id: int) -> None:
+    """Приглашение пропадает из списка и перестаёт работать; пришедшие им остаются участниками без отметки о нём."""
+    c.execute("UPDATE users SET invite_id=NULL WHERE invite_id=?", (link_id,))
+    c.execute("DELETE FROM links WHERE id=? AND kind=?", (link_id, INVITE))
+
+
 def _login_link(c, token: str, now: str):
     """Запасная ссылка, ещё годная: не использована и не истекла."""
     row = c.execute("SELECT id, user_id, expires_at FROM links WHERE token_hash=? AND kind=? AND used_at=''",

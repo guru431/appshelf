@@ -5,12 +5,13 @@
 <p><b>Приглашения</b></p>
 <form method="post" action="/admin/invites" style="display:flex;gap:8px">
   <input name="label" placeholder="подпись: коллеги, Петя…" style="margin:0"><button>Создать ссылку</button></form>
-<p class="hint">По ссылке входят новым Apple ID один раз; ссылка работает, пока вы её не отключите — одна на всех или своя на каждого.</p>
+<p class="hint">По ссылке входят новым Apple ID один раз; ссылка работает, пока вы её не отключите или не удалите — одна на всех или своя на каждого. Отключённая остаётся в списке, удалённая пропадает.</p>
 <table>
 {% for i in invites %}
 <tr class="row{{ ' inactive' if i['disabled_at'] }}">
   <td>{{ i['label'] }}<div class="meta">{{ i['created_at'][:10] }} · пришло: {{ i['joined'] }}{% if i['disabled_at'] %} · отключена{% endif %}</div></td>
-  <td style="text-align:right">{% if not i['disabled_at'] %}<form method="post" action="/admin/invites/{{ i['id'] }}/disable"><button class="secondary">Отключить</button></form>{% endif %}</td>
+  <td style="text-align:right;white-space:nowrap">{% if not i['disabled_at'] %}<form method="post" action="/admin/invites/{{ i['id'] }}/disable" style="display:inline"><button class="secondary">Отключить</button></form>{% endif %}
+    <form method="post" action="/admin/invites/{{ i['id'] }}/delete" style="display:inline"><button class="secondary">Удалить</button></form></td>
 </tr>
 {% else %}
 <tr><td class="hint">Приглашений нет.</td></tr>

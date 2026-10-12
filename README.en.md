@@ -122,7 +122,8 @@ gets it via stdin, appshelf-web keeps it in memory for at most 10 minutes. The s
 "Sign out on all devices" (the "Apple ID" page) revokes all of the person's cookies.
 
 A new Apple ID gets onto the server only through an invite link: "Участники" (People) → "Create link". The link
-works until it is disabled — one for everyone or one per person; it is asked for once, on the first sign-in.
+works until it is disabled or deleted — one for everyone or one per person; it is asked for once, on the first
+sign-in. A disabled link stays in the list, a deleted one disappears from it.
 A person adds a second Apple ID of their own: "Apple ID" → "Add Apple ID". Each Apple ID has its own shelf:
 history, catalog, IPAs (an IPA carries the buyer's data and installs on an iPhone signed in to the App Store with
 the same Apple ID).

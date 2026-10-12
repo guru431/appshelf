@@ -81,6 +81,12 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             people.disable_invite(c, lid, w.now())
         return back("/admin")
 
+    @router.post("/invites/{lid}/delete")
+    def delete_invite(lid: int):
+        with w.conn() as c, store.tx(c):
+            people.delete_invite(c, lid)
+        return back("/admin")
+
     @router.post("/users/{uid}/login-link")
     def login_link(uid: int):
         if not exists(uid):

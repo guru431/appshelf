@@ -58,6 +58,20 @@ def test_disabled_invite_stops_working(web, conn, clock):
     assert "отключена" in web.client.get("/admin").text
 
 
+def test_delete_invite_removes_it_from_list(web, conn, cfg, clock):
+    # отключённое приглашение остаётся строкой в списке — удалённое пропадает; пришедшие им остаются участниками
+    token = people.create_link(conn, people.INVITE, "Кирилл-дубль", None, clock.iso())
+    invite_id = people.active_invite(conn, token)["id"]
+    p, member = member_client(web, cfg, conn, clock)
+    conn.execute("UPDATE users SET invite_id=? WHERE id=?", (invite_id, p.user_id))
+    assert member.post(f"/admin/invites/{invite_id}/delete").status_code == 403
+    r = web.client.post(f"/admin/invites/{invite_id}/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/admin"
+    assert "Кирилл-дубль" not in web.client.get("/admin").text and people.list_invites(conn) == []
+    assert TestClient(web.app, base_url=BASE).get(f"/join/{token}").status_code == 400
+    assert people.get_user(conn, p.user_id) is not None and people.invite_of(conn, p.user_id) is None
+
+
 def test_login_link_for_member(web, conn, cfg, clock):
     p = petr(conn, clock)
     r = web.client.post(f"/admin/users/{p.user_id}/login-link")
