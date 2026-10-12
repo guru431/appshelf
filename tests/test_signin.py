@@ -376,13 +376,90 @@ def test_junk_around_a_good_cookie_entry_is_ignored(web):  # 2026-10-12, Review 
     assert r.status_code == 200 and "owner@example" in r.text
 
 
-def test_adding_apple_id_of_another_person_is_refused(web, conn, cfg, clock):
-    # иначе после пароля и кода устройство владельца молча перешло бы к Петру
-    make_account(conn, clock, email="petr@example", role="member", legacy=False)
-    r = web.client.post("/apple/add", data={"email": "Petr@Example", "password": "pw"})
-    assert r.status_code == 403 and "у другого участника" in r.text and 'action="/apple/add"' in r.text
-    assert web.new_tools == [] and set(web.tools) == {1}       # к Apple не ходили
-    assert "owner@example" in web.client.get("/").text
+def test_adding_apple_id_of_another_person_signs_this_browser_in_as_them(web, conn, cfg, clock):
+    # spec 2026-10-12, критерии 1–2: общий Apple ID остаётся отдельным человеком, браузер входит и как он
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    seed_app(conn, cfg, clock, app_id=5, name="Общее", acct=shared)
+    seed_app(conn, cfg, clock, app_id=6, name="Личное")
+    assert "подключится к этому устройству" in web.client.get("/apple/add").text
+    tool = web.tools.setdefault(shared.id, FakeTool(cfg.accounts_dir / str(shared.id)))
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    r = web.client.post("/apple/add", data={"email": "Shared@Example", "password": "pw"})
+    assert r.status_code == 200 and 'action="/login/code"' in r.text and "Каталог" in r.text   # шаг кода — с шапкой
+    r = web.client.post("/login/code", data={"code": "123456", "next": "/apple"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/apple"
+    assert web.new_tools == [] and tool.calls[-1] == ("login", "shared@example", "pw", "123456")  # HOME этого Apple ID
+    assert people.get_account(conn, shared.id).user_id == shared.user_id and len(people.list_users(conn)) == 2
+    assert names_in(web.client.get("/").text) == ["Общее"]            # активна подключённая полка
+    web.client.get("/acct/1")
+    assert names_in(web.client.get("/").text) == ["Личное"]           # своя — на месте, без повторного входа
+    only = TestClient(web.app, base_url=BASE)                         # другой браузер: вход только общим
+    assert only.post("/login", data={"email": "shared@example", "password": "pw"},
+                     follow_redirects=False).status_code == 303
+    page = only.get("/").text
+    assert names_in(page) == ["Общее"] and "owner@example" not in page
+    assert only.post("/apps/6/retry", follow_redirects=False).status_code == 404
+
+
+def test_login_in_signed_in_browser_adds_the_person(web, conn, clock):  # 2026-10-12, Review Focus 5
+    # обычный /login и «Войти заново» не выбрасывают остальных (spec 2026-10-12 §4)
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    r = web.client.post("/login", data={"email": "shared@example", "password": "pw"}, follow_redirects=False)
+    assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
+    page = web.client.get("/").text
+    assert "/acct/1" in page and '<span class="on">shared@example</span>' in page
+    before = web.client.cookies.get("appshelf_auth")
+    clock.advance(3600)
+    web.client.post("/login", data={"email": "owner@example", "password": "pw"})   # владелец входит заново
+    after = web.client.cookies.get("appshelf_auth")
+    assert after.split("|")[1] == before.split("|")[1]                # запись Общего — как была, со своим сроком
+    assert after.split("|")[0] != before.split("|")[0]                # своя — новая, на прежнем месте
+
+
+def test_login_link_adds_person_to_signed_in_browser(web, conn, clock):
+    # критерий 7: запасная ссылка подключает общий Apple ID без пароля и кода, остальные входы на месте
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    token = people.create_link(conn, people.LOGIN, "", shared.user_id, clock.iso())
+    r = web.client.post(f"/l/{token}", follow_redirects=False)
+    assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
+    page = web.client.get("/").text
+    assert "/acct/1" in page and '<span class="on">shared@example</span>' in page
+    assert set(web.tools) == {1}                                      # к Apple не ходили
+
+
+def test_invite_in_signed_in_browser_adds_the_new_person(web, conn, clock):
+    token = people.create_link(conn, people.INVITE, "общий", None, clock.iso())
+    web.client.get(f"/join/{token}")
+    assert "это устройство войдёт и как он" in web.client.get("/login").text
+    r = web.client.post("/login", data={"email": "shared@example", "password": "pw"}, follow_redirects=False)
+    assert r.status_code == 303
+    shared = people.account_by_email(conn, "shared@example")
+    assert shared.user_id != 1 and people.get_user(conn, shared.user_id).role == "member"
+    page = web.client.get("/").text
+    assert "/acct/1" in page and '<span class="on">shared@example</span>' in page   # вошли оба, активен новый
+
+
+def test_new_apple_id_from_add_goes_to_person_of_active_shelf(web, conn, cfg, clock):
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    assert "участника «" not in web.client.get("/apple/add").text     # вошёл один — называть некого
+    sign_in(web.client, cfg, conn, clock, shared.user_id)
+    web.client.get(f"/acct/{shared.id}")
+    assert "участника «Общий»" in web.client.get("/apple/add").text   # вошедших двое — форма говорит, кому
+    web.client.post("/apple/add", data={"email": "new@example", "password": "pw"})
+    assert people.account_by_email(conn, "new@example").user_id == shared.user_id
+
+
+def test_wrong_code_while_adding_known_apple_id_keeps_add_form(web, conn, cfg, clock):
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    tool = web.tools.setdefault(shared.id, FakeTool(cfg.accounts_dir / str(shared.id)))
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    web.client.post("/apple/add", data={"email": "shared@example", "password": "pw"})
+    page = web.client.get("/login").text                              # вернулись посреди шага кода
+    assert 'name="code"' in page and "Каталог" in page
+    tool.errors["login"] = IpatoolError("invalid_credentials", "")
+    r = web.client.post("/login/code", data={"code": "123456", "next": "/apple"})
+    assert r.status_code == 400 and 'action="/apple/add"' in r.text and "Неверный пароль или код" in r.text
+    assert "shared@example" not in web.client.get("/").text           # не вошёл — полки нет
 
 
 def test_invite_warns_signed_in_person(web, conn, clock):

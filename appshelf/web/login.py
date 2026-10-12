@@ -50,8 +50,9 @@ class LoginJoined(Exception):
 @dataclass(frozen=True)
 class Intent:
     """Кого впускаем после успеха: известный Apple ID (account_id) или новый — по приглашению (invite_id), владелец
-    из APPSHELF_OWNER (owner) или второй Apple ID вошедшего человека (user_id). У нового — временный HOME ipatool
-    (home) и свой MAC (device_mac)."""
+    из APPSHELF_OWNER (owner) или второй Apple ID вошедшего человека (user_id). user_id у известного Apple ID —
+    вход из «Добавить»: человек Apple ID не меняется, но шаг кода и ошибки остаются в форме добавления. У нового —
+    временный HOME ipatool (home) и свой MAC (device_mac)."""
     email: str
     account_id: int | None = None
     user_id: int | None = None

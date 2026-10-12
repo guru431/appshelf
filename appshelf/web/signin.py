@@ -1,7 +1,7 @@
-"""Вход в панель Apple ID (spec 2026-10-08 §4). Известный Apple ID — сразу в Apple; новый — только по приглашению
-(cookie после /join/), как APPSHELF_OWNER, пока владельца нет, или вторым Apple ID уже вошедшего человека
-(«Мои Apple ID» → «Добавить»). Пока не решено «пускать», к Apple не обращаемся. Пароль — в памяти LoginFlow
-не дольше 10 минут."""
+"""Вход в панель Apple ID (spec 2026-10-08 §4, 2026-10-12 §4). Известный Apple ID — сразу в Apple; новый — только
+по приглашению (cookie после /join/), как APPSHELF_OWNER, пока владельца нет, или вторым Apple ID уже вошедшего
+человека («Мои Apple ID» → «Добавить»). Пока не решено «пускать», к Apple не обращаемся. Успешный вход добавляет
+человека к вошедшим в этом браузере, а не заменяет их. Пароль — в памяти LoginFlow не дольше 10 минут."""
 from __future__ import annotations
 
 import os
@@ -35,7 +35,6 @@ NOT_CONFIGURED = "Сервер не настроен: не задан APPSHELF_O
 INVITE_GONE = "Ссылка-приглашение недействительна — попросите новую"
 LINK_GONE = "Ссылка недействительна — попросите новую"
 TAKEN = "Этот Apple ID уже зарегистрирован — войдите ещё раз"
-OTHER_PERSON = "Этот Apple ID уже у другого участника — добавить его к себе нельзя"
 IN_PROGRESS = "Вход этим Apple ID уже выполняется — дождитесь кода на устройствах или попробуйте через пару минут"
 EXPIRED_STEP = "Срок шага истёк — введите Apple ID и пароль заново"
 TOO_MANY = "Слишком много неудачных попыток — подождите минуту"
@@ -44,7 +43,7 @@ INVITE_AGE = 86400  # cookie принятого приглашения: сутк
 
 
 class Refused(Exception):
-    """Apple ID не впускаем: приглашение отключили, владелец уже есть, адрес заняли, Apple ID у другого человека."""
+    """Apple ID не впускаем: приглашение отключили, владелец уже есть, адрес заняли."""
 
 
 def login_error_text(e: IpatoolError) -> str:
@@ -64,9 +63,12 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
                   invited=bool(request.cookies.get(INVITE_COOKIE)))
 
 
-def signed_in(w: WebCtx, resp, user, aid: int):
-    """cookie человека на год и выбранная полка."""
-    w.set_cookie(resp, webauth.COOKIE, webauth.make_entry(w.key, user, w.epoch()), webauth.COOKIE_AGE)
+def signed_in(w: WebCtx, request: Request, resp, user, aid: int):
+    """Человек добавлен к вошедшим в этом браузере (spec 2026-10-12 §4): его запись — на год, записи остальных —
+    как были; активная полка — aid."""
+    with w.conn() as c:
+        value = webauth.with_user(w.key, w.signed(c, request), user, w.epoch())
+    w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
     w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
     return resp
 
@@ -79,13 +81,12 @@ def new_intent(w: WebCtx, email: str, **kw) -> Intent:
 
 
 def decide(w: WebCtx, c, request: Request, email: str, user_id: int | None) -> Intent | None:
-    """До обращения к Apple: кого пускаем. None — неизвестный Apple ID без права на регистрацию; Refused —
-    «Добавить» чужим Apple ID (иначе после пароля и кода устройство молча перешло бы к тому человеку)."""
+    """До обращения к Apple: кого пускаем. None — неизвестный Apple ID без права на регистрацию. Apple ID, который
+    на сервере есть, пускаем и из «Добавить», чей бы он ни был: его человек не меняется, а после входа добавится
+    к вошедшим в этом браузере — так подключают общий Apple ID."""
     acct = people.account_by_email(c, email)
     if acct is not None:
-        if user_id is not None and acct.user_id != user_id:
-            raise Refused(OTHER_PERSON)
-        return Intent(email, account_id=acct.id)
+        return Intent(email, account_id=acct.id, user_id=user_id)
     if user_id is not None:
         return new_intent(w, email, user_id=user_id)
     invite = people.active_invite(c, request.cookies.get(INVITE_COOKIE, ""))
@@ -147,7 +148,7 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
             store.enqueue_once(c, aid, "refresh_history", None, now)
             store.enqueue_once(c, aid, "check_removed", None, now)
         user = people.get_user(c, uid)
-    resp = signed_in(w, back(safe_next(next_)), user, aid)
+    resp = signed_in(w, request, back(safe_next(next_)), user, aid)
     resp.delete_cookie(LOGIN_COOKIE, path="/")
     resp.delete_cookie(INVITE_COOKIE, path="/")
     return resp
@@ -172,10 +173,7 @@ def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *
         return again(f"Слишком много неверных паролей — вход этим Apple ID закрыт, попробуйте через "
                      f"{ceil(wait / 60)} мин", 429)
     with w.conn() as c:
-        try:
-            intent = decide(w, c, request, email, user_id)
-        except Refused as e:
-            return again(str(e), 403)
+        intent = decide(w, c, request, email, user_id)
         if intent is None:
             w.limiter.fail()
             configured = bool(w.cfg.owner_email) or people.owner_exists(c)
@@ -300,7 +298,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         if not accounts:
             w.limiter.fail()
             return login_page(w, request, error=LINK_GONE, status_code=400)
-        return signed_in(w, back("/"), user, accounts[0].id)
+        return signed_in(w, request, back("/"), user, accounts[0].id)
 
     def logged_out():
         resp = back("/login")
