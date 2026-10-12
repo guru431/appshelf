@@ -30,9 +30,12 @@ class Clock:
 
 
 def sign_in(client, cfg, conn, clock, uid: int = 1) -> None:
-    """cookie человека uid — как после входа Apple ID (ключ — тот же cookie-key, что у приложения)."""
-    key = webauth.load_key(cfg.cookie_key)
-    client.cookies.set(webauth.COOKIE, webauth.make_cookie(key, people.get_user(conn, uid), int(clock.t)), domain=HOST)
+    """Человек uid вошёл в этом браузере — как после входа Apple ID: его запись добавляется к уже вошедшим
+    (ключ — тот же cookie-key, что у приложения)."""
+    key, now = webauth.load_key(cfg.cookie_key), int(clock.t)
+    signed = webauth.signed_users(key, client.cookies.get(webauth.COOKIE) or "", now,
+                                  lambda u: people.get_user(conn, u))
+    client.cookies.set(webauth.COOKIE, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
 
 
 def make_account(conn, clock, email=OWNER_EMAIL, role="owner", legacy=True, session="none", user_id=None,

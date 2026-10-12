@@ -310,6 +310,31 @@ def test_shelves_of_other_people_are_invisible(web, conn, cfg, clock):
     assert web.client.get("/api/status").json()["apps"] == {"8": "queued"}
 
 
+def test_two_people_in_one_browser_show_all_their_shelves(web, conn, cfg, clock):
+    # spec 2026-10-12 §3: полки браузера — Apple ID всех вошедших; в другом браузере — только свои
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    seed_app(conn, cfg, clock, app_id=5, name="Общее", acct=shared)
+    seed_app(conn, cfg, clock, app_id=6, name="Личное")
+    sign_in(web.client, cfg, conn, clock, shared.user_id)             # владелец уже вошёл — Общий добавился
+    page = web.client.get("/").text
+    assert names_in(page) == ["Личное"] and f"/acct/{shared.id}" in page   # активна первая полка первого вошедшего
+    web.client.get(f"/acct/{shared.id}")
+    assert names_in(web.client.get("/").text) == ["Общее"]
+    only = TestClient(web.app, base_url=BASE)                         # другой браузер: вошёл только Общий
+    sign_in(only, cfg, conn, clock, shared.user_id)
+    only.get("/acct/1")                                               # полку владельца не выбрать
+    page = only.get("/").text
+    assert names_in(page) == ["Общее"] and "owner@example" not in page
+    assert only.post("/apps/6/retry", follow_redirects=False).status_code == 404
+
+
+def test_junk_around_a_good_cookie_entry_is_ignored(web):  # 2026-10-12, Review Focus 1
+    good = web.client.cookies.get("appshelf_auth")
+    web.client.cookies.set("appshelf_auth", f"junk|admin:1890000000:{'0' * 64}||{good}|9:9:9:zz", domain=HOST)
+    r = web.client.get("/", follow_redirects=False)
+    assert r.status_code == 200 and "owner@example" in r.text
+
+
 def test_adding_apple_id_of_another_person_is_refused(web, conn, cfg, clock):
     # иначе после пароля и кода устройство владельца молча перешло бы к Петру
     make_account(conn, clock, email="petr@example", role="member", legacy=False)

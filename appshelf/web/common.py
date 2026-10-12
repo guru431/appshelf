@@ -18,7 +18,7 @@ from .login import Limiter, LoginFlow
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 THEMES = ("light", "dark")
-ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID вошедшего человека
+ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID одного из вошедших
 LOGIN_COOKIE = "appshelf_login"    # незавершённый вход (шаг кода 2FA): id в памяти LoginFlow
 INVITE_COOKIE = "appshelf_invite"  # принятое приглашение — до первого входа нового Apple ID
 
@@ -39,17 +39,23 @@ class WebCtx:
     def epoch(self) -> int:
         return int(datetime.fromisoformat(self.now()).timestamp())
 
+    def signed(self, c, request: Request) -> list[tuple]:
+        """Вошедшие в этом браузере люди и их записи cookie — по порядку входа (webauth.signed_users)."""
+        return webauth.signed_users(self.key, request.cookies.get(webauth.COOKIE, ""), self.epoch(),
+                                    lambda uid: people.get_user(c, uid))
+
     def person(self, request: Request):
-        """(человек, его Apple ID, активный) по cookie или None. Активный — из cookie выбора полки, если этот Apple ID
-        принадлежит человеку, иначе первый."""
+        """(вошедшие люди, человек активной полки, полки браузера, активная полка) по cookie или None
+        (spec 2026-10-12 §3). Полки браузера — Apple ID всех вошедших: по порядку входа, у человека — по id.
+        Активная — из cookie выбора полки, если она среди них, иначе первая."""
         with self.conn() as c:
-            user = webauth.check_cookie(self.key, request.cookies.get(webauth.COOKIE, ""), self.epoch(),
-                                        lambda uid: people.get_user(c, uid))
-            accounts = people.accounts_of(c, user.id) if user is not None else []
+            users = [u for u, _ in self.signed(c, request)]
+            accounts = [a for u in users for a in people.accounts_of(c, u.id)]
         if not accounts:
             return None
         want = request.cookies.get(ACCT_COOKIE, "")
-        return user, accounts, next((a for a in accounts if str(a.id) == want), accounts[0])
+        acct = next((a for a in accounts if str(a.id) == want), accounts[0])
+        return users, next(u for u in users if u.id == acct.user_id), accounts, acct
 
     @property
     def secure(self) -> bool:
@@ -59,9 +65,10 @@ class WebCtx:
         resp.set_cookie(name, value, max_age=max_age, httponly=True, secure=self.secure, samesite="lax", path="/")
 
     def page(self, request: Request, name: str, nav: str, status_code: int = 200, **ctx):
-        """Шаблон; вошедший человек, его Apple ID и активный — из request.state (на страницах входа их нет).
-        here — адрес страницы для возврата (тема, выбор полки, «войти заново»); страница ответа на POST — каталог."""
-        for key in ("user", "accounts", "acct"):
+        """Шаблон; вошедшие, человек активной полки, полки браузера и активная — из request.state (на страницах
+        входа их может не быть). here — адрес страницы для возврата (тема, выбор полки, «войти заново»); страница
+        ответа на POST — каталог."""
+        for key in ("users", "user", "accounts", "acct"):
             ctx.setdefault(key, getattr(request.state, key, None))
         here = "/"
         if request.method == "GET":

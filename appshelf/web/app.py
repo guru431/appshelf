@@ -96,7 +96,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 return RedirectResponse("/login?" + urlencode({"next": target}), status_code=303)
             # без WWW-Authenticate: окно Basic Auth в браузере не нужно, вход — формой
             return PlainTextResponse("401: нужен вход — /login", status_code=401)
-        request.state.user, request.state.accounts, request.state.acct = found
+        request.state.users, request.state.user, request.state.accounts, request.state.acct = found
         return await call_next(request)
 
     def not_found():

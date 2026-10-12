@@ -55,17 +55,18 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
                status_code: int = 200, action: str = "/login", add: bool = False, link: str = ""):
     """Форма входа. Страницы входа открыты без cookie, но человек может быть уже вошедшим: «Добавить Apple ID»
     рисуется с шапкой, а приглашение предупреждает, что новый Apple ID станет другим участником."""
-    found = ((request.state.user, request.state.accounts, request.state.acct) if hasattr(request.state, "user")
-             else w.person(request)) or (None, None, None)
+    if not hasattr(request.state, "user"):  # middleware сюда не заходил — вошедших ищем сами
+        found = w.person(request)
+        if found is not None:
+            request.state.users, request.state.user, request.state.accounts, request.state.acct = found
     return w.page(request, "login.html", "apple" if add else "login", status_code, step=step, email=email,
                   next=safe_next(next_), error=error, action=action, add=add, link=link,
-                  invited=bool(request.cookies.get(INVITE_COOKIE)),
-                  user=found[0], accounts=found[1], acct=found[2])
+                  invited=bool(request.cookies.get(INVITE_COOKIE)))
 
 
 def signed_in(w: WebCtx, resp, user, aid: int):
     """cookie человека на год и выбранная полка."""
-    w.set_cookie(resp, webauth.COOKIE, webauth.make_cookie(w.key, user, w.epoch()), webauth.COOKIE_AGE)
+    w.set_cookie(resp, webauth.COOKIE, webauth.make_entry(w.key, user, w.epoch()), webauth.COOKIE_AGE)
     w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
     return resp
 
