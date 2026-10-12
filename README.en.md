@@ -15,8 +15,8 @@ The web UI is in Russian.
 ## Features
 
 - You sign in to the panel with your Apple ID and its password (plus a 2FA code); the password is never stored.
-  Several people can use it, and a person can have several Apple IDs: each Apple ID gets its own shelf; new
-  Apple IDs join by the owner's invite link.
+  Several people can use it, and one browser can hold several Apple IDs at once: each Apple ID gets its own shelf;
+  new Apple IDs join by the owner's invite link or from the panel of a person who is already signed in.
 - Purchase history: you publish only what you pick. Apps removed from the App Store are added by an
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
@@ -124,9 +124,11 @@ gets it via stdin, appshelf-web keeps it in memory for at most 10 minutes. The s
 A new Apple ID gets onto the server only through an invite link: "Участники" (People) → "Create link". The link
 works until it is disabled or deleted — one for everyone or one per person; it is asked for once, on the first
 sign-in. A disabled link stays in the list, a deleted one disappears from it.
-A person adds a second Apple ID of their own: "Apple ID" → "Add Apple ID". Each Apple ID has its own shelf:
-history, catalog, IPAs (an IPA carries the buyer's data and installs on an iPhone signed in to the App Store with
-the same Apple ID).
+A signed-in person adds another Apple ID themselves, without an invite: "Apple ID" → "Add Apple ID". The new Apple
+ID is not attached to anyone — it becomes a separate person: its shelf is connected in this browser right away, on
+other devices you sign in with it separately, and the owner gets an email about the new person. Each Apple ID has
+its own shelf: history, catalog, IPAs (an IPA carries the buyer's data and installs on an iPhone signed in to the
+App Store with the same Apple ID).
 
 One browser can be signed in as several people at once: every further sign-in — the sign-in form, "Add Apple ID"
 with another person's Apple ID, an invite, a fallback link — adds that person to those already signed in, and the

@@ -14,19 +14,29 @@ def test_my_apple_ids_show_state_size_and_relogin(web, conn, cfg, clock):
     assert "/login?email=owner%40example&amp;next=%2Fapple" in r.text and "/apple/1/delete" in r.text
 
 
-def test_add_second_apple_id_without_invite(web, conn, cfg):
+def test_new_apple_id_from_add_is_a_separate_person(web, conn, cfg):
+    # 2026-10-13: новый Apple ID никому не достаётся — отдельный участник без приглашения, браузер входит и как он
     r = web.client.get("/apple/add")
     assert r.status_code == 200 and 'action="/apple/add"' in r.text and "добавить Apple ID" in r.text
+    assert "станет отдельным участником" in r.text
     t = FakeTool()
-    t.account = {"name": "Иван Петров", "storefront": "US"}
+    t.account = {"name": "Иван Второй", "storefront": "US"}
     web.queue.append(t)
     r = web.client.post("/apple/add", data={"email": "Ivan.US@example", "password": "pw"}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/apple"
     added = people.account_by_email(conn, "ivan.us@example")
-    assert added.user_id == 1 and added.storefront == "US" and len(people.list_users(conn)) == 1
-    assert web.sent == [] and (cfg.accounts_dir / str(added.id)).is_dir()
+    person = people.get_user(conn, added.user_id)
+    assert added.user_id != 1 and (person.name, person.role) == ("Иван Второй", "member") and added.storefront == "US"
+    assert [a.id for a in people.accounts_of(conn, 1)] == [1] and (cfg.accounts_dir / str(added.id)).is_dir()
+    [(subject, body)] = web.sent                                # владельцу — письмо: кто и из чьей панели
+    assert subject == "appshelf: новый участник" and "ivan.us@example" in body
+    assert "«Иван Петров» (owner@example)" in body
     text = web.client.get("/").text
     assert "ivan.us@example" in text and "/acct/1" in text      # активна новая полка, прежняя — в переключателе
+    other = TestClient(web.app, base_url=f"https://{HOST}")     # другое устройство: вход прежним Apple ID
+    other.post("/login", data={"email": "owner@example", "password": "pw"})
+    page = other.get("/").text
+    assert "owner@example" in page and "ivan.us@example" not in page   # новую полку он не открывает
 
 
 def test_add_with_2fa_goes_through_code_step(web, conn):
@@ -37,7 +47,7 @@ def test_add_with_2fa_goes_through_code_step(web, conn):
     assert r.status_code == 200 and 'action="/login/code"' in r.text
     r = web.client.post("/login/code", data={"code": "123456", "next": "/apple"}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/apple"
-    assert people.account_by_email(conn, "second@example").user_id == 1
+    assert people.account_by_email(conn, "second@example").user_id != 1
 
 
 def test_delete_active_shelf_falls_back_to_remaining(web, conn, cfg, clock):  # Review Focus 4

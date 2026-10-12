@@ -1,7 +1,8 @@
 """Вход в панель Apple ID (spec 2026-10-08 §4, 2026-10-12 §4). Известный Apple ID — сразу в Apple; новый — только
-по приглашению (cookie после /join/), как APPSHELF_OWNER, пока владельца нет, или вторым Apple ID уже вошедшего
-человека («Мои Apple ID» → «Добавить»). Пока не решено «пускать», к Apple не обращаемся. Успешный вход добавляет
-человека к вошедшим в этом браузере, а не заменяет их. Пароль — в памяти LoginFlow не дольше 10 минут."""
+по приглашению (cookie после /join/), как APPSHELF_OWNER, пока владельца нет, или из панели уже вошедшего человека
+(«Мои Apple ID» → «Добавить») — и всегда отдельным человеком. Пока не решено «пускать», к Apple не обращаемся.
+Успешный вход добавляет человека к вошедшим в этом браузере, а не заменяет их. Пароль — в памяти LoginFlow не
+дольше 10 минут."""
 from __future__ import annotations
 
 import os
@@ -99,32 +100,33 @@ def decide(w: WebCtx, c, request: Request, email: str, user_id: int | None) -> I
 
 
 def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: str) -> tuple[int, int]:
-    """Новый Apple ID после успешного входа: строки users/accounts одной транзакцией, затем временный HOME →
-    accounts/<id>; о новом участнике — письмо владельцу."""
-    joined = None
+    """Новый Apple ID после успешного входа — всегда отдельный человек, и из «Добавить» тоже: чужой связке он не
+    достаётся. Строки users/accounts одной транзакцией, затем временный HOME → accounts/<id>; о новом участнике —
+    письмо владельцу (кроме него самого при первом входе)."""
+    name, how = str(info.get("name") or intent.email), ""
     try:
         with store.tx(c):
             if intent.invite_id is not None and not people.invite_active(c, intent.invite_id):
                 raise Refused(INVITE_GONE)
             if intent.owner and people.owner_exists(c):
                 raise Refused(NOT_REGISTERED)
-            if intent.user_id is not None and all(u.id != intent.user_id for u, _ in w.signed(c, request)):
+            adder = next((u for u, _ in w.signed(c, request) if u.id == intent.user_id), None)
+            if intent.user_id is not None and adder is None:
                 # пока человек добавлял Apple ID, его удалили или погасили его вход («Выйти на всех устройствах»,
-                # «Выйти»): иначе верный код привязал бы Apple ID и вернул вход тому, у кого осталась прежняя cookie
+                # «Выйти»): иначе верный код завёл бы участника и вход тому, у кого осталась прежняя cookie
                 raise Refused(SIGNED_OUT)
-            uid = intent.user_id
-            if uid is None:
-                role = people.OWNER if intent.owner else people.MEMBER
-                uid = people.create_user(c, str(info.get("name") or intent.email), role, intent.invite_id, now)
-                joined = intent.invite_id
+            if adder is not None:  # тёзок различает Apple ID
+                how = f"добавлен из панели участника «{adder.name}» ({people.accounts_of(c, adder.id)[0].email})"
+            role = people.OWNER if intent.owner else people.MEMBER
+            uid = people.create_user(c, name, role, intent.invite_id, now)
             aid = people.create_account(c, uid, intent.email, info, intent.device_mac, now)
     except sqlite3.IntegrityError:  # тот же новый Apple ID успел войти из другого браузера
         raise Refused(TAKEN) from None
     os.replace(intent.home, w.cfg.accounts_dir / str(aid))
-    if joined is not None:
+    if not intent.owner:
+        how = how or f"приглашение «{people.invite_label(c, intent.invite_id)}»"
         notify.send_quietly(w.env.send, JOINED_SUBJECT,
-                            f"{info.get('name') or intent.email}, Apple ID {intent.email}, приглашение "
-                            f"«{people.invite_label(c, joined)}».\nУчастники: {w.cfg.public_base}/admin\n",
+                            f"{name}, Apple ID {intent.email}, {how}.\nУчастники: {w.cfg.public_base}/admin\n",
                             w.cfg.mail_to)
     return aid, uid
 
@@ -159,7 +161,7 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
 
 def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *, user_id: int | None = None,
            action: str = "/login"):
-    """Шаг 1 входа (и «Добавить Apple ID» — с user_id человека, которому достанется новый Apple ID)."""
+    """Шаг 1 входа (и «Добавить Apple ID» — с user_id человека, из панели которого добавляют)."""
     add = user_id is not None
     email = people.normalize_email(email)
 
@@ -346,6 +348,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     @app.get("/acct/{aid}")
     def switch_shelf(request: Request, aid: int, back_url: str = Query("", alias="back")):
         resp = back(back_to(request, back_url))
-        if any(a.id == aid for a in request.state.accounts):
+        # GET с cookie приходит и по ссылке с чужого сайта — такая полку не переключает (Sec-Fetch-Site ставит браузер)
+        if request.headers.get("sec-fetch-site") != "cross-site" and any(a.id == aid for a in request.state.accounts):
             w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
         return resp

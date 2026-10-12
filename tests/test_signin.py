@@ -324,6 +324,8 @@ def test_switch_between_own_shelves(web, conn, cfg, clock):
     r = web.client.get(f"/acct/{second.id}", headers={"referer": f"{BASE}/history"}, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/history"
     assert names_in(web.client.get("/").text) == ["Второе"]
+    web.client.get("/acct/1", headers={"sec-fetch-site": "cross-site"})
+    assert names_in(web.client.get("/").text) == ["Второе"]           # ссылка с чужого сайта полку не переключает
     stranger = make_account(conn, clock, email="x@example", role="member", legacy=False)
     web.client.get(f"/acct/{stranger.id}")
     assert names_in(web.client.get("/").text) == ["Второе"]           # чужую полку не выбрать
@@ -441,14 +443,20 @@ def test_invite_in_signed_in_browser_adds_the_new_person(web, conn, clock):
     assert "/acct/1" in page and '<span class="on">shared@example</span>' in page   # вошли оба, активен новый
 
 
-def test_new_apple_id_from_add_goes_to_person_of_active_shelf(web, conn, cfg, clock):
+def test_new_apple_id_added_from_shared_shelf_stays_private(web, conn, cfg, clock):
+    # находка 2026-10-12: при активной общей полке личный Apple ID доставался общему участнику
     shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
-    assert "участника «" not in web.client.get("/apple/add").text     # вошёл один — называть некого
     sign_in(web.client, cfg, conn, clock, shared.user_id)
     web.client.get(f"/acct/{shared.id}")
-    assert "участника «Общий»" in web.client.get("/apple/add").text   # вошедших двое — форма говорит, кому
     web.client.post("/apple/add", data={"email": "new@example", "password": "pw"})
-    assert people.account_by_email(conn, "new@example").user_id == shared.user_id
+    new = people.account_by_email(conn, "new@example")
+    assert new.user_id not in (1, shared.user_id)
+    assert [a.id for a in people.accounts_of(conn, shared.user_id)] == [shared.id]
+    assert "new@example" in web.client.get("/").text                  # в этом браузере полка подключена
+    only = TestClient(web.app, base_url=BASE)                         # другой вход общим Apple ID её не видит
+    sign_in(only, cfg, conn, clock, shared.user_id)
+    page = only.get("/").text
+    assert "shared@example" in page and "new@example" not in page
 
 
 def test_wrong_code_while_adding_known_apple_id_keeps_add_form(web, conn, cfg, clock):
@@ -468,7 +476,7 @@ def test_invite_warns_signed_in_person(web, conn, clock):
     token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
     web.client.get(f"/join/{token}")
     text = web.client.get("/login").text
-    assert "Вы уже вошли как Иван Петров" in text and 'href="/apple/add"' in text and "Safari" in text
+    assert "Вы уже вошли как Иван Петров" in text and "станет отдельным участником" in text and "Safari" in text
     assert "Вы уже вошли" not in TestClient(web.app, base_url=BASE).get("/login").text
 
 
