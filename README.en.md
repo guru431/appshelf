@@ -21,7 +21,8 @@ The web UI is in Russian.
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
   appshelf checks which of them your Apple ID holds a license for.
-- Catalog with an "Install" button; the current and the previous version are kept.
+- Catalog with an "Install" button; the current and the previous version are kept. iOS does not install over an
+  installed app — offload it first (see "Updating an installed app").
 - Nightly check for new versions (versions downloaded this week are marked in the catalog: apps removed from the
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
@@ -165,6 +166,15 @@ nightly check re-checks them once a week, on the Apple ID's own weekday, and fil
 page (`/blocked`) shows the whole catalog and lets you add an app by link or ID. To extend the catalog, append
 `{"id", "name", "aliases"}` to the JSON. Whether an ID is gone from the RU App Store:
 `itunes.apple.com/lookup?id=…&country=ru` (empty — removed).
+
+## Updating an installed app
+
+iOS does not install over an app that is already on the device via `itms-services`: "Install" is answered with
+"… is Already Installed" and the advice to delete the app. Neither the version nor the Apple ID matters: iOS decides
+before the download, by the app identifier alone. There is no need to delete the app — offload it: Settings →
+General → iPhone Storage → the app → Offload App, then "Install" in the catalog. Offloading removes the app but
+keeps its data, so you get the shelf's version with your data in place. The Home Screen icon will not bring back an
+offloaded app that was removed from the App Store — only "Install" from the shelf will.
 
 ## New shelf token
 

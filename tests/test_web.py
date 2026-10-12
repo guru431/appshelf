@@ -94,6 +94,10 @@ def test_catalog_explains_app_store_apple_id(web):
     assert "На iPhone в App Store должен быть выполнен вход этим же Apple ID" in web.client.get("/").text
 
 
+def test_catalog_explains_update_over_installed(web):  # поверх установленного iOS не ставит: «… is Already Installed»
+    assert "«Сгрузить приложение», затем «Установить» здесь" in web.client.get("/").text
+
+
 def test_history_search_cyrillic_case_insensitive(web, conn, clock):
     store.upsert_purchases(conn, 1, [{"id": 1, "bundleId": "ru.sberbank.onlineiphone", "name": "СберБанк Онлайн"},
                                      {"id": 2, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
