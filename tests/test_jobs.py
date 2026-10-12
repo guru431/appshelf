@@ -297,7 +297,7 @@ def test_remove_account_deletes_rows_dirs_and_last_user(ctx, cfg, conn, clock):
     assert people.get_account(conn, petr.id) is None and people.get_user(conn, petr.user_id) is None
     assert store.list_purchases(conn, petr.id) == [] and store.shelf_size(conn, petr.id) == 0
     assert not cfg.shelf_root(petr).exists() and not home.parent.exists()
-    assert not (cfg.locks_dir / f"{petr.id}.lock").exists()
+    assert not (cfg.locks_dir / f"{petr.id}.lock").exists() and not (cfg.locks_dir / f"{petr.id}.wait").exists()
     assert people.get_account(conn, 1) is not None
 
 
@@ -327,11 +327,12 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     (cfg.accounts_dir / "1").mkdir()
     (cfg.accounts_dir / "7" / ".ipatool").mkdir(parents=True)   # Apple ID №7 удалили посреди входа
     cfg.locks_dir.mkdir(parents=True)
-    for name in (".new-0123456789abcdef.lock", "1.lock", "7.lock", "download.lock"):
+    for name in (".new-0123456789abcdef.lock", ".new-0123456789abcdef.wait", "1.lock", "1.wait", "7.lock", "7.wait",
+                 "download.lock", "download.wait"):
         (cfg.locks_dir / name).write_text("")
     worker(ctx, cfg).recover()
     assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"]
-    assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "download.lock"]
+    assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "1.wait", "download.lock", "download.wait"]
 
 
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):

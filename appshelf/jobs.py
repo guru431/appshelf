@@ -18,7 +18,7 @@ from typing import Callable
 
 from . import ipa, notify, people, removed, store
 from .config import GB, Config
-from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, hold, try_lock
+from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, try_lock
 
 RESERVE = 3 * GB         # неприкосновенный запас места: архив — общая шара
 FREE_MIN = RESERVE + GB  # + 1 ГБ на файл: размер IPA до скачивания неизвестен
@@ -247,19 +247,22 @@ def remove_account(cfg: Config, c, acct) -> None:
             store.rmtree_logged(cfg.accounts_dir / str(acct.id))
     except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
         raise AccountBusy(acct.email) from e
-    try:
-        lock.unlink(missing_ok=True)
-    except OSError:  # файл блокировки открыт другим процессом — останется пустым, Apple ID уже нет
-        pass
+    _drop_lock(lock)
+
+
+def _drop_lock(lock) -> None:
+    """Файл блокировки и её очереди. Открыт другим процессом — останется пустым, Apple ID уже нет."""
+    for path in (lock, gate_path(lock)):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def drop_account_files(cfg: Config, aid: int) -> None:
     """HOME ipatool и блокировка Apple ID, строки которого уже нет (удалили посреди входа)."""
     shutil.rmtree(cfg.accounts_dir / str(aid), ignore_errors=True)
-    try:
-        (cfg.locks_dir / f"{aid}.lock").unlink(missing_ok=True)
-    except OSError:
-        pass
+    _drop_lock(cfg.locks_dir / f"{aid}.lock")
 
 
 def remove_user(cfg: Config, c, uid: int) -> None:
@@ -359,7 +362,7 @@ class Worker:
         for home in cfg.accounts_dir.glob("*"):
             if home.name.startswith(".new-") or (home.name.isdigit() and home.name not in known):
                 shutil.rmtree(home, ignore_errors=True)
-        for lock in cfg.locks_dir.glob("*.lock"):
+        for lock in [*cfg.locks_dir.glob("*.lock"), *cfg.locks_dir.glob("*.wait")]:
             if lock.stem.startswith(".new-") or (lock.stem.isdigit() and lock.stem not in known):
                 lock.unlink(missing_ok=True)
 

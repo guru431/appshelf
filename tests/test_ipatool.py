@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -127,6 +128,32 @@ def test_other_apple_id_does_not_wait(tmp_path):
             a.run(["list-purchases"], timeout=5, lock_wait=0)
         assert e.value.error == "busy"
     assert a.list_purchases() == []
+
+
+def test_login_goes_before_background_calls(tmp_path):
+    # проверка справочника — ~480 вызовов подряд: замок свободен лишь мгновение между ними, и вход с ожиданием
+    # 10 с без очереди не успевал его взять («Apple ID занят» до конца проверки)
+    lock, stop = tmp_path / "1.lock", threading.Event()
+    rounds = []
+
+    def background():
+        while not stop.is_set():
+            with ipatool.hold(lock):
+                time.sleep(0.05)
+            rounds.append(1)
+
+    t = threading.Thread(target=background)
+    t.start()
+    try:
+        time.sleep(0.1)
+        with ipatool.hold(lock, wait=1):
+            before = len(rounds)
+            time.sleep(0.2)
+            assert len(rounds) == before          # пока идёт вход, фоновые вызовы ждут
+    finally:
+        stop.set()
+        t.join()
+    assert len(rounds) > before                   # и продолжают после него
 
 
 posix = pytest.mark.skipif(os.name != "posix", reason="flock и группы процессов — как на сервере (Linux)")

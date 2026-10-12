@@ -57,6 +57,15 @@ def try_lock(fd: int) -> bool:
         return False
 
 
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 def _acquire(fd: int, wait: float | None) -> bool:
     """wait=None — ждать сколько угодно (обработчик, ночная проверка), иначе не дольше wait секунд."""
     deadline = None if wait is None else time.monotonic() + wait
@@ -67,18 +76,41 @@ def _acquire(fd: int, wait: float | None) -> bool:
     return True
 
 
+def gate_path(lock: Path) -> Path:
+    """Очередь к замку: её держит ждущий с ограничением (вход, удаление), пока не возьмёт сам замок."""
+    return lock.with_suffix(".wait")
+
+
 @contextmanager
 def hold(path: Path, wait: float | None = None):
     """Файловая блокировка на время блока: wait=None — ждать сколько угодно, иначе не дольше wait секунд;
-    не дождались — IpatoolError("busy")."""
+    не дождались — IpatoolError("busy"). Ждущий с ограничением идёт вне очереди: пока он ждёт, фоновые вызовы
+    (обработчик, ночная проверка) новых блокировок не берут — проверка справочника из ~480 вызовов подряд отпускает
+    замок лишь на мгновение, и вход без очереди не дождался бы её конца."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    gate, got = -1, False
+    deadline = None if wait is None else time.monotonic() + wait
     try:
-        if not _acquire(fd, wait):
+        gate = os.open(gate_path(path), os.O_RDWR | os.O_CREAT, 0o600)
+        if deadline is None:
+            _acquire(gate, None)  # пропустить вперёд ждущего входа
+            _unlock(gate)
+            got = _acquire(fd, None)
+        elif _acquire(gate, wait):
+            try:
+                got = _acquire(fd, max(0.0, deadline - time.monotonic()))
+            finally:
+                _unlock(gate)
+        if not got:
             raise IpatoolError("busy", "ipatool этого Apple ID занят: идёт скачивание или проверка")
         yield
     finally:
+        if got:
+            _unlock(fd)
         os.close(fd)
+        if gate >= 0:
+            os.close(gate)
 
 
 def _kill(proc: subprocess.Popen) -> None:
