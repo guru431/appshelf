@@ -12,6 +12,6 @@
 {% endfor %}
 </table>
 <p><a class="btn" href="/apple/add">Добавить Apple ID</a></p>
-<form method="post" action="/logout-all"><button class="secondary">Выйти на всех устройствах</button></form>
+<form method="post" action="/logout-all/{{ user.id }}"><button class="secondary">Выйти на всех устройствах</button></form>
 <p class="hint">Вход в панель — любым из этих Apple ID и паролем от него; пароль на сервере не сохраняется.</p>
 {% endblock %}

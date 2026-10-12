@@ -12,7 +12,7 @@ from math import ceil
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, notify, people, store, webauth
 from ..ipatool import IpatoolError
@@ -308,15 +308,39 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         resp.delete_cookie(ACCT_COOKIE, path="/")
         return resp
 
+    def forget(request: Request, uid: int):
+        """Человек убран из этого браузера: cookie без его записи; был последним — как «Выйти»."""
+        with w.conn() as c:
+            value = webauth.without_user(w.signed(c, request), uid)
+        if not value:
+            return logged_out()
+        resp = back("/apple")
+        w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
+        return resp
+
+    def here(request: Request, uid: int) -> bool:
+        return any(u.id == uid for u in request.state.users)
+
     @app.post("/logout")
     def logout():
+        """«Выйти»: все люди этого браузера."""
         return logged_out()
 
-    @app.post("/logout-all")
-    def logout_all(request: Request):
+    @app.post("/logout/{uid}")
+    def logout_person(request: Request, uid: int):
+        """«Убрать с этого устройства»: один человек, остальные вошедшие остаются."""
+        if not here(request, uid):
+            return PlainTextResponse("not found", status_code=404)
+        return forget(request, uid)
+
+    @app.post("/logout-all/{uid}")
+    def logout_all(request: Request, uid: int):
+        """«Выйти на всех устройствах» — одного человека: соседи по этому браузеру остаются."""
+        if not here(request, uid):
+            return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
-            people.bump_epoch(c, request.state.user.id)
-        return logged_out()
+            people.bump_epoch(c, uid)
+        return forget(request, uid)
 
     @app.get("/acct/{aid}")
     def switch_shelf(request: Request, aid: int, back_url: str = Query("", alias="back")):

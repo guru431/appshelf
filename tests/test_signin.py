@@ -267,10 +267,51 @@ def test_logout_and_logout_everywhere(web, conn, cfg, clock):
     assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     other = TestClient(web.app, base_url=BASE)
     sign_in(other, cfg, conn, clock)
-    assert other.post("/logout-all", follow_redirects=False).status_code == 303
+    assert other.post("/logout-all/1", follow_redirects=False).status_code == 303
     assert people.get_user(conn, 1).epoch == 1
     web.client.cookies.set("appshelf_auth", old, domain=HOST)
     assert web.client.get("/", follow_redirects=False).status_code == 303   # старая cookie после «выйти везде»
+
+
+def test_forget_one_person_keeps_the_others(web, conn, cfg, clock):  # 2026-10-12, Review Focus 3
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    sign_in(web.client, cfg, conn, clock, shared.user_id)
+    web.client.get(f"/acct/{shared.id}")                              # активна полка того, кого уберём
+    r = web.client.post(f"/logout/{shared.user_id}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/apple"
+    page = web.client.get("/").text
+    assert "owner@example" in page and "shared@example" not in page   # активной стала оставшаяся полка
+    assert people.get_user(conn, shared.user_id).epoch == 0           # в других браузерах Общий жив
+    r = web.client.post("/logout/1", follow_redirects=False)          # последний — как «Выйти»
+    assert r.headers["location"] == "/login"
+    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert web.client.get("/", follow_redirects=False).status_code == 303
+
+
+def test_logout_everywhere_for_one_person_spares_neighbours(web, conn, cfg, clock):
+    shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
+    sign_in(web.client, cfg, conn, clock, shared.user_id)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, name="Пётр")
+    other = TestClient(web.app, base_url=BASE)                        # второй браузер: Пётр и тот же Общий
+    sign_in(other, cfg, conn, clock, petr.user_id)
+    sign_in(other, cfg, conn, clock, shared.user_id)
+    mine, theirs = web.client.get("/").text, other.get("/").text      # критерий 3: общий — у обоих, личные — врозь
+    assert "shared@example" in mine and "petr@example" not in mine
+    assert "shared@example" in theirs and "owner@example" not in theirs
+    r = web.client.post(f"/logout-all/{shared.user_id}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/apple"
+    assert people.get_user(conn, shared.user_id).epoch == 1 and people.get_user(conn, 1).epoch == 0
+    mine, theirs = web.client.get("/").text, other.get("/").text
+    assert "owner@example" in mine and "shared@example" not in mine
+    assert "petr@example" in theirs and "shared@example" not in theirs   # Общий погашен и там, Пётр остался
+
+
+def test_logout_of_person_not_signed_in_here_is_404(web, conn, clock):
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    for path in (f"/logout/{petr.user_id}", f"/logout-all/{petr.user_id}", "/logout/999"):
+        assert web.client.post(path, follow_redirects=False).status_code == 404
+    assert people.get_user(conn, petr.user_id).epoch == 0
+    assert web.client.get("/", follow_redirects=False).status_code == 200
 
 
 def test_switch_between_own_shelves(web, conn, cfg, clock):
