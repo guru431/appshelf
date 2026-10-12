@@ -35,6 +35,7 @@ NOT_CONFIGURED = "Сервер не настроен: не задан APPSHELF_O
 INVITE_GONE = "Ссылка-приглашение недействительна — попросите новую"
 LINK_GONE = "Ссылка недействительна — попросите новую"
 TAKEN = "Этот Apple ID уже зарегистрирован — войдите ещё раз"
+SIGNED_OUT = "Вход участника на этом устройстве завершён — войдите и добавьте Apple ID заново"
 IN_PROGRESS = "Вход этим Apple ID уже выполняется — дождитесь кода на устройствах или попробуйте через пару минут"
 EXPIRED_STEP = "Срок шага истёк — введите Apple ID и пароль заново"
 TOO_MANY = "Слишком много неудачных попыток — подождите минуту"
@@ -97,7 +98,7 @@ def decide(w: WebCtx, c, request: Request, email: str, user_id: int | None) -> I
     return None
 
 
-def register(w: WebCtx, c, intent: Intent, info: dict, now: str) -> tuple[int, int]:
+def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: str) -> tuple[int, int]:
     """Новый Apple ID после успешного входа: строки users/accounts одной транзакцией, затем временный HOME →
     accounts/<id>; о новом участнике — письмо владельцу."""
     joined = None
@@ -107,8 +108,10 @@ def register(w: WebCtx, c, intent: Intent, info: dict, now: str) -> tuple[int, i
                 raise Refused(INVITE_GONE)
             if intent.owner and people.owner_exists(c):
                 raise Refused(NOT_REGISTERED)
-            if intent.user_id is not None and people.get_user(c, intent.user_id) is None:
-                raise Refused(NOT_REGISTERED)  # человека удалили, пока он добавлял Apple ID
+            if intent.user_id is not None and all(u.id != intent.user_id for u, _ in w.signed(c, request)):
+                # пока человек добавлял Apple ID, его удалили или погасили его вход («Выйти на всех устройствах»,
+                # «Выйти»): иначе верный код привязал бы Apple ID и вернул вход тому, у кого осталась прежняя cookie
+                raise Refused(SIGNED_OUT)
             uid = intent.user_id
             if uid is None:
                 role = people.OWNER if intent.owner else people.MEMBER
@@ -140,7 +143,7 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
             aid, uid = acct.id, acct.user_id
         else:
             try:
-                aid, uid = register(w, c, intent, info, now)
+                aid, uid = register(w, c, request, intent, info, now)
             except Refused as e:
                 drop_home(intent)
                 return login_page(w, request, email=intent.email, next_=next_, error=str(e), status_code=403)
@@ -156,7 +159,7 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
 
 def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *, user_id: int | None = None,
            action: str = "/login"):
-    """Шаг 1 входа (и «Добавить Apple ID» — с user_id вошедшего человека)."""
+    """Шаг 1 входа (и «Добавить Apple ID» — с user_id человека, которому достанется новый Apple ID)."""
     add = user_id is not None
     email = people.normalize_email(email)
 
@@ -316,7 +319,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
         return resp
 
-    def here(request: Request, uid: int) -> bool:
+    def signed_here(request: Request, uid: int) -> bool:
         return any(u.id == uid for u in request.state.users)
 
     @app.post("/logout")
@@ -327,14 +330,14 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     @app.post("/logout/{uid}")
     def logout_person(request: Request, uid: int):
         """«Убрать с этого устройства»: один человек, остальные вошедшие остаются."""
-        if not here(request, uid):
+        if not signed_here(request, uid):
             return PlainTextResponse("not found", status_code=404)
         return forget(request, uid)
 
     @app.post("/logout-all/{uid}")
     def logout_all(request: Request, uid: int):
         """«Выйти на всех устройствах» — одного человека: соседи по этому браузеру остаются."""
-        if not here(request, uid):
+        if not signed_here(request, uid):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             people.bump_epoch(c, uid)

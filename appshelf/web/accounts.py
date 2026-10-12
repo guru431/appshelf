@@ -73,6 +73,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             return confirm(request, a, ARCHIVE_DOWN, 503)
         except jobs.AccountBusy:
             return confirm(request, a, ACCOUNT_BUSY, 409)
+        except jobs.LastOwnerAccount:  # другую полку владельца удалили, пока шёл этот запрос
+            return confirm(request, a, LAST_OWNER_ID, 400, refused=True)
         if len(request.state.accounts) > 1:
             return back("/apple")
         resp = back("/login")  # был последний Apple ID — человека больше нет

@@ -101,10 +101,10 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         return created("l", token)
 
     @router.post("/users/{uid}/logout-all")
-    def logout_all(uid: int):
+    def logout_all(request: Request, uid: int):
         with w.conn() as c:
             people.bump_epoch(c, uid)
-        return back("/admin")
+        return back("/" if is_me(request, uid) else "/admin")  # погасил себя — «Участники» этому браузеру закрыты
 
     @router.get("/users/{uid}/delete", response_class=HTMLResponse)
     def delete_form(request: Request, uid: int):

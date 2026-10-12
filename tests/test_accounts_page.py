@@ -1,6 +1,8 @@
+from contextlib import closing
+
 from starlette.testclient import TestClient
 
-from appshelf import people, store
+from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired
 from helpers import HOST, FakeTool, make_account, seed_app, sign_in
 
@@ -56,6 +58,22 @@ def test_owner_cannot_delete_last_apple_id(web, conn):
     r = web.client.get("/apple/1/delete")
     assert "Последний Apple ID владельца удалить нельзя" in r.text and 'action="/apple/1/delete"' not in r.text
     assert web.client.post("/apple/1/delete").status_code == 400 and people.get_account(conn, 1)
+
+
+def test_two_deletes_at_once_keep_owner_last_apple_id(web, conn, cfg, clock, monkeypatch):
+    # оба запроса видели у владельца два Apple ID: второе удаление перепроверяет под транзакцией
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=1)
+    real = jobs.remove_account
+
+    def raced(cfg_, c, a):  # соседний запрос успел удалить другую полку (запрос идёт в потоке приложения)
+        with closing(store.connect(cfg.db)) as other:
+            real(cfg_, other, people.get_account(other, 1))
+        return real(cfg_, c, a)
+
+    monkeypatch.setattr(jobs, "remove_account", raced)
+    r = web.client.post(f"/apple/{second.id}/delete")
+    assert r.status_code == 400 and "Последний Apple ID владельца удалить нельзя" in r.text
+    assert people.get_account(conn, second.id) and people.get_user(conn, 1)
 
 
 def test_member_deleting_last_apple_id_leaves(web, conn, cfg, clock):

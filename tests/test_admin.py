@@ -85,8 +85,19 @@ def test_login_link_for_member(web, conn, cfg, clock):
 def test_logout_everywhere_for_member(web, conn, cfg, clock):
     p, member = member_client(web, cfg, conn, clock)
     assert member.get("/", follow_redirects=False).status_code == 200
-    web.client.post(f"/admin/users/{p.user_id}/logout-all")
+    r = web.client.post(f"/admin/users/{p.user_id}/logout-all", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/admin"
     assert member.get("/", follow_redirects=False).status_code == 303
+
+
+def test_owner_logging_self_out_everywhere_leaves_admin(web, conn, cfg, clock):
+    # владелец погасил себя, а в браузере вошёл ещё кто-то: «Участники» уже закрыты — переход на каталог
+    p = petr(conn, clock)
+    sign_in(web.client, cfg, conn, clock, p.user_id)
+    r = web.client.post("/admin/users/1/logout-all", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    page = web.client.get("/", follow_redirects=False)
+    assert page.status_code == 200 and "petr@example" in page.text and "owner@example" not in page.text
 
 
 def test_delete_member_with_shelves(web, conn, cfg, clock):

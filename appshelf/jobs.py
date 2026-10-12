@@ -42,6 +42,10 @@ class AccountBusy(Exception):
     """У Apple ID идёт задание или вызов ipatool: удали его сейчас — каталог полки и HOME появятся снова без хозяина."""
 
 
+class LastOwnerAccount(Exception):
+    """Последний Apple ID владельца: с ним удалился бы и владелец — сервер остался бы без него."""
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -231,7 +235,9 @@ def unpublish(cfg: Config, c, acct, app_id: int) -> None:
 def remove_account(cfg: Config, c, acct) -> None:
     """Apple ID целиком: строки полки, каталог в архиве, HOME ipatool (учётка и cookies). Был последним у
     человека — удаляется и человек. Архив недоступен — ArchiveUnavailable и ничего не удалено: IPA с данными
-    покупателя не должен остаться без хозяина. Идёт задание или вызов ipatool этого Apple ID — AccountBusy."""
+    покупателя не должен остаться без хозяина. Идёт задание или вызов ipatool этого Apple ID — AccountBusy.
+    Последний Apple ID владельца — LastOwnerAccount: проверка здесь, под транзакцией, — два удаления разных его
+    полок в один момент оба видели бы «не последний»."""
     _archive(cfg)
     lock = cfg.locks_dir / f"{acct.id}.lock"
     try:
@@ -239,6 +245,9 @@ def remove_account(cfg: Config, c, acct) -> None:
             with store.tx(c):  # проверка и удаление — одной транзакцией: обработчик не возьмёт задание посередине
                 if store.account_running(c, acct.id):
                     raise AccountBusy(acct.email)
+                last = [a.id for a in people.accounts_of(c, acct.user_id)] == [acct.id]
+                if last and people.is_owner_account(c, acct):
+                    raise LastOwnerAccount(acct.email)
                 store.delete_shelf(c, acct.id)
                 c.execute("DELETE FROM accounts WHERE id=?", (acct.id,))
                 if not people.accounts_of(c, acct.user_id):

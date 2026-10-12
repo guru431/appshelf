@@ -267,7 +267,9 @@ def test_logout_and_logout_everywhere(web, conn, cfg, clock):
     assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     other = TestClient(web.app, base_url=BASE)
     sign_in(other, cfg, conn, clock)
-    assert other.post("/logout-all/1", follow_redirects=False).status_code == 303
+    r = other.post("/logout-all/1", follow_redirects=False)           # последний в браузере — как «Выйти»
+    assert r.status_code == 303 and r.headers["location"] == "/login"
+    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     assert people.get_user(conn, 1).epoch == 1
     web.client.cookies.set("appshelf_auth", old, domain=HOST)
     assert web.client.get("/", follow_redirects=False).status_code == 303   # старая cookie после «выйти везде»
@@ -492,6 +494,20 @@ def test_add_form_renders_when_browser_session_is_gone(web, conn):  # 2026-10-12
     people.bump_epoch(conn, 1)                                        # «выйти везде» с другого устройства
     r = web.client.post("/login/code", data={"code": "12"})
     assert r.status_code == 400 and "Код — 6 цифр" in r.text and 'href="/admin"' not in r.text
+
+
+def test_right_code_after_logout_everywhere_adds_nothing(web, conn):
+    # человека погасили посреди «Добавить»: верный код не привязывает к нему Apple ID и не возвращает вход
+    t = FakeTool()
+    t.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    web.queue.append(t)
+    web.client.post("/apple/add", data={"email": "second@example", "password": "pw"})
+    people.bump_epoch(conn, 1)                                        # «выйти везде» с другого устройства
+    r = web.client.post("/login/code", data={"code": "123456", "next": "/apple"})
+    assert r.status_code == 403 and "войдите и добавьте Apple ID заново" in r.text
+    assert "appshelf_auth=" not in cookies(r)
+    assert people.account_by_email(conn, "second@example") is None and not t.home.exists()
+    assert web.client.get("/", follow_redirects=False).status_code == 303
 
 
 def test_code_step_can_be_abandoned(make_web, cfg, conn, acct, clock):
