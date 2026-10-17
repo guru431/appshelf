@@ -358,6 +358,25 @@ def test_remove_user_with_all_apple_ids(ctx, cfg, conn, clock):
     assert people.get_user(conn, petr.user_id) is None and people.accounts_of(conn, petr.user_id) == []
 
 
+def test_remove_user_deletes_nothing_while_one_apple_id_is_busy(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    second = make_account(conn, clock, email="petr2@example", legacy=False, user_id=petr.user_id)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    with ipatool.hold(cfg.locks_dir / f"{second.id}.lock"):  # идёт вызов ipatool второго Apple ID Петра
+        with pytest.raises(jobs.AccountBusy):
+            jobs.remove_user(cfg, conn, petr.user_id)
+    assert [a.id for a in people.accounts_of(conn, petr.user_id)] == [petr.id, second.id]
+
+
+def test_remove_after_move_deletes_new_shelf(ctx, cfg, conn, clock):
+    petr = member(conn, clock)
+    shelf_with_version(cfg, petr.shelf)
+    jobs.move_shelf(cfg, conn, petr)            # rotate-token, пока была открыта страница удаления
+    moved = people.get_account(conn, petr.id)
+    jobs.remove_account(cfg, conn, petr)        # у запроса — строка Apple ID до переноса
+    assert not (cfg.archive / moved.shelf).exists()
+
+
 def test_failed_copy_to_share_leaves_nothing_on_shelf(ctx, cfg, conn, clock, tmp_path, monkeypatch):
     acct = published(conn, clock)
     ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123)
@@ -518,6 +537,22 @@ def test_move_refused_while_apple_id_downloads(ctx, cfg, conn, clock):
     store.take_job(conn)                                               # публикация Петра качается
     with pytest.raises(jobs.AccountBusy):
         jobs.move_shelf(cfg, conn, petr)
+    assert people.get_account(conn, petr.id) == petr
+
+
+def test_move_of_removed_apple_id_does_nothing(ctx, cfg, conn, clock):
+    petr = member(conn, clock)
+    jobs.remove_account(cfg, conn, petr)                               # удалили, пока перенос ждал замки
+    jobs.move_shelf(cfg, conn, petr)
+    assert people.get_account(conn, petr.id) is None and not cfg.shelf_root(petr).exists()
+
+
+def test_move_waits_for_removal_of_apple_id(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    with ipatool.hold(cfg.locks_dir / f"{petr.id}.lock"):              # удаление этого Apple ID идёт
+        with pytest.raises(jobs.AccountBusy):
+            jobs.move_shelf(cfg, conn, petr)
     assert people.get_account(conn, petr.id) == petr
 
 

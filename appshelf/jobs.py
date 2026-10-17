@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -238,25 +238,44 @@ def remove_account(cfg: Config, c, acct) -> None:
     покупателя не должен остаться без хозяина. Идёт задание или вызов ipatool этого Apple ID — AccountBusy.
     Последний Apple ID владельца — LastOwnerAccount: проверка здесь, под транзакцией, — два удаления разных его
     полок в один момент оба видели бы «не последний»."""
+    def last_owner_id():
+        last = [a.id for a in people.accounts_of(c, acct.user_id)] == [acct.id]
+        if last and people.is_owner_account(c, acct):
+            raise LastOwnerAccount(acct.email)
+
+    _remove(cfg, c, [acct], last_owner_id)
+
+
+def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None) -> None:
+    """Apple ID под замками их ipatool, строки — одной транзакцией: обработчик не возьмёт задание посередине, и
+    занятость любого — AccountBusy до удаления первого. Каталоги полок — по строкам из той же транзакции:
+    rotate-token мог перенести полку, пока ждали замок."""
     _archive(cfg)
-    lock = cfg.locks_dir / f"{acct.id}.lock"
-    try:
-        with hold(lock, REMOVE_LOCK_WAIT):
-            with store.tx(c):  # проверка и удаление — одной транзакцией: обработчик не возьмёт задание посередине
-                if store.account_running(c, acct.id):
-                    raise AccountBusy(acct.email)
-                last = [a.id for a in people.accounts_of(c, acct.user_id)] == [acct.id]
-                if last and people.is_owner_account(c, acct):
-                    raise LastOwnerAccount(acct.email)
-                store.delete_shelf(c, acct.id)
-                c.execute("DELETE FROM accounts WHERE id=?", (acct.id,))
-                if not people.accounts_of(c, acct.user_id):
-                    people.delete_user_row(c, acct.user_id)
-            store.rmtree_logged(cfg.shelf_root(acct))
-            store.rmtree_logged(cfg.accounts_dir / str(acct.id))
-    except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
-        raise AccountBusy(acct.email) from e
-    _drop_lock(lock)
+    locks = [cfg.locks_dir / f"{a.id}.lock" for a in accts]
+    with ExitStack() as held:
+        for a, lock in zip(accts, locks):
+            try:
+                held.enter_context(hold(lock, REMOVE_LOCK_WAIT))
+            except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
+                raise AccountBusy(a.email) from e
+        with store.tx(c):
+            busy = next((a for a in accts if store.account_running(c, a.id)), None)
+            if busy is not None:
+                raise AccountBusy(busy.email)
+            check()
+            fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
+            for a in fresh:
+                store.delete_shelf(c, a.id)
+                c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
+                if not people.accounts_of(c, a.user_id):
+                    people.delete_user_row(c, a.user_id)
+        for a in fresh:
+            store.rmtree_logged(cfg.shelf_root(a))
+            if a.shelf_next:  # перенос прервался после переименования каталога
+                store.rmtree_logged(cfg.archive / a.shelf_next)
+            store.rmtree_logged(cfg.accounts_dir / str(a.id))
+    for lock in locks:
+        _drop_lock(lock)
 
 
 def _drop_lock(lock) -> None:
@@ -275,30 +294,28 @@ def drop_account_files(cfg: Config, aid: int) -> None:
 
 
 def remove_user(cfg: Config, c, uid: int) -> None:
-    """Человек со всеми Apple ID: удаление последнего удаляет и строку человека. Задание у любого его Apple ID —
-    AccountBusy до удаления первого."""
-    accounts = people.accounts_of(c, uid)
-    busy = next((a for a in accounts if store.account_running(c, a.id)), None)
-    if busy is not None:
-        raise AccountBusy(busy.email)
-    for acct in accounts:
-        remove_account(cfg, c, acct)
+    """Человек со всеми Apple ID — разом (_remove): задание или вызов ipatool у любого его Apple ID — AccountBusy,
+    и не удалено ничего."""
+    _remove(cfg, c, people.accounts_of(c, uid))
 
 
 def move_shelf(cfg: Config, c, acct) -> None:
     """Новый случайный токен каталога полки: каталог в архиве переименовать, ссылки в manifest.plist — поправить.
     appshelf rotate-token (ссылки полки утекли) и перенос каталогов версии 2 (move_shelves). Новый токен сначала
     ложится в shelf_next: сбой посередине доделает следующий вызов. На время переноса держим замок скачивания —
-    fetch_version не начнёт писать в прежний каталог. Архив недоступен — ArchiveUnavailable; идёт задание Apple ID
-    или чьё-то скачивание — AccountBusy."""
+    fetch_version не начнёт писать в прежний каталог — и замок Apple ID: удаление не пройдёт посреди переноса.
+    Apple ID удалили, пока ждали замки, — переносить нечего. Архив недоступен — ArchiveUnavailable; идёт задание,
+    удаление или вызов ipatool Apple ID или чьё-то скачивание — AccountBusy."""
     _archive(cfg)
     try:
-        with hold(cfg.download_lock, REMOVE_LOCK_WAIT):
+        with hold(cfg.download_lock, REMOVE_LOCK_WAIT), hold(cfg.locks_dir / f"{acct.id}.lock", REMOVE_LOCK_WAIT):
             with store.tx(c):
                 if store.account_running(c, acct.id):
                     raise AccountBusy(acct.email)
-                acct = people.get_account(c, acct.id)
-                if not acct.shelf_next:
+                cur = people.get_account(c, acct.id)
+                if cur is None:
+                    return
+                if not cur.shelf_next:
                     people.set_shelf_next(c, acct.id, people.new_shelf_token())
             acct = people.get_account(c, acct.id)
             old, new = cfg.shelf_token(acct), acct.shelf_next
@@ -308,7 +325,7 @@ def move_shelf(cfg: Config, c, acct) -> None:
             for m in dst.glob("*/manifest.plist"):
                 _relink(m, f"{cfg.public_base}/d/{old}/", f"{cfg.public_base}/d/{new}/")
             people.set_shelf(c, acct.id, new)
-    except IpatoolError as e:  # не дождались замка скачивания
+    except IpatoolError as e:  # не дождались замка скачивания или Apple ID
         raise AccountBusy(acct.email) from e
 
 

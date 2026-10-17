@@ -66,20 +66,19 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     app = FastAPI(title="appshelf", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.w, app.state.worker = w, worker
+    site = urlsplit(cfg.public_base).netloc.lower()
 
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):
-        # cookie браузер подставляет и в межсайтовые запросы: POST сверяем по Origin с хостом запроса
+        # cookie браузер подставляет и в межсайтовые запросы: POST сверяем по Origin с адресом сайта. Не с
+        # X-Forwarded-Host: Apache дописывает свой к присланному клиентом, а Host от Apache — localhost сокета
         origin = request.headers.get("origin")
         if origin == "null" and request.headers.get("sec-fetch-site") == "same-origin":
             # Referrer-Policy: no-referrer (глобально в Apache) превращает Origin своего POST в null;
             # Sec-Fetch-Site ставит сам браузер, со страницы его не подделать
             origin = None
-        if request.method == "POST" and origin is not None:
-            host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
-            host = host.split(",")[0].strip().lower()
-            if urlsplit(origin).netloc.lower() != host:
-                return PlainTextResponse("Forbidden: cross-origin POST", status_code=403)
+        if request.method == "POST" and origin is not None and urlsplit(origin).netloc.lower() != site:
+            return PlainTextResponse("Forbidden: cross-origin POST", status_code=403)
         return await call_next(request)
 
     @app.middleware("http")

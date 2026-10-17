@@ -1,6 +1,14 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-17 · code-review role:review: В register для текста письма берётся первый Apple ID добавля... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/signin.py:152 (register), category=bug
+**What:** В register для текста письма берётся первый Apple ID добавляющего: `people.accounts_of(c, adder.id)[0]` без проверки на пустой список. Сам adder проверяется на существование (комментарий прямо описывает гонку удаления/«Выйти везде»), но у ещё существующего человека к этому моменту могут быть удалены все Apple ID (remove_user удаляет аккаунты, потом строку пользователя) — IndexError → 500 на шаге кода 2FA после верного кода.
+**Evidence:** `how = f"добавлен из панели участника «{adder.name}» ({people.accounts_of(c, adder.id)[0].email})"`
+**Proposal:** Использовать `next((a.email for a in people.accounts_of(c, adder.id)), adder.name)` или не упоминать Apple ID в how вовсе.
+**Status:** wontfix
+**Resolved:** 2026-10-18 — тот же довод, что у отклонённой 2026-10-11 находки о запасной ссылке (ниже): человека без Apple ID в базе не бывает. Удаление последнего Apple ID удаляет и человека в той же транзакции (`jobs._remove`, общая для `remove_account` и `remove_user`), а `register` читает `adder` и его Apple ID внутри своей `BEGIN IMMEDIATE` — промежуточного состояния «человек есть, Apple ID нет» она не видит. Проверка на пустой список была бы обработкой невозможного случая.
+
 ## 2026-10-10 · code-review role:review: POST по запасной ссылке расходует её (use_login_link ставит ... [P3]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/web/signin.py:424-431, category=correctness
 **What:** POST по запасной ссылке расходует её (use_login_link ставит used_at) до проверки, что человеку есть куда впустить: если у пользователя не осталось ни одного Apple ID (все удалены), вход невозможен, но ссылка уже сожжена — повторный клик даст «Ссылка недействительна», и владельцу придётся выдавать новую.

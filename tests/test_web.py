@@ -57,6 +57,12 @@ def test_cross_origin_post_forbidden(web, conn, cfg, clock):
     seed_app(conn, cfg, clock, versions=("1.0",))
     r = web.client.post("/apps/123/unpublish", headers={"Origin": "https://evil.example"})
     assert r.status_code == 403 and store.list_apps(conn, 1)
+    # X-Forwarded-Host Apache дописывает к присланному клиентом: первым в нём идёт чужой
+    r = web.client.post("/apps/123/unpublish", headers={"Origin": "https://evil.example",
+                                                        "X-Forwarded-Host": f"evil.example, {HOST}"})
+    assert r.status_code == 403 and store.list_apps(conn, 1)
+    r = web.client.post("/apps/123/unpublish", headers={"Origin": f"https://{HOST}"}, follow_redirects=False)
+    assert r.status_code == 303 and store.list_apps(conn, 1) == []
 
 
 def test_catalog_shows_install_and_previous(web, conn, cfg, clock):

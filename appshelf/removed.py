@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from functools import cache
 from importlib import resources
 
 from . import store
@@ -18,6 +19,7 @@ class Interrupted(Exception):
     """Проверка уступила очередь (stop() — в очереди публикация); проверенное запомнено, продолжит с места."""
 
 
+@cache  # справочник — в пакете: до перезапуска службы не меняется, а поиск «Истории» зовёт его на каждый запрос
 def load() -> list[dict]:
     doc = json.loads(resources.files("appshelf").joinpath("data/removed_apps.json").read_text(encoding="utf-8"))
     return doc["apps"]
