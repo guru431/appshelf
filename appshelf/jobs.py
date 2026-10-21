@@ -150,11 +150,14 @@ def refresh_history(env: Env, c, acct) -> int:
     return store.upsert_purchases(c, acct.id, env.tools(acct).list_purchases(), env.now())
 
 
-def version_dir_name(c, aid: int, app_id: int, version: str, external_id: str) -> str:
-    """<app_id>-<version>; занято другой версией этого Apple ID — с external id, затем -2, -3…"""
+def version_dir_name(c, aid: int, root: Path, app_id: int, version: str, external_id: str) -> str:
+    """<app_id>-<version>; занято (версия этого Apple ID в базе или каталог на диске) — с external id, затем -2, -3…
+    Каталог на диске без строки не перезаписываем: его может ещё удалять завершающееся снятие с публикации
+    (store.unpublish удаляет каталоги после COMMIT). Остаток жёсткого падения между os.replace и COMMIT поэтому
+    остаётся сиротой на полке."""
     base = f"{app_id}-{SAFE_RE.sub('_', version) or 'v'}"
     name, n = base, 1
-    while store.dir_in_use(c, aid, name):
+    while store.dir_in_use(c, aid, name) or (root / name).exists():
         name = f"{base}-{SAFE_RE.sub('_', external_id)}" if n == 1 else f"{base}-{n}"
         n += 1
     return name
@@ -193,10 +196,9 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
             if free - size < RESERVE:
                 raise LowSpace(f"мало места в архиве: свободно {free / GB:.1f} ГБ, IPA — {size / GB:.1f} ГБ, "
                                f"запас — {RESERVE // GB} ГБ")
-            name = version_dir_name(c, acct.id, app_id, info.version, info.external_version_id)
+            name = version_dir_name(c, acct.id, root, app_id, info.version, info.external_version_id)
             final, partial = root / name, root / f".{name}.partial"
             shutil.rmtree(partial, ignore_errors=True)
-            shutil.rmtree(final, ignore_errors=True)  # остаток прерванной публикации: имя в базе не занято
             try:
                 partial.mkdir(parents=True)
                 shutil.move(src, partial / "app.ipa")  # tmp локально, архив на шаре: os.replace дал бы EXDEV

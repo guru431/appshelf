@@ -214,11 +214,35 @@ def test_download_holds_server_wide_lock(ctx, cfg, conn, clock, tmp_path):
     assert seen == [False] and store.list_apps(conn, 1)[0].status == "ok"
 
 
-def test_version_dir_name_skips_dirs_in_use(conn, cfg, clock):
+def test_version_dir_name_skips_dirs_in_use(conn, cfg, clock, acct):
     seed_app(conn, cfg, clock, app_id=5, versions=("1.0",))
-    assert jobs.version_dir_name(conn, 1, 5, "1.0", "777") == "5-1.0-777"
-    assert jobs.version_dir_name(conn, 1, 5, "2.0", "778") == "5-2.0"
-    assert jobs.version_dir_name(conn, 1, 5, "1.0/../x", "1") == "5-1.0_.._x"
+    root = cfg.shelf_root(acct)
+    assert jobs.version_dir_name(conn, 1, root, 5, "1.0", "777") == "5-1.0-777"
+    assert jobs.version_dir_name(conn, 1, root, 5, "2.0", "778") == "5-2.0"
+    assert jobs.version_dir_name(conn, 1, root, 5, "1.0/../x", "1") == "5-1.0_.._x"
+    (root / "5-2.0").mkdir(parents=True)                  # каталог без строки: его ещё может удалять снятие
+    assert jobs.version_dir_name(conn, 1, root, 5, "2.0", "778") == "5-2.0-778"
+
+
+def test_republish_while_unpublish_removes_dirs_keeps_new_version(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    # снятие удаляет каталоги после COMMIT: повторная публикация в это окно не пишет в удаляемый каталог
+    acct = owner(conn, clock)
+    seed_app(conn, cfg, clock, versions=("1.2.3",), make_dirs=True)  # ext 900, каталог 123-1.2.3
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123, version="1.2.3", external_id="900")
+    real, paused = store.remove_dirs, []
+
+    def remove_dirs(root, names):
+        if not paused:                                    # COMMIT снятия прошёл, каталоги ещё не удалены
+            paused.append(names)
+            store.publish(conn, 1, 123, clock.iso())
+            jobs.fetch_version(ctx.env, conn, acct, 123, cfg.tmp_dir / "web")
+        real(root, names)
+
+    monkeypatch.setattr(store, "remove_dirs", remove_dirs)
+    jobs.unpublish(cfg, conn, acct, 123)
+    cur = store.current_version(conn, 1, 123)
+    assert paused == [["123-1.2.3"]] and cur is not None
+    assert (cfg.shelf_root(acct) / cur["dir"] / "app.ipa").is_file()
 
 
 def test_same_version_string_new_build_gets_own_dir(ctx, cfg, conn, clock, tmp_path):
