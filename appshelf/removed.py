@@ -38,7 +38,8 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
           stop=lambda: False) -> tuple[int, int, int]:
     """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются;
     «нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
-    делает ночь — раз в неделю на Apple ID. stop() перед каждым запросом к Apple: True — Interrupted. Apple ID
+    делает ночь — раз в неделю на Apple ID. Она же обновляет версию (и version_at) известных строк не из DAAP:
+    +2 запроса в неделю на каждое своё удалённое приложение. stop() перед каждым запросом к Apple: True — Interrupted. Apple ID
     удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается."""
     tool = env.tools(acct)
     rows = {r["app_id"]: r for r in store.list_purchases(c, acct.id)}
@@ -47,7 +48,7 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
     for app in load() if catalog is None else catalog:
         row = rows.get(app["id"])
         if row is not None:
-            if full and row["bundle_id"] == "" and row["version"] == "":  # ночью: своё удалённое без версии
+            if full and row["source"] != "daap":  # ночью: последняя версия своего удалённого (DAAP её не обновит)
                 _fill_version(env, c, acct, app["id"])
             continue
         if app["id"] in skip:
@@ -74,7 +75,7 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
         except IpatoolError:  # сбой одного id не останавливает проверку остальных
             errors += 1
             continue
-        store.add_known(c, acct.id, app["id"], app["name"])
+        store.add_known(c, acct.id, app["id"], app["name"], "license")
         store.clear_no_license(c, acct.id, app["id"])
         _fill_version(env, c, acct, app["id"], latest)
         added += 1
@@ -90,7 +91,7 @@ def _session_alive(tool) -> bool:
 
 
 def _fill_version(env, c, acct, app_id: int, latest: str = "") -> None:
-    """Версия до публикации: external id последней версии → displayVersion (get-version-metadata)."""
+    """Последняя версия: external id последней версии → displayVersion (get-version-metadata)."""
     tool = env.tools(acct)
     try:
         version = tool.display_version(app_id, latest or tool.latest_version_id(app_id))
@@ -99,4 +100,4 @@ def _fill_version(env, c, acct, app_id: int, latest: str = "") -> None:
     except IpatoolError:  # без версии строка всё равно полезна
         return
     if version:
-        store.set_purchase_version(c, acct.id, app_id, version)
+        store.set_purchase_version(c, acct.id, app_id, version, env.now())

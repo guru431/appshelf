@@ -190,6 +190,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
                 raise ipa.IpaError(f"в IPA itemId {info.item_id}, ожидался {app_id}")
             if info.title and info.bundle_id:
                 store.fill_names(c, acct.id, app_id, info.title, info.bundle_id)  # добавленное по ссылке — с именем
+            store.set_downloaded(c, acct.id, app_id, info.version, env.now())
             cur = store.current_version(c, acct.id, app_id)
             if cur is not None and cur["external_version_id"] == info.external_version_id:
                 store.set_app_status(c, acct.id, app_id, "ok")

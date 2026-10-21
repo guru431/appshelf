@@ -357,7 +357,7 @@ def add_manual(c, aid: int, app_id: int, now: str) -> bool:
     """Публикация по ссылке или ID App Store: удалённые из магазина приложения (СберБанк, VK, банки)
     Apple не отдаёт в истории покупок DAAP, хотя по id они скачиваются. Строка истории — заглушка
     без bundle id; имя и bundle id подставит первое скачивание (fill_names)."""
-    add_known(c, aid, app_id, f"App Store {app_id}")
+    add_known(c, aid, app_id, f"App Store {app_id}", "manual")
     return publish(c, aid, app_id, now)
 
 
@@ -380,19 +380,29 @@ def mark_no_license(c, aid: int, app_id: int, now: str) -> None:
         raise AccountGone(aid)
 
 
-def set_purchase_version(c, aid: int, app_id: int, version: str) -> None:
-    c.execute("UPDATE purchases SET version=? WHERE account_id=? AND app_id=?", (version, aid, app_id))
+def set_purchase_version(c, aid: int, app_id: int, version: str, now: str) -> None:
+    """Версия строки не из DAAP — последняя доступная, с временем проверки."""
+    c.execute("UPDATE purchases SET version=?, version_at=? WHERE account_id=? AND app_id=?",
+              (version, now, aid, app_id))
+
+
+def set_downloaded(c, aid: int, app_id: int, version: str, now: str) -> None:
+    """Apple отдал IPA: версия из него — в строку «Истории» не из DAAP (свои строки DAAP обновляет сам)."""
+    c.execute("UPDATE purchases SET version=?, version_at=? WHERE account_id=? AND app_id=? AND source != 'daap'",
+              (version, now, aid, app_id))
 
 
 def clear_no_license(c, aid: int, app_id: int) -> None:
     c.execute("DELETE FROM removed_checks WHERE account_id=? AND app_id=?", (aid, app_id))
 
 
-def add_known(c, aid: int, app_id: int, name: str) -> None:
-    """Строка «Истории» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст. Удалённому
-    Apple ID строку не вставляем — AccountGone."""
-    cur = c.execute("INSERT OR IGNORE INTO purchases (account_id, app_id, name, refreshed_at) SELECT ?, ?, ?, '' "
-                    "WHERE EXISTS (SELECT 1 FROM accounts WHERE id=?)", (aid, app_id, name, aid))
+def add_known(c, aid: int, app_id: int, name: str, source: str) -> None:
+    """Строка «Истории» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст. source —
+    'license' (лицензию нашла проверка справочника) или 'manual' (добавлено по ссылке); прежнюю строку и её source
+    не трогаем. Удалённому Apple ID строку не вставляем — AccountGone."""
+    cur = c.execute("INSERT OR IGNORE INTO purchases (account_id, app_id, name, refreshed_at, source) "
+                    "SELECT ?, ?, ?, '', ? WHERE EXISTS (SELECT 1 FROM accounts WHERE id=?)",
+                    (aid, app_id, name, source, aid))
     if cur.rowcount == 0:  # строка уже была — или Apple ID нет
         _require_account(c, aid)
 

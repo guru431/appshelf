@@ -12,7 +12,7 @@
 {% for i in items %}
 <div class="row{{ ' inactive' if i.status != 'owned' }}">
   <div class="body"><b>{{ i.name }}</b><div class="meta">
-    {%- if i.version %}{{ i.version }} · {% endif -%}
+    {%- if i.version %}{{ i.version }}{% if i.version_at %} · проверено {{ i.version_at[8:10] }}.{{ i.version_at[5:7] }}{% endif %} · {% endif -%}
     {%- if i.name != i.catalog_name %}{{ i.catalog_name }} · {% endif -%}
     ID {{ i.id }} · {{ {'owned': 'есть в аккаунте', 'missing': 'нет в аккаунте', 'unknown': 'не проверено'}[i.status] }}</div></div>
   {% if i.status == 'owned' %}<div class="act">{% if i.published %}<span class="meta done">в каталоге</span>{% else %}

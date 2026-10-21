@@ -22,7 +22,7 @@
 {% for r in rows %}
 <div class="row">
   <div class="body"><b>{{ r['name'] }}</b><div class="meta">
-    {%- if r['version'] %}{{ r['version'] }} · {% endif -%}
+    {%- if r['version'] %}{{ r['version'] }}{% set t = r['version_at'] %}{% if t %} · проверено {{ t[8:10] }}.{{ t[5:7] }}{% endif %} · {% endif -%}
     {%- if r['bundle_id'] %}{{ r['bundle_id'] }}{% if r['purchase_date'] %} · {{ r['purchase_date'][:10] }}{% endif %}
     {%- else %}<span class="tag">удалено из App Store</span> ID {{ r['app_id'] }}{% endif %}</div></div>
   <div class="act">{% if r['published'] %}<span class="meta done">в каталоге</span>{% else %}

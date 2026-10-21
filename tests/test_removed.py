@@ -179,8 +179,28 @@ def test_check_fills_versions_of_owned_removed_apps(ctx, conn, clock):
     assert [(r["app_id"], r["version"]) for r in store.list_purchases(conn, 1)] == [(1, "12.15.0")]
     ctx.tool.versions[3] = "8.1"
     ctx.tool.latest[3] = "801"
-    store.add_known(conn, 1, 3, "ВКонтакте")          # раньше добавлено без версии
+    store.add_known(conn, 1, 3, "ВКонтакте", "license")        # раньше добавлено без версии
     removed.check(ctx.env, conn, acct, [CATALOG[2]])
     assert {r["app_id"]: r["version"] for r in store.list_purchases(conn, 1)}[3] == ""   # кнопка не дозаполняет
     removed.check(ctx.env, conn, acct, [CATALOG[2]], full=True)                         # ночь — дозаполняет
     assert {r["app_id"]: r["version"] for r in store.list_purchases(conn, 1)}[3] == "8.1"
+
+
+def test_full_check_refreshes_versions_of_known_removed_apps(ctx, conn, clock):
+    # удалённое из App Store DAAP не обновит: версия строки — последняя доступная, с датой проверки
+    acct = owner(conn, clock)
+    store.upsert_purchases(conn, 1, [{"id": 3, "bundleId": "com.vk.vkclient", "name": "VK", "version": "9.0"}],
+                           clock.iso())
+    ctx.tool.latest.update({1: "900", 2: "800"})
+    ctx.tool.versions.update({1: "1.0", 2: "5.0"})
+    removed.check(ctx.env, conn, acct, CATALOG)
+    store.fill_names(conn, 1, 2, "Т-Банк", "com.tbank.app")          # уже скачивали: bundle id есть
+    clock.advance(86400)
+    ctx.tool.latest.update({1: "901", 2: "801"})
+    ctx.tool.versions.update({1: "2.0", 2: "6.0"})
+    ctx.tool.calls.clear()
+    removed.check(ctx.env, conn, acct, CATALOG)                       # кнопка известное не перезапрашивает
+    assert ctx.tool.calls == []
+    removed.check(ctx.env, conn, acct, CATALOG, full=True)
+    rows = {r["app_id"]: (r["version"], r["version_at"]) for r in store.list_purchases(conn, 1)}
+    assert rows == {1: ("2.0", clock.iso()), 2: ("6.0", clock.iso()), 3: ("9.0", "")}

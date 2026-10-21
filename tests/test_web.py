@@ -176,7 +176,7 @@ def test_refresh_also_checks_removed_and_marks_them(web, conn, clock):
     web.client.post("/history/refresh")
     assert sorted(r["kind"] for r in conn.execute("SELECT kind FROM jobs WHERE status='queued'")) == \
         ["check_removed", "refresh_history"]
-    store.add_known(conn, 1, 492224193, "СберБанк Онлайн")
+    store.add_known(conn, 1, 492224193, "СберБанк Онлайн", "license")
     r = web.client.get("/history", params={"q": "сбер"})
     assert "СберБанк Онлайн" in r.text and "удалено из App Store" in r.text
 
@@ -191,8 +191,8 @@ def test_history_search_uses_catalog_aliases(web, conn, monkeypatch):  # «vk»,
     from appshelf import removed
     monkeypatch.setattr(removed, "load", lambda: [{"id": 564177498, "name": "ВКонтакте", "aliases": ["vk", "вк"]},
                                                   {"id": 6739530834, "name": "МАКС", "aliases": ["max", "макс"]}])
-    store.add_known(conn, 1, 564177498, "ВКонтакте")
-    store.add_known(conn, 1, 6739530834, "МАКС")
+    store.add_known(conn, 1, 564177498, "ВКонтакте", "license")
+    store.add_known(conn, 1, 6739530834, "МАКС", "license")
     assert "ВКонтакте" in web.client.get("/history", params={"q": "vk"}).text
     r = web.client.get("/history", params={"q": "MAX"})
     assert "МАКС" in r.text and "ВКонтакте" not in r.text
@@ -226,12 +226,21 @@ def test_blocked_page_marks_apps_missing_from_account(web, conn, clock, monkeypa
     from appshelf import removed
     monkeypatch.setattr(removed, "load", lambda: [{"id": 1, "name": "СберБанк Онлайн"}, {"id": 2, "name": "ВТБ Онлайн"},
                                                   {"id": 3, "name": "Альфа-Банк"}])
-    store.add_known(conn, 1, 1, "СберБанк Онлайн")
+    store.add_known(conn, 1, 1, "СберБанк Онлайн", "license")
     store.mark_no_license(conn, 1, 2, clock.iso())
     r = web.client.get("/blocked")
     assert r.status_code == 200
     assert "Есть в аккаунте: 1" in r.text and "нет в аккаунте: 1" in r.text and "не проверено: 1" in r.text
     assert 'class="row inactive"' in r.text and "/apps/1/publish" in r.text and "/apps/2/publish" not in r.text
+
+
+def test_history_and_removed_show_when_version_was_checked(web, conn, monkeypatch):
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 492224193, "name": "СберБанк Онлайн"}])
+    store.add_known(conn, 1, 492224193, "СберБанк Онлайн", "license")
+    store.set_purchase_version(conn, 1, 492224193, "2.0", "2026-10-21T03:00:00+00:00")
+    for page in ("/history", "/blocked"):
+        assert "2.0 · проверено 21.10" in web.client.get(page).text, page
 
 
 def test_theme_switch_sets_cookie(web):

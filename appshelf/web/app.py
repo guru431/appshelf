@@ -198,7 +198,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             status = "owned" if row is not None else ("missing" if e["id"] in no_license else "unknown")
             items.append({"id": e["id"], "name": row["name"] if row is not None else e["name"],
                           "catalog_name": e["name"], "aliases": " ".join(e.get("aliases", [])),
-                          "version": row["version"] if row is not None else "", "status": status,
+                          "version": row["version"] if row is not None else "",
+                          "version_at": row["version_at"] if row is not None else "", "status": status,
                           "published": e["id"] in published})
         counts = {s: sum(1 for i in items if i["status"] == s) for s in ("owned", "missing", "unknown")}
         needle = q.strip().casefold()

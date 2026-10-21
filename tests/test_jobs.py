@@ -312,6 +312,25 @@ def test_manual_app_gets_name_from_ipa(ctx, cfg, conn, clock, tmp_path):
     assert [(r["name"], r["bundle_id"]) for r in store.list_purchases(conn, 1)] == [("Пример & Ко", "ru.example.app")]
 
 
+def test_download_updates_version_of_history_row_not_from_daap(ctx, cfg, conn, clock, tmp_path):
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    store.add_known(conn, 1, 5, "СберБанк Онлайн", "license")       # нашла проверка справочника: 1.0
+    store.set_purchase_version(conn, 1, 5, "1.0", clock.iso())
+    store.upsert_purchases(conn, 1, [{"id": 6, "bundleId": "ru.example.six", "name": "Шесть", "version": "9.0"}],
+                           clock.iso())
+    for app_id in (5, 6):
+        store.publish(conn, 1, app_id, clock.iso())
+        ctx.tool.ipas[app_id] = make_ipa(tmp_path / f"{app_id}.ipa", item_id=app_id, version="2.0",
+                                         external_id=str(900 + app_id))
+    clock.advance(60)
+    w = worker(ctx, cfg)
+    w.tick()
+    w.tick()
+    rows = {r["app_id"]: (r["version"], r["version_at"]) for r in store.list_purchases(conn, 1)}
+    assert rows == {5: ("2.0", clock.iso()), 6: ("9.0", "")}         # строку DAAP обновляет DAAP
+
+
 def test_remove_account_deletes_rows_dirs_and_last_user(ctx, cfg, conn, clock):
     petr = member(conn, clock)
     seed_app(conn, cfg, clock, app_id=7, acct=petr, versions=("1.0",), make_dirs=True)
