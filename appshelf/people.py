@@ -106,13 +106,27 @@ def all_accounts(c) -> list[Account]:
     return [_account(r) for r in c.execute("SELECT * FROM accounts ORDER BY id")]
 
 
-def create_account(c, uid: int, email: str, info: dict, device_mac: str, now: str) -> int:
-    """Apple ID после первого успешного входа: токен магазина уже есть — session=ok. Каталог полки в архиве —
+def create_account(c, uid: int, email: str, info: dict, device_mac: str, now: str, session: str = "ok") -> int:
+    """Apple ID после первого успешного входа: токен магазина уже есть — session=ok. Регистрация (web/signin.py)
+    пишет session=none, пока учётка не легла в accounts/<id>, — тогда mark_ready. Каталог полки в архиве —
     случайный токен: ни из своего токена, ни из ссылок владельца чужой не вычислить."""
     return c.execute("""INSERT INTO accounts (user_id, email, name, storefront, session, session_since, device_mac,
-                            last_login_at, created_at, shelf) VALUES (?, ?, ?, ?, 'ok', ?, ?, ?, ?, ?)""",
+                            last_login_at, created_at, shelf) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                      (uid, normalize_email(email), str(info.get("name", "")), str(info.get("storefront", "")),
-                      now, device_mac, now, now, new_shelf_token())).lastrowid
+                      session, now, device_mac, now, now, new_shelf_token())).lastrowid
+
+
+def mark_ready(c, aid: int, now: str) -> bool:
+    """Учётка нового Apple ID легла в accounts/<id>: session=none → ok, задания и ночь его теперь берут. Вход тем же
+    Apple ID из другого браузера мог успеть раньше — его session не трогаем. False — Apple ID уже удалили."""
+    c.execute("UPDATE accounts SET session='ok', session_since=? WHERE id=? AND session='none'", (now, aid))
+    return get_account(c, aid) is not None
+
+
+def drop_unready(c, aid: int) -> bool:
+    """Строка Apple ID, регистрация которого не перенесла учётку, — только пока session=none: вход тем же Apple ID
+    из другого браузера мог её уже оживить. True — удалили."""
+    return c.execute("DELETE FROM accounts WHERE id=? AND session='none'", (aid,)).rowcount > 0
 
 
 def new_shelf_token() -> str:

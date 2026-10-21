@@ -1,3 +1,5 @@
+import os
+import sqlite3
 from contextlib import closing
 from dataclasses import replace
 
@@ -6,6 +8,7 @@ from starlette.testclient import TestClient
 
 from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
+from appshelf.web import signin
 from helpers import HOST, FakeTool, make_account, seed_app, sign_in
 
 BASE = f"https://{HOST}"
@@ -547,3 +550,109 @@ def test_first_login_loads_history_right_away(make_web, cfg, conn, acct, clock):
     other = TestClient(wb.app, base_url=BASE)
     other.post("/login", data={"email": "petr@example", "password": "pw"})          # история уже есть
     assert conn.execute("SELECT COUNT(*) FROM jobs WHERE account_id=?", (petr.id,)).fetchone()[0] == 2
+
+
+class Crash(Exception):
+    """Процесс упал посреди регистрации."""
+
+
+def invited_login(wb, conn, clock, monkeypatch, on_move):
+    """Вход нового Apple ID petr@example по приглашению; on_move(src, dst) — вместо переноса временного HOME."""
+    wb.client.get(f"/join/{people.create_link(conn, people.INVITE, 'все', None, clock.iso())}")
+    real = os.replace
+
+    def move(src, dst):
+        return on_move(src, dst) if os.path.basename(src).startswith(".new-") else real(src, dst)
+
+    monkeypatch.setattr(signin.os, "replace", move)
+    return wb.client.post("/login", data={"email": "petr@example", "password": "S3cret-pw"}, follow_redirects=False)
+
+
+def login_again(wb):
+    """Повторный вход тем же Apple ID из другого браузера — уже как известным."""
+    return TestClient(wb.app, base_url=BASE).post("/login", data={"email": "petr@example", "password": "pw"},
+                                                  follow_redirects=False)
+
+
+def test_new_apple_id_not_ready_until_home_moved(make_web, cfg, conn, acct, clock, monkeypatch):
+    # находка аудита 2026-10-21: session=ok ставилась до переноса HOME — обработчик и ночь видели Apple ID без учётки
+    wb, seen = make_web(cfg, conn), []
+
+    def move(src, dst):
+        with closing(store.connect(cfg.db)) as c:
+            aid = people.account_by_email(c, "petr@example").id
+            store.enqueue_once(c, aid, "refresh_history", None, clock.iso())
+            seen.append((people.get_account(c, aid).session, store.take_job(c)))
+        os.rename(src, dst)
+
+    assert invited_login(wb, conn, clock, monkeypatch, move).status_code == 303
+    assert seen == [("none", None)]
+    petr = people.account_by_email(conn, "petr@example")
+    assert petr.session == "ok" and (cfg.accounts_dir / str(petr.id) / ".ipatool" / "account").is_file()
+    assert store.take_job(conn)["account_id"] == petr.id
+
+
+def test_home_move_failure_rolls_registration_back(make_web, cfg, conn, acct, clock, monkeypatch, capsys):
+    wb = make_web(cfg, conn)
+
+    def move(src, dst):
+        raise OSError(18, "Invalid cross-device link")
+
+    r = invited_login(wb, conn, clock, monkeypatch, move)
+    assert r.status_code == 500 and "сервер не смог сохранить вход" in r.text and "appshelf_auth=" not in cookies(r)
+    assert people.account_by_email(conn, "petr@example") is None and [u.id for u in people.list_users(conn)] == [1]
+    assert not list(cfg.accounts_dir.glob(".new-*")) and wb.sent == []
+    assert people.list_invites(conn)[0]["joined"] == 0
+    err = capsys.readouterr().err
+    assert "не перенесена" in err and "petr@example" not in err and "S3cret-pw" not in err
+
+
+def test_mark_ready_db_error_finishes_on_next_login(make_web, cfg, conn, acct, clock, monkeypatch):
+    wb = make_web(cfg, conn)
+
+    def broken(c, aid, now):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(people, "mark_ready", broken)
+    r = invited_login(wb, conn, clock, monkeypatch, os.rename)
+    assert r.status_code == 500 and "сервер не смог сохранить вход" in r.text and "appshelf_auth=" not in cookies(r)
+    petr = people.account_by_email(conn, "petr@example")
+    assert petr.session == "none" and (cfg.accounts_dir / str(petr.id) / ".ipatool" / "account").is_file()
+    monkeypatch.undo()
+    assert login_again(wb).status_code == 303 and people.get_account(conn, petr.id).session == "ok"
+
+
+def test_crash_after_commit_finishes_on_next_login(make_web, cfg, conn, acct, clock, monkeypatch, ctx):
+    wb = make_web(cfg, conn)
+
+    def move(src, dst):
+        raise Crash()
+
+    with pytest.raises(Crash):
+        invited_login(wb, conn, clock, monkeypatch, move)
+    petr = people.account_by_email(conn, "petr@example")
+    home = cfg.accounts_dir / str(petr.id)
+    assert petr.session == "none" and not home.exists() and list(cfg.accounts_dir.glob(".new-*"))
+    store.enqueue_once(conn, petr.id, "refresh_history", None, clock.iso())
+    assert store.take_job(conn) is None                       # Apple ID без учётки обработчик не берёт
+    monkeypatch.undo()
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).recover()   # перезапуск: временный HOME прочь
+    assert not list(cfg.accounts_dir.glob(".new-*"))
+    assert login_again(wb).status_code == 303 and people.get_account(conn, petr.id).session == "ok"
+    assert (home / ".ipatool" / "account").is_file() and store.take_job(conn)["account_id"] == petr.id
+
+
+def test_apple_id_deleted_before_marked_ready(make_web, cfg, conn, acct, clock, monkeypatch):
+    wb, gone = make_web(cfg, conn), []
+
+    def move(src, dst):  # владелец удалил участника между транзакцией регистрации и переносом HOME
+        with closing(store.connect(cfg.db)) as c:
+            petr = people.account_by_email(c, "petr@example")
+            jobs.remove_account(cfg, c, petr)
+        gone.append(petr.id)
+        os.rename(src, dst)
+
+    r = invited_login(wb, conn, clock, monkeypatch, move)
+    assert r.status_code == 403 and "не зарегистрирован" in r.text and "appshelf_auth=" not in cookies(r)
+    assert not (cfg.accounts_dir / str(gone[0])).exists() and not list(cfg.accounts_dir.glob(".new-*"))
+    assert people.account_by_email(conn, "petr@example") is None and wb.sent == []

@@ -48,6 +48,10 @@ class Refused(Exception):
     """Apple ID не впускаем: приглашение отключили, владелец уже есть, адрес заняли."""
 
 
+class SaveFailed(Exception):
+    """Apple впустил новый Apple ID, но учётку не перенесли в его HOME или не отметили готовой."""
+
+
 def login_error_text(e: IpatoolError) -> str:
     return LOGIN_ERRORS.get(e.error, f"Ошибка входа: {e.message}")
 
@@ -101,8 +105,12 @@ def decide(w: WebCtx, c, request: Request, email: str, user_id: int | None) -> I
 
 def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: str) -> tuple[int, int]:
     """Новый Apple ID после успешного входа — всегда отдельный человек, и из «Добавить» тоже: чужой связке он не
-    достаётся. Строки users/accounts одной транзакцией, затем временный HOME → accounts/<id>; о новом участнике —
-    письмо владельцу (кроме него самого при первом входе)."""
+    достаётся. Строки users/accounts одной транзакцией с session=none — обработчик и ночь Apple ID без учётки не
+    берут, — затем временный HOME → accounts/<id> и отметка «готов»; о новом участнике — письмо владельцу (кроме него
+    самого при первом входе). Перенос не удался — строки прочь, SaveFailed. Сбой базы на отметке — SaveFailed, Apple
+    ID остаётся session=none с учёткой в HOME: следующий вход им — вход известного Apple ID — всё доделает (как и
+    после падения процесса до переноса: временный HOME уберёт Worker.recover). Apple ID удалили до отметки — его
+    HOME прочь, Refused."""
     name, how = str(info.get("name") or intent.email), ""
     try:
         with store.tx(c):
@@ -119,10 +127,28 @@ def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: st
                 how = f"добавлен из панели участника «{adder.name}» ({people.accounts_of(c, adder.id)[0].email})"
             role = people.OWNER if intent.owner else people.MEMBER
             uid = people.create_user(c, name, role, intent.invite_id, now)
-            aid = people.create_account(c, uid, intent.email, info, intent.device_mac, now)
+            aid = people.create_account(c, uid, intent.email, info, intent.device_mac, now, session="none")
     except sqlite3.IntegrityError:  # тот же новый Apple ID успел войти из другого браузера
         raise Refused(TAKEN) from None
-    os.replace(intent.home, w.cfg.accounts_dir / str(aid))
+    try:
+        os.replace(intent.home, w.cfg.accounts_dir / str(aid))
+    except OSError as e:
+        print(f"appshelf: учётка нового Apple ID №{aid} не перенесена: {e}", file=sys.stderr)  # без адреса
+        try:
+            with store.tx(c):
+                if people.drop_unready(c, aid) and not people.accounts_of(c, uid):
+                    people.delete_user_row(c, uid)
+        except sqlite3.Error as db:  # строки остались session=none — следующий вход доделает
+            print(f"appshelf: строки Apple ID №{aid} не удалены: {db}", file=sys.stderr)
+        raise SaveFailed() from None
+    try:
+        ready = people.mark_ready(c, aid, now)
+    except sqlite3.Error as e:
+        print(f"appshelf: Apple ID №{aid} не отмечен готовым: {e}", file=sys.stderr)
+        raise SaveFailed() from None
+    if not ready:  # владелец удалил участника, пока шла регистрация: учётка легла в HOME уже после удаления
+        jobs.drop_account_files(w.cfg, aid)
+        raise Refused(NOT_REGISTERED)
     if not intent.owner:
         how = how or f"приглашение «{people.invite_label(c, intent.invite_id)}»"
         notify.send_quietly(w.env.send, JOINED_SUBJECT,
@@ -149,6 +175,10 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
             except Refused as e:
                 drop_home(intent)
                 return login_page(w, request, email=intent.email, next_=next_, error=str(e), status_code=403)
+            except SaveFailed:
+                drop_home(intent)
+                return login_page(w, request, email=intent.email, next_=next_, error=LOGIN_ERRORS["save_failed"],
+                                  status_code=500)
         if not store.history_refreshed_at(c, aid):
             store.enqueue_once(c, aid, "refresh_history", None, now)
             store.enqueue_once(c, aid, "check_removed", None, now)
