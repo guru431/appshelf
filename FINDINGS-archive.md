@@ -1,6 +1,27 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-21 · Ревью партии: сбой переноса HOME при регистрации теряет учётку, повторный вход не доделает [P2]
+**Context:** ревью партии 21.10 (`/code-review high 800fd40..HEAD`), `appshelf/web/signin.py` `register`/`complete`.
+**What:** если `os.replace` временного HOME упал, а удаление строк тоже упало (ошибка базы), строка Apple ID остаётся `session=none`, `complete` удаляет временный HOME — «следующий вход идёт в несуществующий accounts/<id> и не доделает регистрацию».
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-21 — не ошибка: следующий вход известного Apple ID — полный вход паролем и кодом, ipatool сам создаёт `$HOME/.ipatool` (`create_directories` в `main.cpp` форка) и сохраняет учётку, `mark_login` ставит `session=ok`. Тот же путь проверяет `test_crash_after_commit_finishes_on_next_login` (HOME нет — повторный вход успешен).
+
+## 2026-10-21 · Ревью партии: внешние ключи с ON DELETE CASCADE вместо проверок «Apple ID удалён» в записях [P3]
+**Context:** ревью партии 21.10, `appshelf/store.py` (`_require_account`, `INSERT … WHERE EXISTS` в `mark_no_license`/`add_known`/`start_job`), `jobs.fetch_version`, `nightly`.
+**What:** каждая новая запись в таблицы полки должна помнить проверку существования Apple ID; `FOREIGN KEY(account_id) REFERENCES accounts ON DELETE CASCADE` и `PRAGMA foreign_keys=ON` сделали бы это схемой.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-21 — SQLite не добавляет внешний ключ к существующей таблице: пришлось бы пересобирать пять таблиц полки переходом схемы на живой базе ради того, что уже закрыто на всех путях записи результата операций Apple (история, справочник, ночное задание, скачивание) и покрыто тестами `test_*apple_id_removed*`. Каскад к тому же удалял бы строки молча — а удаление Apple ID и так убирает полку одной транзакцией (`jobs._remove`).
+
+## 2026-10-21 · Ревью партии: store.check_update почти копия store.retry [P3]
+**Context:** ревью партии 21.10, `appshelf/store.py` `retry` и `check_update`.
+**What:** одинаковая транзакция, проверка статуса, `_active`, `status='queued'`, `_enqueue` — две копии могут разойтись; предлагалось одной функцией с допустимыми статусами.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-21 — у функций разные предусловия и смысл: `retry` — «Повторить» первую неудавшуюся публикацию (status error, current нет; статус и ошибку сбрасывает и при уже стоящем в очереди задании), `check_update` — проверка обновления при рабочей current (повторное нажатие ничего не делает, текст прошлой ошибки остаётся до итога). Параметризованная функция на два вызова с тремя флагами читалась бы хуже двух коротких.
+
 ## 2026-10-17 · code-review role:review: В register для текста письма берётся первый Apple ID добавля... [P3]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/signin.py:152 (register), category=bug
 **What:** В register для текста письма берётся первый Apple ID добавляющего: `people.accounts_of(c, adder.id)[0]` без проверки на пустой список. Сам adder проверяется на существование (комментарий прямо описывает гонку удаления/«Выйти везде»), но у ещё существующего человека к этому моменту могут быть удалены все Apple ID (remove_user удаляет аккаунты, потом строку пользователя) — IndexError → 500 на шаге кода 2FA после верного кода.
