@@ -193,6 +193,12 @@ slots it stays in the catalog as "kept" with a regular install link and takes sp
 Only the file is kept: rolling back does not guarantee that the app accepts data left by a newer version —
 installing it over that data (after offloading the newer one) is at your own risk.
 
+"⋯" → "Check for update" asks Apple for the latest version of one app right away, without waiting for the night and
+without checking the history and the catalog; repeated taps do not queue a second job, and without an Apple ID
+sign-in it waits for one. If Apple refuses, the current version stays and installs. The card shows the result of the
+last check (by the button or at night): "checked DD.MM HH:MM UTC — no newer version / new version downloaded /
+failed: …"; this is about the shelf, not the version on the phone.
+
 ## New shelf token
 
 Each Apple ID has its own random archive directory token, which is also part of install links and manifests. If a

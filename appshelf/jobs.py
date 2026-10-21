@@ -123,14 +123,15 @@ def stub(c, aid: int, app_id: int) -> bool:
 
 def app_failed(c, aid: int, app_id: int, e: Exception, now: str) -> None:
     """Ошибка скачивания — у карточки. Есть рабочая версия — приложение остаётся «ok», ошибка — строкой «не удалось
-    обновить»: ставить можно, повторит ночь. Добавленное по ссылке без лицензии — nolicense (повторять бесполезно) и
-    отметка «нет лицензии» (на «Удалённых» — «нет в аккаунте»)."""
+    обновить»: ставить можно, повторит ночь или «Проверить обновление» (итог проверки — error). Добавленное по ссылке
+    без лицензии — nolicense (повторять бесполезно) и отметка «нет лицензии» (на «Удалённых» — «нет в аккаунте»)."""
     if isinstance(e, LicenseNotFound) and stub(c, aid, app_id):
         store.set_app_status(c, aid, app_id, "nolicense", NOT_PURCHASED)
         with suppress(store.AccountGone):  # Apple ID удалили, пока шёл запрос, — отмечать нечего
             store.mark_no_license(c, aid, app_id, now)
     elif store.current_version(c, aid, app_id) is not None:
         store.set_app_status(c, aid, app_id, "ok", describe(e))
+        store.set_checked(c, aid, app_id, now, "error")
     else:
         store.set_app_status(c, aid, app_id, "error", describe(e))
 
@@ -455,8 +456,11 @@ class Worker:
                 cur = store.current_version(c, acct.id, app_id)
                 if cur is not None and env.tools(acct).latest_version_id(app_id) == cur["external_version_id"]:
                     store.set_app_status(c, acct.id, app_id, "ok")  # «Повторить» при той же версии — IPA не качаем
+                    result = "same"
                 else:
-                    fetch_version(env, c, acct, app_id, env.cfg.tmp_dir / "web")
+                    result = fetch_version(env, c, acct, app_id, env.cfg.tmp_dir / "web")
+                if cur is not None:  # проверка обновления («Проверить обновление»), а не первое скачивание
+                    store.set_checked(c, acct.id, app_id, env.now(), result)
             store.finish_job(c, job["id"], "done", env.now())
         except SessionExpired as e:
             print(f"appshelf: Apple ID #{acct.id}: вход истёк в задании {job['kind']} {app_id or ''} — {e.message}",

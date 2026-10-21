@@ -77,16 +77,17 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
             if cur is not None and cur["external_version_id"] == latest:
                 same += 1
                 store.set_app_status(c, acct.id, app_id, "ok")
+                result = "same"
             else:
                 job_id = store.start_job(c, acct.id, "update", app_id, env.now())
                 if job_id is None:  # строки apps уже нет: сняли с публикации или удалили Apple ID
                     raise store.AppGone(app_id) if people.get_account(c, acct.id) else store.AccountGone(acct.id)
                 store.set_app_status(c, acct.id, app_id, "downloading")
-                fetch_version(env, c, acct, app_id, work)
+                result = fetch_version(env, c, acct, app_id, work)
                 store.finish_job(c, job_id, "done", env.now())
                 updated += 1
                 names.append(app["name"].replace("|", "/"))  # « | » делит итог по Apple ID (result_for)
-            store.set_checked(c, acct.id, app_id, env.now())
+            store.set_checked(c, acct.id, app_id, env.now(), result)  # ошибку записывает app_failed
         except SessionExpired:
             if job_id is not None:
                 store.finish_job(c, job_id, "error", env.now(), "истёк вход в Apple ID")

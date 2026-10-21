@@ -172,6 +172,8 @@ class AppView:
     current: sqlite3.Row | None
     previous: sqlite3.Row | None
     kept: sqlite3.Row | None  # закреплённая версия, вышедшая из двух слотов
+    checked_at: str = ""      # последняя проверка обновления и её итог: same | updated | error
+    check_result: str = ""
 
 
 def connect(path: Path, owner_email: str = "") -> sqlite3.Connection:
@@ -451,6 +453,20 @@ def retry(c, aid: int, app_id: int, now: str) -> bool:
     return True
 
 
+def check_update(c, aid: int, app_id: int, now: str) -> bool:
+    """«Проверить обновление» приложения с рабочей current: задание publish, если такого нет в очереди или в работе,
+    приложение — queued. False — нет рабочей версии или приложение уже в очереди или скачивается."""
+    with tx(c):
+        if c.execute("SELECT 1 FROM apps WHERE account_id=? AND app_id=? AND status IN ('ok', 'error')",
+                     (aid, app_id)).fetchone() is None or current_version(c, aid, app_id) is None:
+            return False
+        if _active(c, aid, "publish", app_id):
+            return False
+        c.execute("UPDATE apps SET status='queued' WHERE account_id=? AND app_id=?", (aid, app_id))
+        _enqueue(c, aid, "publish", app_id, now)
+    return True
+
+
 def unpublish(c, aid: int, root: Path, app_id: int) -> None:
     """Каталоги версий и строка apps; история покупок остаётся (spec 2026-10-05 §7.3)."""
     with tx(c):
@@ -468,7 +484,7 @@ def list_apps(c, aid: int) -> list[AppView]:
         vs = {r["role"]: r for r in c.execute("SELECT * FROM versions WHERE account_id=? AND app_id=?",
                                               (aid, a["app_id"]))}
         out.append(AppView(a["app_id"], a["name"], a["bundle_id"], a["status"], a["last_error"],
-                           vs.get("current"), vs.get("previous"), vs.get("kept")))
+                           vs.get("current"), vs.get("previous"), vs.get("kept"), a["checked_at"], a["check_result"]))
     # по алфавиту в Python: COLLATE NOCASE в SQLite не знает кириллицу («альфа» после «Яндекс»)
     return sorted(out, key=lambda v: (v.name.casefold(), v.app_id))
 
@@ -483,8 +499,11 @@ def set_app_status(c, aid: int, app_id: int, status: str, error: str = "") -> No
               (status, error[:500], aid, app_id))
 
 
-def set_checked(c, aid: int, app_id: int, now: str) -> None:
-    c.execute("UPDATE apps SET checked_at=? WHERE account_id=? AND app_id=?", (now, aid, app_id))
+def set_checked(c, aid: int, app_id: int, now: str, result: str) -> None:
+    """Итог проверки обновления: same — новее нет, updated — скачана новая версия, error — не удалось (текст — в
+    last_error, current остаётся)."""
+    c.execute("UPDATE apps SET checked_at=?, check_result=? WHERE account_id=? AND app_id=?",
+              (now, result, aid, app_id))
 
 
 # --- версии ------------------------------------------------------------------

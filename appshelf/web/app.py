@@ -276,6 +276,15 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             store.retry(c, aid, app_id, now())
         return back("/")
 
+    @app.post("/apps/{app_id}/check")
+    def check_update(request: Request, app_id: int):
+        aid = request.state.acct.id
+        with w.conn() as c:
+            if not store.has_app(c, aid, app_id):  # чужое или не опубликованное — как нет
+                return not_found()
+            store.check_update(c, aid, app_id, now())
+        return back("/")
+
     @app.post("/apps/{app_id}/unpublish", response_class=HTMLResponse)
     def unpublish(request: Request, app_id: int):
         a = request.state.acct
