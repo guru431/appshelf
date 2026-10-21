@@ -227,6 +227,36 @@ def test_backup_refuses_non_empty_dir(monkeypatch, tmp_path, clock, capsys):
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["old.db"]
 
 
+def test_daily_backup_keeps_last_snapshots(monkeypatch, tmp_path, clock, capsys):
+    # appshelf-backup.timer: снимок за день — в APPSHELF_BACKUP_DIR, старше keep последних — прочь
+    dest = tmp_path / "share" / "backup"
+    monkeypatch.setenv("APPSHELF_BACKUP_DIR", str(dest))
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    assert cli.main(["backup", "--daily"]) == 2                     # каталога нет: шара не смонтирована?
+    assert "нет каталога" in capsys.readouterr().err and not dest.exists()
+    dest.mkdir(parents=True)
+    (dest / "notes.txt").write_text("чужой файл", encoding="utf-8")
+    for day in ("2026-10-19", "2026-10-20", "2026-10-21"):
+        monkeypatch.setattr(jobs, "now_iso", lambda day=day: f"{day}T02:30:00+00:00")
+        assert cli.main(["backup", "--daily", "--keep", "2"]) == 0
+    assert sorted(p.name for p in dest.iterdir()) == ["appshelf-2026-10-20.db", "appshelf-2026-10-21.db", "notes.txt"]
+    assert dump(dest / "appshelf-2026-10-21.db") == dump(cfg.db)
+    assert not (cfg.tmp_dir / "backup").exists()                       # локальный черновик убран
+    if os.name == "posix":
+        assert stat.S_IMODE((dest / "appshelf-2026-10-21.db").stat().st_mode) == 0o600
+
+
+def test_daily_backup_needs_backup_dir_setting(monkeypatch, tmp_path, clock, capsys):
+    monkeypatch.delenv("APPSHELF_BACKUP_DIR", raising=False)
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    assert cli.main(["backup", "--daily"]) == 2
+    assert "APPSHELF_BACKUP_DIR" in capsys.readouterr().err
+    with pytest.raises(SystemExit):                                    # набор восстановления или ночной — что-то одно
+        cli.main(["backup", "--daily", "--out", str(tmp_path / "out")])
+
+
 def test_check_refuses_snapshot_of_other_schema(monkeypatch, tmp_path, clock, capsys):
     cfg = cli_env(monkeypatch, tmp_path)
     cli_shelf(cfg, clock, tmp_path)

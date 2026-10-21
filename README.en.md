@@ -226,6 +226,12 @@ mounted, no database).
 
 ## Backups
 
+Nightly database snapshot — `appshelf-backup.timer` (05:30, after the nightly check): `appshelf backup --daily` puts
+`appshelf-<date>.db` into `APPSHELF_BACKUP_DIR` and keeps the last 14. The directory should not be on the server's
+disk (for example, on the share next to the archive) and is created once in advance as `appshelf`; without an
+`APPSHELF_BACKUP_DIR` line in `appshelf.env`, `install.sh` does not enable the timer. The snapshot is made locally
+and lands in the directory as a finished file.
+
 A restore set is a database snapshot, a copy of the archive, and a check that the shelves can be restored from that
 pair in full.
 

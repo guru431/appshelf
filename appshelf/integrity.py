@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
+import shutil
 import sqlite3
 from collections import Counter, defaultdict
-from contextlib import closing
+from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import ipa, jobs, people, store
 from .config import TOKEN_RE, Config
+
+DAILY_RE = re.compile(r"^appshelf-\d{4}-\d{2}-\d{2}\.db$")
 
 KINDS = {  # вид проблемы → подпись в кратком итоге; порядок — порядок итога
     "no_shelf": "нет каталога полки, а версии в базе есть",
@@ -238,3 +242,27 @@ def backup(db: Path, out: Path) -> Path:
         tmp.unlink(missing_ok=True)
         raise
     return dst
+
+
+def daily_backup(db: Path, dest: Path, work: Path, day: str, keep: int) -> Path:
+    """Ночной снимок (appshelf-backup.timer): dest/appshelf-<день>.db, хранятся keep последних, чужие файлы dest не
+    трогаются. Снимок — локально в work, на шару — готовой копией: SQLite на CIFS пишет ненадёжно. dest должен уже
+    быть: при несмонтированной шаре его нет, и снимок не ляжет на локальный диск под пустой точкой монтирования."""
+    if not dest.is_dir():
+        raise BackupError(f"нет каталога {dest} — смонтирована ли шара? Каталог создаётся один раз, при установке")
+    final = dest / f"appshelf-{day}.db"
+    tmp = dest / f".{final.name}.tmp"
+    shutil.rmtree(work, ignore_errors=True)
+    try:
+        shutil.copyfile(backup(db, work), tmp)
+        with suppress(OSError):  # на шаре с noperm права задаёт монтирование
+            tmp.chmod(0o600)
+        os.replace(tmp, final)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    for old in sorted(p for p in dest.iterdir() if DAILY_RE.match(p.name))[:-keep]:
+        old.unlink()
+    return final

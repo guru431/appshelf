@@ -45,10 +45,16 @@ for p in "${PARTS[@]}"; do  # убранные из репозитория фа�
 done
 rm -rf "$NEW"
 
-for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer; do
+for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer appshelf-backup.service appshelf-backup.timer; do
   install -m 0644 "$R/deploy/$u" "/etc/systemd/system/$u"
 done
 systemctl daemon-reload
+# ночной снимок базы — когда задан его каталог (README «Резервная копия»)
+if grep -qE "^APPSHELF_BACKUP_DIR=.+" "$ENV_FILE"; then
+  systemctl enable --quiet --now appshelf-backup.timer
+else
+  systemctl disable --quiet --now appshelf-backup.timer 2>/dev/null || true
+fi
 # spec 2026-10-08 §6: HOME ipatool на каждый Apple ID
 install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
 if [ -d /etc/appshelf/.ipatool ] && [ ! -e /etc/appshelf/accounts/1 ]; then

@@ -26,6 +26,16 @@ def test_new_code_goes_live_only_after_checks_and_pip():
     assert text.index("pip\" install") < swap and "--no-deps --force-reinstall" in text
 
 
+def test_backup_timer_installed_and_enabled_only_with_backup_dir():
+    install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    service = (DEPLOY / "appshelf-backup.service").read_text(encoding="utf-8")
+    timer = (DEPLOY / "appshelf-backup.timer").read_text(encoding="utf-8")
+    assert "appshelf-backup.service appshelf-backup.timer" in install
+    assert install.index('grep -qE "^APPSHELF_BACKUP_DIR=.+"') < install.index("enable --quiet --now appshelf-backup")
+    assert "User=appshelf" in service and "-m appshelf backup --daily" in service
+    assert "OnCalendar=*-*-* 05:30:00" in timer and "Persistent=true" in timer
+
+
 def test_code_and_binary_belong_to_root():
     install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")

@@ -1,0 +1,9 @@
+[Unit]
+Description=appshelf — ночной снимок базы в 05:30, после ночной проверки
+
+[Timer]
+OnCalendar=*-*-* 05:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
