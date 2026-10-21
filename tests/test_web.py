@@ -254,6 +254,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     web.client.post("/blocked/add", data={"ref": "id492224193"})
     text = web.client.get("/blocked").text
     assert "Есть в аккаунте: 0" in text and "не проверено: 1" in text
+    assert "<b>СберБанк Онлайн</b>" in text and "App Store 492224193" not in text   # имя — из справочника
     assert "по ссылке, не подтверждено" in web.client.get("/history").text
     set_session(conn, 1, "ok")
     web.tool.errors["download"] = LicenseNotFound("license_not_found", "no license")

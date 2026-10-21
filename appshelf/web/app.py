@@ -200,7 +200,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 status = "owned"
             else:
                 status = "missing" if e["id"] in no_license else "unknown"
-            items.append({"id": e["id"], "name": row["name"] if row is not None else e["name"],
+            # имя строки — только из IPA или DAAP (есть bundle id); заглушка по ссылке — «App Store <id>»
+            items.append({"id": e["id"], "name": row["name"] if row is not None and row["bundle_id"] else e["name"],
                           "catalog_name": e["name"], "aliases": " ".join(e.get("aliases", [])),
                           "version": row["version"] if row is not None else "",
                           "version_at": row["version_at"] if row is not None else "", "status": status,
