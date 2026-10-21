@@ -27,6 +27,19 @@ def test_read_info_without_metadata_fails(tmp_path):
         ipa.read_info(make_ipa(tmp_path / "a.ipa", metadata=False))
 
 
+@pytest.mark.parametrize("missing, text", [
+    ({"external_id": None}, "softwareVersionExternalIdentifier"),
+    ({"item_id": None}, "itemId"),
+    ({"item_id": 0}, "itemId"),
+    ({"bundle_id": None}, "CFBundleIdentifier"),
+    ({"bundle_id": ""}, "CFBundleIdentifier"),
+])
+def test_read_info_requires_ids(tmp_path, missing, text):
+    """Без external id ночь качала бы IPA каждую ночь, без itemId и bundle id версию не сверить."""
+    with pytest.raises(ipa.IpaError, match=text):
+        ipa.read_info(make_ipa(tmp_path / "a.ipa", **missing))
+
+
 def test_manifest_contract_with_ios():
     m = plistlib.loads(ipa.manifest("https://apps.example/d/t/1-2.0/app.ipa", "https://apps.example/d/t/1-2.0/icon.png",
                                     "ru.example.app", "2.0", "Пример & Ко"))

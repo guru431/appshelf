@@ -188,6 +188,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
                 store.set_app_status(c, acct.id, app_id, "ok")
                 return "same"
             size = src.stat().st_size
+            digest = ipa.sha256(src)  # по локальному файлу в tmp: с шары читать вдвое дольше
             free = env.disk_free(_archive(cfg))  # размер теперь известен: запас шары не трогаем и большим IPA
             if free - size < RESERVE:
                 raise LowSpace(f"мало места в архиве: свободно {free / GB:.1f} ГБ, IPA — {size / GB:.1f} ГБ, "
@@ -210,7 +211,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
                 store.add_version(c, acct.id, root, app_id, store.NewVersion(
                     version=info.version, build=info.build, external_version_id=info.external_version_id,
                     min_ios=info.min_ios, device_family=info.device_family, size=size, dir=name,
-                    built=info.built), env.now())
+                    built=info.built, sha256=digest), env.now())
             except BaseException:
                 # обрыв шары, ENOSPC, «database is locked», сняли с публикации (AppGone): строки версии нет, а
                 # .partial с частью IPA или каталог без строки потом не убрал бы никто

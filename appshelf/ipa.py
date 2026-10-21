@@ -1,6 +1,7 @@
 """Разбор IPA и manifest.plist для OTA-установки (itms-services), spec §6."""
 from __future__ import annotations
 
+import hashlib
 import io
 import plistlib
 import re
@@ -49,19 +50,38 @@ def read_info(path: Path) -> IpaInfo:
     version = str(info.get("CFBundleShortVersionString") or "")
     if not version:
         raise IpaError("в Info.plist нет CFBundleShortVersionString")
+    bundle_id = str(info.get("CFBundleIdentifier") or "")
+    if not bundle_id:
+        raise IpaError("в Info.plist нет CFBundleIdentifier")
+    item_id = int(meta.get("itemId") or 0)
+    if item_id <= 0:
+        raise IpaError("в iTunesMetadata.plist нет itemId")
+    # пустой external id ночь сочла бы новой версией — и качала бы IPA каждую ночь
+    external_id = str(meta.get("softwareVersionExternalIdentifier") or "")
+    if not external_id:
+        raise IpaError("в iTunesMetadata.plist нет softwareVersionExternalIdentifier")
     fam = info.get("UIDeviceFamily", [1])
     fam = [fam] if isinstance(fam, int) else fam
     return IpaInfo(
-        item_id=int(meta.get("itemId") or 0),
-        bundle_id=str(info.get("CFBundleIdentifier", "")),
+        item_id=item_id,
+        bundle_id=bundle_id,
         version=version,
         build=str(info.get("CFBundleVersion", "")),
         title=str(info.get("CFBundleDisplayName") or info.get("CFBundleName") or meta.get("itemName") or ""),
         min_ios=str(info.get("MinimumOSVersion", "")),
         device_family=",".join(FAMILIES[f] for f in sorted(set(fam)) if f in FAMILIES) or "iphone",
-        external_version_id=str(meta.get("softwareVersionExternalIdentifier", "")),
+        external_version_id=external_id,
         built=f"{y:04d}-{m:02d}-{d:02d}" if y > 1980 else "",
     )
+
+
+def sha256(path: Path) -> str:
+    """SHA-256 файла кусками по 1 МБ: IPA бывают в гигабайты."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def extract_icon(path: Path) -> bytes:

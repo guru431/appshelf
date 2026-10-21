@@ -43,11 +43,14 @@ def make_ipa(path: Path, *, item_id=123, bundle_id="ru.example.app", version="1.
              external_id="900", display_name="Пример & Ко", min_ios="15.0", families=(1,),
              artwork: bytes | None = None, app_icon: bytes | None = None, metadata=True,
              built=(2026, 6, 18, 16, 24, 0)) -> Path:
+    """item_id, bundle_id, external_id = None — ключа нет вовсе."""
     info = {"CFBundleIdentifier": bundle_id, "CFBundleShortVersionString": version, "CFBundleVersion": build,
             "CFBundleDisplayName": display_name, "CFBundleName": "Example", "MinimumOSVersion": min_ios,
             "UIDeviceFamily": list(families)}
-    meta = {"itemId": item_id, "softwareVersionExternalIdentifier": int(external_id),
+    meta = {"itemId": item_id, "softwareVersionExternalIdentifier": None if external_id is None else int(external_id),
             "itemName": display_name, "bundleShortVersionString": version}
+    info = {k: v for k, v in info.items() if v is not None}
+    meta = {k: v for k, v in meta.items() if v is not None}
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(zipfile.ZipInfo("Payload/Example.app/Info.plist", built),  # время в zip — дата сборки
                    plistlib.dumps(info, fmt=plistlib.FMT_BINARY))

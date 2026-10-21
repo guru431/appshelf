@@ -1,12 +1,14 @@
 """CLI appshelf: ночная проверка (appshelf-nightly.service), запасная ссылка входа — если вход Apple сломан, а живой
-cookie нет и у владельца, — и новый токен каталога полки, если её ссылки установки утекли. Только от appshelf."""
+cookie нет и у владельца, — новый токен каталога полки, если её ссылки установки утекли, и проверка целостности полок.
+Только от appshelf."""
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from contextlib import closing
 
-from . import ipatool, jobs, nightly, people, store
+from . import integrity, ipatool, jobs, nightly, people, store
 from .config import from_env
 
 
@@ -19,9 +21,15 @@ def main(argv=None) -> int:
     rotate = sub.add_parser("rotate-token", help="новый токен каталога полки: прежние ссылки установки перестанут "
                                                  "работать, установленные приложения — останутся")
     rotate.add_argument("--email", required=True, help="Apple ID полки")
+    chk = sub.add_parser("check", help="проверка целостности полок, только чтение: код 0 — проблем нет, 1 — есть, "
+                                       "2 — проверка не выполнена")
+    chk.add_argument("--deep", action="store_true", help="ещё SHA-256 и содержимое каждого IPA (читает весь архив)")
+    chk.add_argument("--json", action="store_true", help="отчёт в JSON")
     args = p.parse_args(argv)
     cfg = from_env()
     jobs.check_user(cfg)
+    if args.cmd == "check":
+        return check(cfg, args)
     with closing(store.connect(cfg.db, cfg.owner_email)) as c:
         if args.cmd in ("login-link", "rotate-token"):
             acct = people.account_by_email(c, args.email)
@@ -44,3 +52,15 @@ def main(argv=None) -> int:
             return 0
         print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a)), c))
     return 0
+
+
+def check(cfg, args) -> int:
+    """Только чтение: база открыта mode=ro (без перехода схемы), архив не меняется."""
+    try:
+        with closing(integrity.open_ro(cfg.db)) as c:
+            rep = integrity.check(cfg, c, deep=args.deep)
+    except (integrity.DbError, jobs.ArchiveUnavailable) as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(json.dumps(rep.as_dict(), ensure_ascii=False, indent=1) if args.json else rep.text())
+    return 0 if rep.ok else 1
