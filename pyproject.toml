@@ -37,3 +37,5 @@ markers = [
     "integration: ходит на debian и в Apple (bin/ipatool по SSH)",
     "manual: запускается руками",
 ]
+# tmp_path — только у упавших тестов: три прогона по умолчанию в pytest-of-<user> забивали C: (2026-10-21)
+tmp_path_retention_policy = "failed"
