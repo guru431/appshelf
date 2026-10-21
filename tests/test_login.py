@@ -1,4 +1,7 @@
 import threading
+import types
+import weakref
+from collections import deque
 from pathlib import Path
 
 import pytest
@@ -115,6 +118,118 @@ def test_pending_limit():
     with pytest.raises(LoginBusy):
         f.start(third, NEW, "c")
     assert third.calls == [] and dropped == [NEW]
+
+
+class FakeTimer:
+    def __init__(self, fn):
+        self.fn, self.cancelled = fn, False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def reachable(root):
+    """Всё, до чего дотянется callback таймера: ячейки замыканий, разыменованные weakref, атрибуты, контейнеры."""
+    seen, todo, out = set(), [root], []
+    while todo:
+        x = todo.pop()
+        if id(x) in seen or isinstance(x, (type, types.ModuleType)):
+            continue
+        seen.add(id(x))
+        out.append(x)
+        if isinstance(x, weakref.ref):
+            todo.append(x())
+        elif isinstance(x, types.FunctionType):
+            for cell in x.__closure__ or ():
+                try:
+                    todo.append(cell.cell_contents)
+                except ValueError:
+                    pass
+        elif isinstance(x, types.MethodType):
+            todo.append(x.__self__)
+        elif isinstance(x, dict):
+            todo += list(x.values())
+        elif isinstance(x, (list, tuple, set, frozenset, deque)):
+            todo += list(x)
+        elif hasattr(x, "__dict__"):
+            todo += list(vars(x).values())
+    return out
+
+
+def _finish_ok(f, flow_id, tool, clock):
+    f.finish(flow_id, "123456")
+
+
+def _finish_refused(f, flow_id, tool, clock):
+    tool.errors["login"] = IpatoolError("invalid_credentials", "")
+    with pytest.raises(IpatoolError):
+        f.finish(flow_id, "000000")
+
+
+def _finish_expired(f, flow_id, tool, clock):
+    clock.advance(601)
+    with pytest.raises(LoginExpired):
+        f.finish(flow_id, "123456")
+
+
+def _cancel(f, flow_id, tool, clock):
+    f.cancel(flow_id)
+
+
+def _purge(f, flow_id, tool, clock):
+    clock.advance(601)
+    assert f.pending(flow_id) is None
+
+
+def _timer_fired(f, flow_id, tool, clock):
+    f._pending[flow_id].timer.fn()
+
+
+@pytest.mark.parametrize("end", [_finish_ok, _finish_refused, _finish_expired, _cancel, _purge, _timer_fired])
+def test_ended_step_releases_password_and_timer(end):
+    # пароль удаляется после шага 2 при любом исходе: ни запись, ни callback таймера его больше не держат
+    secret = "synthetic-secret-7f3a"
+    clock, timers = Clock(), []
+    f = LoginFlow(clock=clock.monotonic, discard=lambda i: None,
+                  schedule=lambda delay, fn: timers.append(FakeTimer(fn)) or timers[-1])
+    tool = needs_code()
+    _, flow_id, _ = f.start(tool, KNOWN, secret)
+    p = f._pending[flow_id]
+    [timer] = timers
+    assert p.timer is timer and any(x == secret for x in reachable(timer.fn))  # пока шаг жив, пароль нужен
+    end(f, flow_id, tool, clock)
+    tool.calls.clear()                         # запись подменного ipatool о вызове — не утечка
+    assert f._pending == {} and p.password == "" and timer.cancelled
+    assert not any(isinstance(x, str) and secret in x for x in reachable(timer.fn))
+
+
+def test_parallel_first_steps_respect_limit():
+    # первые шаги, ждущие Apple, занимают места: при limit=1 второй и третий вход — LoginBusy сразу
+    f, _, dropped = flow(limit=1)
+    first = needs_code()
+    t, out, release, _ = slow_first_login(f, first, KNOWN, "a")
+    others = [needs_code(), needs_code()]
+    for tool, intent in zip(others, [NEW, Intent("b@example", account_id=2)]):
+        with pytest.raises(LoginBusy):
+            f.start(tool, intent, "x")
+    assert [tool.calls for tool in others] == [[], []] and len(dropped) == 2
+    release.set()
+    t.join(5)
+    assert not t.is_alive() and out["result"][1] in f._pending and len(f._pending) == 1 and f._running == {}
+    with pytest.raises(LoginBusy):             # место перешло к шагу кода, а не освободилось
+        f.start(needs_code(), NEW, "x")
+
+
+def test_repeat_of_running_login_is_not_busy():
+    # повтор того же входа ждёт итога первого и места не занимает
+    f, _, _ = flow(limit=1)
+    t, out, release, done = slow_first_login(f, needs_code(), KNOWN, "a")
+    j, joined = in_thread(lambda: f.start(FakeTool(), KNOWN, "a"))
+    assert done.waiting.wait(5)
+    release.set()
+    t.join(5)
+    j.join(5)
+    assert "error" not in joined and joined["result"] == out["result"] and len(f._pending) == 1
 
 
 class SpyEvent(threading.Event):

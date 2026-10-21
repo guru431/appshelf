@@ -8,6 +8,7 @@ import secrets
 import shutil
 import threading
 import time
+import weakref
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +76,16 @@ class _Pending:
     intent: Intent
     password: str = field(repr=False)
     expires: float = 0.0
+    timer: object = field(default=None, repr=False)  # его callback держит запись только слабой ссылкой
+
+
+def _drop(p: _Pending) -> None:
+    """Запись входа больше не нужна: пароль — прочь, таймер TTL — отменён."""
+    p.password = ""
+    timer, p.timer = p.timer, None
+    cancel = getattr(timer, "cancel", None)
+    if cancel is not None:
+        cancel()
 
 
 @dataclass
@@ -95,11 +106,13 @@ class LoginFlow:
         self._running: dict[str, _Running] = {}
         self._lock = threading.Lock()
 
-    def _expire(self, flow_id: str, p: _Pending) -> None:
+    def _expire(self, flow_id: str, ref: weakref.ref) -> None:
         with self._lock:
-            if self._pending.get(flow_id) is not p:  # шаг уже завершён или отброшен
+            p = ref()
+            if p is None or self._pending.get(flow_id) is not p:  # шаг уже завершён или отброшен
                 return
             del self._pending[flow_id]
+        _drop(p)
         self.discard(p.intent)
 
     def purge(self) -> None:
@@ -109,6 +122,7 @@ class LoginFlow:
             for k, _ in dead:
                 del self._pending[k]
         for _, p in dead:
+            _drop(p)
             self.discard(p.intent)
 
     def pending(self, flow_id: str) -> Intent | None:
@@ -122,12 +136,15 @@ class LoginFlow:
         исключение, intent отброшен (discard).
 
         Тем же Apple ID уже входят (двойное «Продолжить»: браузер бросает первый запрос, а с ним и cookie шага кода) —
-        к Apple второй раз не идём: с тем же паролем ждём первый вход и отдаём его итог, с другим — LoginInProgress."""
+        к Apple второй раз не идём: с тем же паролем ждём первый вход и отдаём его итог, с другим — LoginInProgress.
+
+        Место под лимит резервируется до похода к Apple: шаг 1 в _running уже занимает его, при коде 2FA переходит
+        в _pending одним захватом lock, при прочих исходах освобождается. Повтор того же входа места не занимает."""
         self.purge()
         with self._lock:
             other = self._running.get(intent.email)
             same = other is not None and hmac.compare_digest(password.encode(), other.password.encode())
-            full = other is None and len(self._pending) >= self.limit
+            full = other is None and len(self._pending) + len(self._running) >= self.limit
             if other is None and not full:
                 mine = self._running[intent.email] = _Running(password)
         if other is not None or full:
@@ -139,21 +156,23 @@ class LoginFlow:
             if other.error is not None:
                 raise LoginJoined(other.error)
             return other.result
+        p = None
         try:
             mine.result = (intent, "", tool.login(intent.email, password))
         except AuthCodeRequired:
             flow_id = secrets.token_urlsafe(16)
             p = _Pending(tool, intent, password, self.clock() + self.ttl)
-            with self._lock:
-                self._pending[flow_id] = p
-            self.schedule(self.ttl, lambda: self._expire(flow_id, p))
+            ref = weakref.ref(p)  # callback таймера не держит пароль после _drop
+            p.timer = self.schedule(self.ttl, lambda: self._expire(flow_id, ref))
             mine.result = (intent, flow_id, None)
         except BaseException as e:
             mine.error = e if isinstance(e, IpatoolError) else None
             self.discard(intent)
             raise
         finally:
-            with self._lock:
+            with self._lock:  # running → pending одним захватом: место не теряется и не считается дважды
+                if p is not None:
+                    self._pending[flow_id] = p
                 del self._running[intent.email]
                 mine.password = ""
             mine.done.set()
@@ -164,6 +183,7 @@ class LoginFlow:
         with self._lock:
             p = self._pending.pop(flow_id, None)
         if p is not None:
+            _drop(p)
             self.discard(p.intent)
 
     def finish(self, flow_id: str, code: str) -> tuple[Intent, dict]:
@@ -172,14 +192,15 @@ class LoginFlow:
             p = self._pending.pop(flow_id, None)
         if p is None:
             raise LoginExpired()
-        if self.clock() >= p.expires:
-            self.discard(p.intent)
-            raise LoginExpired()
         try:
+            if self.clock() >= p.expires:
+                raise LoginExpired()
             return p.intent, p.tool.login(p.intent.email, p.password, code)
         except BaseException:
             self.discard(p.intent)
             raise
+        finally:
+            _drop(p)
 
 
 class Limiter:
