@@ -10,11 +10,12 @@ from datetime import datetime
 
 from . import people, removed, store
 from .ipatool import SessionExpired
-from .jobs import (Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired, move_shelves,
-                   nightly_lock, refresh_history)
+from .jobs import (ACCOUNT_GONE, Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired,
+                   move_shelves, nightly_lock, refresh_history)
 
 STAMP = "nightly.stamp"
 EXPIRED = "остановлена: истёк вход в Apple ID"
+GONE = "остановлена: Apple ID удалён"
 NO_LOGIN = "пропущена: нет входа ни в один Apple ID"
 NOT_IN_RUN = "пропущена: не было входа в этот Apple ID"
 SEP = " | "
@@ -43,12 +44,15 @@ def _run(env: Env, c) -> str:
 
 
 def _run_account(env: Env, c, acct, work, full: bool) -> str:
+    """Apple ID удалили посреди проверки (AccountGone) — его итог не записываем, проверка этого Apple ID прекращается."""
     notes = []
     try:
         refresh_history(env, c, acct)
     except SessionExpired:
         mark_expired(env, c, acct)
         return EXPIRED
+    except store.AccountGone:
+        return GONE
     except Exception as e:  # история не обновилась — версии всё равно проверяем
         notes.append(f"история: {describe(e)}")
     try:
@@ -58,6 +62,8 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
     except SessionExpired:
         mark_expired(env, c, acct)
         return EXPIRED
+    except store.AccountGone:
+        return GONE
     except Exception as e:
         notes.append(f"справочник удалённых: {describe(e)}")
     tool = env.tools(acct)
@@ -73,6 +79,8 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
                 store.set_app_status(c, acct.id, app_id, "ok")
             else:
                 job_id = store.start_job(c, acct.id, "update", app_id, env.now())
+                if job_id is None:  # строки apps уже нет: сняли с публикации или удалили Apple ID
+                    raise store.AppGone(app_id) if people.get_account(c, acct.id) else store.AccountGone(acct.id)
                 store.set_app_status(c, acct.id, app_id, "downloading")
                 fetch_version(env, c, acct, app_id, work)
                 store.finish_job(c, job_id, "done", env.now())
@@ -88,6 +96,10 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
         except store.AppGone:
             if job_id is not None:
                 store.finish_job(c, job_id, "cancelled", env.now(), "снято с публикации во время скачивания")
+        except store.AccountGone:
+            if job_id is not None:
+                store.finish_job(c, job_id, "cancelled", env.now(), ACCOUNT_GONE)
+            return f"{GONE} (обновлено {updated})"
         except Exception as e:  # ошибка одного приложения не останавливает остальные
             if isinstance(e, LowSpace):
                 low_space(env, c, e)

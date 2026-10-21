@@ -139,6 +139,15 @@ class AppGone(Exception):
     """Приложение сняли с публикации, пока качалась версия."""
 
 
+class AccountGone(Exception):
+    """Apple ID удалили, пока шла операция: итог не записываем (строки полки без строки accounts)."""
+
+
+def _require_account(c, aid: int) -> None:
+    if c.execute("SELECT 1 FROM accounts WHERE id=?", (aid,)).fetchone() is None:
+        raise AccountGone(aid)
+
+
 @dataclass(frozen=True)
 class NewVersion:
     version: str
@@ -285,8 +294,10 @@ def claim_state(c, key: str, value: str) -> bool:
 # --- история покупок ---------------------------------------------------------
 
 def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
+    """Ответ DAAP. Apple ID удалили, пока шёл запрос (замок ipatool уже отпущен), — AccountGone."""
     n = 0
     with tx(c):
+        _require_account(c, aid)
         for it in items:
             app_id = int(it.get("id") or 0)
             if app_id <= 0:
@@ -360,8 +371,13 @@ def no_license_ids(c, aid: int) -> set[int]:
 
 
 def mark_no_license(c, aid: int, app_id: int, now: str) -> None:
-    c.execute("INSERT INTO removed_checks (account_id, app_id, checked_at) VALUES (?, ?, ?) "
-              "ON CONFLICT(account_id, app_id) DO UPDATE SET checked_at=excluded.checked_at", (aid, app_id, now))
+    """Одной инструкцией с проверкой Apple ID: удалённому строку не вставляем — AccountGone."""
+    cur = c.execute("INSERT INTO removed_checks (account_id, app_id, checked_at) SELECT ?, ?, ? "
+                    "WHERE EXISTS (SELECT 1 FROM accounts WHERE id=?) "
+                    "ON CONFLICT(account_id, app_id) DO UPDATE SET checked_at=excluded.checked_at",
+                    (aid, app_id, now, aid))
+    if cur.rowcount == 0:
+        raise AccountGone(aid)
 
 
 def set_purchase_version(c, aid: int, app_id: int, version: str) -> None:
@@ -373,9 +389,12 @@ def clear_no_license(c, aid: int, app_id: int) -> None:
 
 
 def add_known(c, aid: int, app_id: int, name: str) -> None:
-    """Строка «Истории» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст."""
-    c.execute("INSERT OR IGNORE INTO purchases (account_id, app_id, name, refreshed_at) VALUES (?, ?, ?, '')",
-              (aid, app_id, name))
+    """Строка «Истории» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст. Удалённому
+    Apple ID строку не вставляем — AccountGone."""
+    cur = c.execute("INSERT OR IGNORE INTO purchases (account_id, app_id, name, refreshed_at) SELECT ?, ?, ?, '' "
+                    "WHERE EXISTS (SELECT 1 FROM accounts WHERE id=?)", (aid, app_id, name, aid))
+    if cur.rowcount == 0:  # строка уже была — или Apple ID нет
+        _require_account(c, aid)
 
 
 def no_bundle(c, aid: int, app_id: int) -> bool:
@@ -569,10 +588,13 @@ def take_job(c, kinds=WORKER_KINDS):
     return job
 
 
-def start_job(c, aid: int, kind: str, app_id: int, now: str) -> int:
-    """Задание ночной проверки: сразу running, для истории в таблице jobs."""
-    return c.execute("INSERT INTO jobs (account_id, kind, app_id, status, created_at) VALUES (?, ?, ?, 'running', ?)",
-                     (aid, kind, app_id, now)).lastrowid
+def start_job(c, aid: int, kind: str, app_id: int, now: str) -> int | None:
+    """Задание ночной проверки: сразу running, для истории в таблице jobs. Только пока приложение в каталоге Apple ID:
+    строки apps нет и после снятия с публикации, и после удаления Apple ID, — None, задание не вставлено."""
+    cur = c.execute("INSERT INTO jobs (account_id, kind, app_id, status, created_at) SELECT ?, ?, ?, 'running', ? "
+                    "WHERE EXISTS (SELECT 1 FROM apps WHERE account_id=? AND app_id=?)",
+                    (aid, kind, app_id, now, aid, app_id))
+    return cur.lastrowid if cur.rowcount else None
 
 
 def finish_job(c, job_id: int, status: str, now: str, error: str = "") -> None:

@@ -1,8 +1,8 @@
 import pytest
 
-from appshelf import jobs, nightly, removed, store
+from appshelf import jobs, nightly, people, removed, store
 from appshelf.ipatool import SessionExpired
-from helpers import make_account, owner, set_session, to_weekday
+from helpers import FakeTool, assert_shelf_gone, make_account, owner, set_session, to_weekday
 from ipa_factory import make_ipa
 
 CATALOG = [{"id": 1, "name": "СберБанк Онлайн (Бюджет Онлайн)"}, {"id": 2, "name": "Т-Банк (GlossFlow)"},
@@ -129,6 +129,37 @@ def test_check_ignores_publish_of_apple_id_without_login(ctx, cfg, conn, clock, 
     store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
     jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).tick()
     assert conn.execute("SELECT status FROM jobs WHERE kind='check_removed'").fetchone()["status"] == "done"
+
+
+@pytest.mark.parametrize("licensed", [True, False])
+def test_check_stops_when_apple_id_removed_meanwhile(ctx, cfg, conn, clock, licensed):
+    # ночь не держит running-задания: удаление прошло между ответом Apple и записью итога
+    owner(conn, clock)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    tool = ctx.tools.setdefault(petr.id, FakeTool())
+    tool.latest.update({1: "900", 2: "901", 3: "902"})
+    if not licensed:
+        tool.no_license.add(1)
+    tool.on_call = lambda name, *args: name == "latest_version_id" and people.get_account(conn, petr.id) and \
+        jobs.remove_account(cfg, conn, petr)
+    with pytest.raises(store.AccountGone):
+        removed.check(ctx.env, conn, petr, CATALOG)
+    assert [c for c in tool.calls if c[0] == "latest_version_id"] == [("latest_version_id", 1)]   # обход прекращён
+    assert_shelf_gone(conn, cfg, petr)
+
+
+def test_worker_cancels_check_of_removed_apple_id(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(removed, "load", lambda: CATALOG[:1])
+    owner(conn, clock)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, session="ok")
+    tool = ctx.tools.setdefault(petr.id, FakeTool())
+    tool.latest[1] = "900"
+    tool.on_call = lambda name, *args: conn.execute("DELETE FROM accounts WHERE id=?", (petr.id,))
+    store.enqueue_once(conn, petr.id, "check_removed", None, clock.iso())
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).tick()
+    job = conn.execute("SELECT status, error FROM jobs").fetchone()
+    assert (job["status"], job["error"]) == ("cancelled", "Apple ID удалён")
+    assert store.list_purchases(conn, petr.id) == []
 
 
 def test_catalog_aliases_for_latin_search():

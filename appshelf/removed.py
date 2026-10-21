@@ -38,7 +38,8 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
           stop=lambda: False) -> tuple[int, int, int]:
     """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются;
     «нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
-    делает ночь — раз в неделю на Apple ID. stop() перед каждым запросом к Apple: True — Interrupted."""
+    делает ночь — раз в неделю на Apple ID. stop() перед каждым запросом к Apple: True — Interrupted. Apple ID
+    удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается."""
     tool = env.tools(acct)
     rows = {r["app_id"]: r for r in store.list_purchases(c, acct.id)}
     skip = set() if full else store.no_license_ids(c, acct.id)

@@ -3,7 +3,7 @@ import socket
 from appshelf import jobs, nightly, people, store
 from appshelf.config import GB
 from appshelf.ipatool import SessionExpired
-from helpers import FakeTool, make_account, owner, seed_app, set_session
+from helpers import FakeTool, assert_shelf_gone, make_account, owner, seed_app, set_session
 from ipa_factory import make_ipa
 
 
@@ -108,6 +108,37 @@ def test_result_for_shows_only_own_apple_id():
     assert nightly.result_for(nightly.NO_LOGIN, "petr@example") == nightly.NO_LOGIN
     v1 = "обновлено 0, без изменений 3, ошибок 0"                                # итог до перехода — без адресов
     assert nightly.result_for(v1, "owner@example") == v1
+
+
+def remove_on(cfg, conn, acct, call: str):
+    """Хук подменённого ipatool: Apple ID удаляют, пока идёт вызов call (замок ipatool уже отпущен)."""
+    def hook(name, *args):
+        if name == call and people.get_account(conn, acct.id) is not None:
+            jobs.remove_account(cfg, conn, acct)
+    return hook
+
+
+def test_apple_id_removed_while_history_loads_leaves_nothing(ctx, cfg, conn, clock):
+    owner(conn, clock)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, session="ok")
+    tool = ctx.tools.setdefault(petr.id, FakeTool())
+    tool.purchases = [{"id": 7, "bundleId": "com.vk.vkclient", "name": "VK"}]   # Apple ответил
+    tool.on_call = remove_on(cfg, conn, petr, "list_purchases")
+    assert nightly.run(ctx.env, conn) == "petr@example: остановлена: Apple ID удалён"
+    assert_shelf_gone(conn, cfg, petr)
+
+
+def test_apple_id_removed_before_update_starts_downloads_nothing(ctx, cfg, conn, clock, tmp_path):
+    owner(conn, clock)
+    petr = ready(conn, cfg, clock, app_id=7, acct=make_account(conn, clock, email="petr@example", role="member",
+                                                                legacy=False))
+    tool = ctx.tools.setdefault(petr.id, FakeTool())
+    tool.latest[7] = "901"
+    tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7, version="1.1", external_id="901")
+    tool.on_call = remove_on(cfg, conn, petr, "latest_version_id")   # между list-versions и start_job
+    assert nightly.run(ctx.env, conn) == "petr@example: остановлена: Apple ID удалён (обновлено 0)"
+    assert all(c[0] != "download" for c in tool.calls)
+    assert_shelf_gone(conn, cfg, petr)
 
 
 def test_second_nightly_does_nothing_while_first_runs(ctx, cfg, conn, clock):

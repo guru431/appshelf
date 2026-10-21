@@ -57,6 +57,13 @@ def set_session(conn, aid: int, session: str) -> None:
     conn.execute("UPDATE accounts SET session=? WHERE id=?", (session, aid))
 
 
+def assert_shelf_gone(conn, cfg, acct) -> None:
+    """От удалённого Apple ID не осталось ни строк полки, ни каталога в архиве."""
+    for t in store.SHELF_TABLES:
+        assert conn.execute(f"SELECT COUNT(*) FROM {t} WHERE account_id=?", (acct.id,)).fetchone()[0] == 0, t
+    assert people.get_account(conn, acct.id) is None and not cfg.shelf_root(acct).exists()
+
+
 def to_weekday(clock, weekday: int) -> None:
     """Часы вперёд до нужного дня недели (0 — понедельник)."""
     while datetime.fromtimestamp(clock.t, timezone.utc).weekday() != weekday:
@@ -94,12 +101,15 @@ class FakeTool:
         self.errors: dict[str, Exception] = {}
         self.on_download = None
         self.on_login = None
+        self.on_call = None                      # on_call(name, *args) — перед ответом любого вызова
         self.versions: dict[int, str] = {}       # display_version
         self.no_license: set[int] = set()   # latest_version_id → LicenseNotFound
         self.account = {"name": "Иван Петров", "email": "owner@example", "storefront": "RU", "success": True}
 
     def _call(self, name, *args):
         self.calls.append((name, *args))
+        if self.on_call is not None:
+            self.on_call(name, *args)
         exc = self.errors.pop(name, None)
         if exc is not None:
             raise exc

@@ -10,7 +10,7 @@ import pytest
 from appshelf import ipa, ipatool, jobs, people, removed, store
 from appshelf.config import GB
 from appshelf.ipatool import LicenseNotFound, SessionExpired
-from helpers import TOKEN, FakeTool, make_account, owner, seed_app, set_session
+from helpers import TOKEN, FakeTool, assert_shelf_gone, make_account, owner, seed_app, set_session
 from ipa_factory import make_ipa, png_bytes
 
 
@@ -578,6 +578,17 @@ def test_move_waits_for_removal_of_apple_id(ctx, cfg, conn, clock, monkeypatch):
         with pytest.raises(jobs.AccountBusy):
             jobs.move_shelf(cfg, conn, petr)
     assert people.get_account(conn, petr.id) == petr
+
+
+def test_fetch_for_removed_apple_id_creates_no_shelf(ctx, cfg, conn, clock, tmp_path):
+    petr = published(conn, clock, app_id=7, acct=member(conn, clock))
+    tool = ctx.tools.setdefault(petr.id, FakeTool())
+    tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    jobs.remove_account(cfg, conn, petr)                               # удалили, пока скачивание ждало замок
+    with pytest.raises(store.AccountGone):
+        jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "nightly")
+    assert tool.calls == []
+    assert_shelf_gone(conn, cfg, petr)
 
 
 def test_download_after_move_goes_to_new_shelf(ctx, cfg, conn, clock, tmp_path):

@@ -28,6 +28,7 @@ EXPIRED_SUBJECT = "appshelf: нужен вход в Apple ID"
 LOW_SPACE_SUBJECT = f"appshelf: мало места на {notify.HOST}"
 REMOVE_LOCK_WAIT = 10.0  # идёт вызов ipatool этого Apple ID — ждём, как вход; скачивание отсекает проверка заданий
 NOT_PURCHASED = "этого приложения нет в покупках Apple ID — проверьте ссылку или ID"
+ACCOUNT_GONE = "Apple ID удалён"
 
 
 class LowSpace(Exception):
@@ -168,7 +169,10 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
     На сервере качается один IPA за раз (download_lock): иначе два скачивания вместе пройдут проверку места."""
     cfg = env.cfg
     with hold(cfg.download_lock):
-        acct = people.get_account(c, acct.id) or acct  # каталог полки мог переехать, пока ждали замок (move_shelf)
+        fresh = people.get_account(c, acct.id)  # каталог полки мог переехать, пока ждали замок (move_shelf)
+        if fresh is None:  # Apple ID удалили, пока ждали замок: каталог полки в архиве заново не создаём
+            raise store.AccountGone(acct.id)
+        acct = fresh
         free = free_space(env)
         if free < FREE_MIN:
             raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно 4 ГБ")
@@ -409,7 +413,7 @@ class Worker:
                 return False
             acct = people.get_account(c, job["account_id"])
             if acct is None:  # Apple ID удалили между постановкой задания и его взятием
-                store.finish_job(c, job["id"], "cancelled", self.env.now(), "Apple ID удалён")
+                store.finish_job(c, job["id"], "cancelled", self.env.now(), ACCOUNT_GONE)
                 return True
             self.run_job(c, job, acct)
             return True
@@ -444,6 +448,8 @@ class Worker:
             mark_expired(env, c, acct)
         except store.AppGone:
             store.finish_job(c, job["id"], "cancelled", env.now(), "снято с публикации во время скачивания")
+        except store.AccountGone:  # строки задания может уже не быть — UPDATE ничего не тронет
+            store.finish_job(c, job["id"], "cancelled", env.now(), ACCOUNT_GONE)
         except Exception as e:  # ошибка задания — текст у карточки
             if isinstance(e, LowSpace):
                 low_space(env, c, e)
