@@ -217,3 +217,27 @@ def test_full_check_refreshes_versions_of_known_removed_apps(ctx, conn, clock):
     removed.check(ctx.env, conn, acct, CATALOG, full=True)
     rows = {r["app_id"]: (r["version"], r["version_at"]) for r in store.list_purchases(conn, 1)}
     assert rows == {1: ("2.0", clock.iso()), 2: ("6.0", clock.iso()), 3: ("9.0", "")}
+
+
+def test_full_version_refresh_survives_one_app_refused(ctx, conn, clock):
+    # 2042 на одно приложение при обновлении версии, а вход жив: проверка идёт дальше, «вход истёк» не ставится
+    acct = owner(conn, clock)
+    ctx.tool.latest.update({1: "900", 2: "800"})
+    ctx.tool.versions.update({1: "1.0", 2: "5.0"})
+    ctx.tool.no_license.add(3)
+    removed.check(ctx.env, conn, acct, CATALOG)
+    ctx.tool.versions.update({1: "2.0", 2: "6.0"})
+    ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "2042")
+    removed.check(ctx.env, conn, acct, CATALOG, full=True)
+    assert {r["app_id"]: r["version"] for r in store.list_purchases(conn, 1)} == {1: "1.0", 2: "6.0"}
+    assert ("list_purchases",) in ctx.tool.calls
+
+
+def test_full_version_refresh_raises_when_session_really_expired(ctx, conn, clock):
+    acct = owner(conn, clock)
+    ctx.tool.latest[1] = "900"
+    removed.check(ctx.env, conn, acct, CATALOG[:1])
+    ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "")
+    ctx.tool.errors["list_purchases"] = SessionExpired("session_expired", "")
+    with pytest.raises(SessionExpired):
+        removed.check(ctx.env, conn, acct, CATALOG[:1], full=True)

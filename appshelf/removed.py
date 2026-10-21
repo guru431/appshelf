@@ -110,12 +110,15 @@ def _session_alive(tool) -> bool:
 
 
 def _fill_version(env, c, acct, app_id: int, latest: str = "") -> None:
-    """Последняя версия: external id последней версии → displayVersion (get-version-metadata)."""
+    """Последняя версия: external id последней версии → displayVersion (get-version-metadata). «Вход истёк» на одном
+    приложении (2042) — вход проверяем списком покупок, как в check: жив — версию пропускаем."""
     tool = env.tools(acct)
     try:
         version = tool.display_version(app_id, latest or tool.latest_version_id(app_id))
     except SessionExpired:
-        raise
+        if not _session_alive(tool):
+            raise
+        return
     except IpatoolError:  # без версии строка всё равно полезна
         return
     if version:

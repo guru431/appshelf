@@ -297,9 +297,9 @@ def claim_state(c, key: str, value: str) -> bool:
 # --- история покупок ---------------------------------------------------------
 
 def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
-    """Ответ DAAP: строки — source 'daap', и прежние по ссылке или из справочника тоже; время успешной загрузки — в
-    accounts.history_at, и для пустого ответа. Apple ID удалили, пока шёл запрос (замок ipatool уже отпущен), —
-    AccountGone."""
+    """Ответ DAAP: строки — source 'daap', и прежние по ссылке или из справочника тоже, прежняя отметка «нет лицензии»
+    снимается; время успешной загрузки — в accounts.history_at, и для пустого ответа. Apple ID удалили, пока шёл
+    запрос (замок ipatool уже отпущен), — AccountGone."""
     n = 0
     with tx(c):
         _require_account(c, aid)
@@ -316,6 +316,7 @@ def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
                              version_at=''""",
                       (aid, app_id, str(it.get("bundleId", "")), str(it.get("name", "")),
                        str(it.get("purchaseDate", "")), now, str(it.get("version", ""))))
+            clear_no_license(c, aid, app_id)
             n += 1
     return n
 
@@ -397,10 +398,11 @@ def set_purchase_version(c, aid: int, app_id: int, version: str, now: str) -> No
 
 
 def set_downloaded(c, aid: int, app_id: int, version: str, now: str) -> None:
-    """Apple отдал IPA: лицензия подтверждена (manual → license), версия из него — в строку «Истории» не из DAAP
-    (свои строки DAAP обновляет сам)."""
+    """Apple отдал IPA: лицензия подтверждена (manual → license, прежняя отметка «нет лицензии» — прочь), версия из
+    него — в строку «Истории» не из DAAP (свои строки DAAP обновляет сам)."""
     c.execute("UPDATE purchases SET version=?, version_at=?, source='license' "
               "WHERE account_id=? AND app_id=? AND source != 'daap'", (version, now, aid, app_id))
+    clear_no_license(c, aid, app_id)
 
 
 def confirm_license(c, aid: int, app_id: int) -> None:

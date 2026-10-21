@@ -91,6 +91,21 @@ def test_result_stays_after_check_and_separates_errors(web, conn, monkeypatch):
     assert "progress" not in web.client.get("/api/status").json()
 
 
+def test_new_check_keeps_earlier_errors_until_asked_again(web, conn, clock, monkeypatch):
+    # новая проверка ещё не дошла до id 3: он по-прежнему «ошибка проверки», а не «не проверено»
+    monkeypatch.setattr(removed, "load", lambda: CATALOG)
+    set_session(conn, 1, "ok")
+    store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    old = conn.execute("SELECT id FROM jobs").fetchone()["id"]
+    store.set_progress(conn, old, {"done": 3, "total": 3, "added": 0, "missing": 0, "errors": 1, "failed": [3]})
+    store.finish_job(conn, old, "done", clock.iso())
+    store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    new = conn.execute("SELECT MAX(id) AS id FROM jobs").fetchone()["id"]
+    store.set_progress(conn, new, {"done": 0, "total": 3, "added": 0, "missing": 0, "errors": 0, "failed": []})
+    text = web.client.get("/blocked").text
+    assert "ID 3 · ошибка проверки" in text and "ошибка проверки: 1" in text
+
+
 def test_pages_show_progress_of_running_check(web, conn, clock):
     set_session(conn, 1, "ok")
     store.enqueue_once(conn, 1, "check_removed", None, clock.iso())

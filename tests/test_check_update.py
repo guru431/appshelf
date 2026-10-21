@@ -84,6 +84,28 @@ def test_nightly_records_check_result(ctx, cfg, conn, clock, tmp_path):
     assert app_row(conn, 125)["checked_at"] == clock.iso() and app_row(conn, 125)["status"] == "ok"
 
 
+def test_nightly_same_ipa_is_not_an_update(ctx, cfg, conn, clock, tmp_path):
+    # list-versions дал другой id, а скачанный IPA — та же версия: «без изменений», в «новых версиях» её нет
+    ready(conn, cfg, clock)
+    ctx.tool.latest[123] = "999"
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=123, version="1.0", external_id="900")
+    assert nightly.run(ctx.env, conn) == "owner@example: обновлено 0, без изменений 1, ошибок 0"
+    assert app_row(conn)["check_result"] == "same"
+
+
+def test_nightly_first_download_is_not_a_check_result(ctx, cfg, conn, clock, tmp_path):
+    # первая публикация не удалась (нет current), ночь скачала — это не «скачана новая версия»
+    seed_app(conn, cfg, clock, app_id=123)
+    for j in conn.execute("SELECT id FROM jobs WHERE status='queued'").fetchall():
+        store.finish_job(conn, j["id"], "error", clock.iso())
+    store.set_app_status(conn, 1, 123, "error", "сбой")
+    set_session(conn, 1, "ok")
+    ctx.tool.latest[123] = "900"
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "f.ipa", item_id=123, version="1.0", external_id="900")
+    nightly.run(ctx.env, conn)
+    assert store.current_version(conn, 1, 123) is not None and app_row(conn)["check_result"] == ""
+
+
 def test_foreign_or_unpublished_app_is_not_found(web, conn, cfg, clock):
     petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
     ready(conn, cfg, clock, acct=petr, app_id=7)

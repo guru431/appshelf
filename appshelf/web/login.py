@@ -161,9 +161,15 @@ class LoginFlow:
             mine.result = (intent, "", tool.login(intent.email, password))
         except AuthCodeRequired:
             flow_id = secrets.token_urlsafe(16)
-            p = _Pending(tool, intent, password, self.clock() + self.ttl)
-            ref = weakref.ref(p)  # callback таймера не держит пароль после _drop
-            p.timer = self.schedule(self.ttl, lambda: self._expire(flow_id, ref))
+            pending = _Pending(tool, intent, password, self.clock() + self.ttl)
+            ref = weakref.ref(pending)  # callback таймера не держит пароль после _drop
+            try:
+                pending.timer = self.schedule(self.ttl, lambda: self._expire(flow_id, ref))
+            except BaseException:  # поток таймера не запустился: без TTL пароль в очередь не кладём
+                _drop(pending)
+                self.discard(intent)
+                raise
+            p = pending
             mine.result = (intent, flow_id, None)
         except BaseException as e:
             mine.error = e if isinstance(e, IpatoolError) else None

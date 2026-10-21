@@ -204,7 +204,9 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             refreshing, _, _ = store.refresh_status(c, aid)
             busy = store.has_active_jobs(c, aid)
             progress, last = store.removed_progress(c, aid)
-        failed = set((progress or last or {}).get("failed", []))  # техническая ошибка в последней проверке
+        # техническая ошибка в последней проверке и в идущей: до id, ещё не спрошенного заново, идущая не дошла;
+        # спрошенный заново стал «есть» или «нет в аккаунте» — эти статусы сильнее
+        failed = {i for p in (last, progress) if p for i in p.get("failed", [])}
         items = []
         for e in catalog:
             row = rows.get(e["id"])

@@ -164,10 +164,11 @@ def test_add_manual_keeps_history_row(conn, cfg, clock, acct):
 
 def test_daap_takes_over_unconfirmed_link_row(conn, cfg, clock, acct):
     store.add_manual(conn, 1, 7, clock.iso())
+    store.mark_no_license(conn, 1, 7, clock.iso())                     # прежний (ложный) отказ справочника
     assert store.unconfirmed(conn, 1, 7)
     store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
     assert [(r["name"], r["source"]) for r in store.list_purchases(conn, 1)] == [("VK", "daap")]
-    assert not store.unconfirmed(conn, 1, 7)
+    assert not store.unconfirmed(conn, 1, 7) and store.no_license_ids(conn, 1) == set()   # DAAP — лицензия есть
     store.add_known(conn, 1, 7, "ВКонтакте", "license")               # прежнюю строку и её source не трогает
     assert [(r["name"], r["source"]) for r in store.list_purchases(conn, 1)] == [("VK", "daap")]
 

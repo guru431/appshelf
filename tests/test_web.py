@@ -286,6 +286,19 @@ def test_link_confirmed_by_download_is_owned(web, conn, monkeypatch, tmp_path):
     assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
 
 
+def test_download_clears_earlier_no_license_mark(web, conn, clock, monkeypatch, tmp_path):
+    # проверка справочника когда-то сочла «нет лицензии» (в т. ч. ложный 2042), а Apple отдал IPA — есть в аккаунте
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: CATALOG_SBER)
+    store.mark_no_license(conn, 1, 492224193, clock.iso())
+    web.client.post("/blocked/add", data={"ref": "492224193"})
+    set_session(conn, 1, "ok")
+    web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
+    web.app.state.worker.tick()
+    assert store.no_license_ids(conn, 1) == set()
+    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+
+
 @pytest.mark.parametrize("catalog_row", [False, True])
 def test_login_after_empty_history_does_not_reload_it(make_web, cfg, conn, clock, acct, catalog_row):
     wb = make_web(cfg, conn)

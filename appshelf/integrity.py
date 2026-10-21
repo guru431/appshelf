@@ -15,9 +15,8 @@ from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import ipa, people, store
+from . import ipa, jobs, people, store
 from .config import TOKEN_RE, Config
-from .jobs import ArchiveUnavailable
 
 KINDS = {  # вид проблемы → подпись в кратком итоге; порядок — порядок итога
     "no_shelf": "нет каталога полки, а версии в базе есть",
@@ -121,8 +120,7 @@ def open_ro(path: Path) -> sqlite3.Connection:
 
 def check(cfg: Config, c, deep: bool = False) -> Report:
     """Полки всех Apple ID против строк versions и чужое в архиве. Архив недоступен — ArchiveUnavailable."""
-    if not cfg.archive.is_dir():
-        raise ArchiveUnavailable(f"архив {cfg.archive} недоступен — смонтирован ли он?")
+    jobs._archive(cfg)
     rep = Report(deep=deep)
     rows = defaultdict(list)
     for r in c.execute("SELECT * FROM versions ORDER BY account_id, app_id, id"):

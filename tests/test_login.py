@@ -37,6 +37,19 @@ def test_password_kept_until_code_then_removed():
     assert f.pending(flow_id) is None and f._pending == {} and dropped == []
 
 
+def test_timer_start_failure_keeps_no_password():
+    """Поток таймера TTL не запустился (под нагрузкой): записи с паролем без таймера в очереди нет, intent отброшен,
+    место под лимит свободно."""
+    def broken(delay, fn):
+        raise RuntimeError("can't start new thread")
+
+    dropped = []
+    f = LoginFlow(clock=Clock().monotonic, schedule=broken, discard=dropped.append, limit=1)
+    with pytest.raises(RuntimeError):
+        f.start(needs_code(), NEW, "S3cret-pw")
+    assert f._pending == {} and f._running == {} and dropped == [NEW]
+
+
 def test_login_without_2fa():
     f, _, dropped = flow()
     assert f.start(FakeTool(), KNOWN, "pw") == (KNOWN, "", FakeTool().account)

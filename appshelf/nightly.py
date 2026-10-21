@@ -85,9 +85,13 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
                 store.set_app_status(c, acct.id, app_id, "downloading")
                 result = fetch_version(env, c, acct, app_id, work)
                 store.finish_job(c, job_id, "done", env.now())
-                updated += 1
-                names.append(app["name"].replace("|", "/"))  # « | » делит итог по Apple ID (result_for)
-            store.set_checked(c, acct.id, app_id, env.now(), result)  # ошибку записывает app_failed
+                if result == "same":  # list-versions дал другой id, а IPA — та же версия
+                    same += 1
+                else:
+                    updated += 1
+                    names.append(app["name"].replace("|", "/"))  # « | » делит итог по Apple ID (result_for)
+            # ошибку записывает app_failed; первое скачивание (current не было) — не итог проверки обновления
+            store.set_checked(c, acct.id, app_id, env.now(), result if cur is not None else "")
         except SessionExpired:
             if job_id is not None:
                 store.finish_job(c, job_id, "error", env.now(), "истёк вход в Apple ID")
