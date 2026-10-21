@@ -1,4 +1,4 @@
-"""Проверка целостности полок (appshelf check).
+"""Проверка целостности полок (appshelf check) и снимок базы для восстановления (appshelf backup).
 
 Проверка — только чтение: ни одной записи в базу и архив, сироты не удаляются (автоматическая уборка отклонена —
 IDEAS-archive.md). По каждой строке versions — каталог, файлы, размер, ссылки manifest; deep — ещё SHA-256 и
@@ -7,9 +7,11 @@ IDEAS-archive.md). По каждой строке versions — каталог, �
 неизвестный каталог архива — маской."""
 from __future__ import annotations
 
+import os
 import plistlib
 import sqlite3
 from collections import Counter, defaultdict
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -43,6 +45,10 @@ KINDS = {  # вид проблемы → подпись в кратком ито
 
 class DbError(Exception):
     """Базу или снимок не открыть на чтение: нет файла, не SQLite, другая версия схемы."""
+
+
+class BackupError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -214,3 +220,23 @@ def _deep(app: Path, v, bundle: str | None, aid: int, path: str, rep: Report) ->
         rep.add("ipa_external_id", aid, path, f"в IPA {info.external_version_id}, в базе {v['external_version_id']}")
     if bundle is not None and info.bundle_id != bundle:
         rep.add("ipa_bundle_id", aid, path, f"в IPA {info.bundle_id}, в manifest {bundle}")
+
+
+def backup(db: Path, out: Path) -> Path:
+    """Согласованный снимок живой базы (sqlite3 backup API) в out/appshelf.db, 0600; out создаётся или пуст.
+    Перечень версий и SHA-256 — в самом снимке (versions); проверка копии — check по снимку и копии архива.
+    Снимок — один файл без WAL; пишется во временный и переименовывается: оборванный не выглядит готовым."""
+    out.mkdir(parents=True, exist_ok=True)
+    if any(out.iterdir()):
+        raise BackupError(f"каталог {out} не пуст — нужен новый или пустой")
+    tmp, dst = out / ".appshelf.db.tmp", out / "appshelf.db"
+    os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))  # 0600 сразу: в снимке люди и токены полок
+    try:
+        with closing(open_ro(db)) as src, closing(sqlite3.connect(tmp)) as d:
+            src.backup(d)
+            d.execute("PRAGMA journal_mode=DELETE")  # живая база в WAL — флаг переехал бы в снимок
+        os.replace(tmp, dst)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return dst

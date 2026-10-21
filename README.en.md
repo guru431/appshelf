@@ -200,16 +200,42 @@ installed apps stay):
 shelf no shelf needs it. Directories that version 2 derived as an HMAC of `PUB_TOKEN` are moved to random tokens by
 `appshelf-web` on start.
 
+## Integrity check
+
+    sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf check'
+
+Read-only: the database is opened without writes, nothing in the archive is changed or removed. For every version in
+the database it checks the directory, `app.ipa` of the recorded size, `icon.png`, that `manifest.plist` parses and
+its links point at this shelf; `--deep` also compares the IPA's SHA-256 (saved on download) and the itemId, external
+version id and bundle id inside the IPA — it reads the whole archive. Separately: directories without database rows,
+`.partial` (normal during a download), an unfinished shelf move, archive directories that belong to no Apple ID.
+Apple IDs are reported by number, shelf tokens as `<токен>` or their first four characters. `--json` gives a
+machine-readable report. Exit code: 0 — no problems, 1 — problems found, 2 — the check did not run (archive not
+mounted, no database).
+
 ## Backups
 
-- The database — only as a snapshot, not a file copy while running (WAL), e.g. on a timer (or `sqlite3 … ".backup …"`):
+A restore set is a database snapshot, a copy of the archive, and a check that the shelves can be restored from that
+pair in full.
 
-      sudo -u appshelf /var/_sh/appshelf/.venv/bin/python -c "import sqlite3; sqlite3.connect('/var/lib/appshelf/appshelf.db').backup(sqlite3.connect('/backup/appshelf.db'))"
+1. Database snapshot — with the command, not a file copy while running (WAL): consistent, a single file, mode 0600.
+   The directory must be new or empty:
 
-  It holds the people, Apple IDs and shelf tokens.
-- `/etc/appshelf/appshelf.env` (`PUB_TOKEN`) and `/var/lib/appshelf/cookie-key` — to a protected place: without
-  them the archive directories and device sign-ins cannot be restored as they were.
-- The IPA archive — as a directory copy; without the database its directories cannot be matched to Apple IDs.
+       sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf backup --out /backup/appshelf/2026-10-21'
+
+   The snapshot holds the people, Apple IDs, shelf tokens and the list of versions with sizes and SHA-256.
+2. The IPA archive — as a directory copy, right after the snapshot: `rsync -a <archive>/ /backup/appshelf/2026-10-21/pub/`.
+3. Check the copy — the same integrity check, run against the snapshot and the archive copy (the snapshot is opened
+   read-only; no Apple calls, no mail):
+
+       sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf check --db /backup/appshelf/2026-10-21/appshelf.db --archive /backup/appshelf/2026-10-21/pub --deep'
+
+   Exit code 0 means the set is good. Missing files or directories mean the nightly run replaced a version or
+   `rotate-token` ran between the snapshot and the copy: take the set again. A snapshot from another schema version
+   is refused — check it with the appshelf version that took it.
+
+- `/etc/appshelf/appshelf.env` (`PUB_TOKEN`) and `/var/lib/appshelf/cookie-key` — separately, to a protected place:
+  without them the archive directories and device sign-ins cannot be restored as they were.
 - ipatool accounts (`/etc/appshelf/accounts`) are encrypted with a key derived from `machine-id` and cannot be read
   on another machine: after a move each Apple ID signs in again; the archive moves together with the database and
   `appshelf.env`.

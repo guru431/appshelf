@@ -1,6 +1,10 @@
 import hashlib
 import json
+import os
 import plistlib
+import shutil
+import sqlite3
+import stat
 from contextlib import closing
 
 import pytest
@@ -177,6 +181,63 @@ def test_cli_check_exit_codes_and_json(monkeypatch, tmp_path, clock, capsys):
     assert cli.main(["check", "--json"]) == 1
     out = capsys.readouterr().out
     assert json.loads(out)["counts"] == {"no_icon": 1} and shelf not in out and PETR not in out
+
+
+def dump(path):
+    with closing(sqlite3.connect(path)) as c:
+        return list(c.iterdump())
+
+
+def test_backup_snapshot_and_check_of_the_copy(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    vdir, _ = cli_shelf(cfg, clock, tmp_path)
+    out = tmp_path / "backup" / "2026-10-21"
+    assert cli.main(["backup", "--out", str(out)]) == 0
+    assert "check --db" in capsys.readouterr().out
+    snap = out / "appshelf.db"
+    assert sorted(p.name for p in out.iterdir()) == ["appshelf.db"]  # один файл: без -wal и временного
+    assert dump(snap) == dump(cfg.db)
+    copy = out / "pub"
+    shutil.copytree(cfg.archive, copy)
+    snap_before = snap.read_bytes()
+    assert cli.main(["check", "--deep", "--db", str(snap), "--archive", str(copy)]) == 0
+    assert snap.read_bytes() == snap_before and sorted(p.name for p in out.iterdir()) == ["appshelf.db", "pub"]
+    (copy / vdir.relative_to(cfg.archive) / "app.ipa").unlink()
+    capsys.readouterr()
+    assert cli.main(["check", "--db", str(snap), "--archive", str(copy)]) == 1
+    assert "нет app.ipa" in capsys.readouterr().out
+    assert (vdir / "app.ipa").is_file()  # живой архив проверка копии не трогала
+
+
+@pytest.mark.skipif(os.name != "posix", reason="права файлов — как на сервере (Linux)")
+def test_backup_snapshot_is_private(monkeypatch, tmp_path, clock):
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    assert cli.main(["backup", "--out", str(tmp_path / "out")]) == 0
+    assert stat.S_IMODE((tmp_path / "out" / "appshelf.db").stat().st_mode) == 0o600
+
+
+def test_backup_refuses_non_empty_dir(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out" / "old.db").write_bytes(b"")
+    assert cli.main(["backup", "--out", str(tmp_path / "out")]) == 2
+    assert "не пуст" in capsys.readouterr().err
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["old.db"]
+
+
+def test_check_refuses_snapshot_of_other_schema(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    old = tmp_path / "old.db"
+    with closing(sqlite3.connect(old)) as c:
+        c.execute("PRAGMA user_version = 3")
+    before = old.read_bytes()
+    assert cli.main(["check", "--db", str(old)]) == 2
+    assert "схема версии 3" in capsys.readouterr().err
+    assert old.read_bytes() == before  # без перехода схемы
+    assert cli.main(["check", "--db", str(tmp_path / "nope.db")]) == 2
 
 
 def test_cli_check_reports_unavailable_archive(monkeypatch, tmp_path, clock, capsys):

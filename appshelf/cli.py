@@ -1,12 +1,14 @@
 """CLI appshelf: ночная проверка (appshelf-nightly.service), запасная ссылка входа — если вход Apple сломан, а живой
-cookie нет и у владельца, — новый токен каталога полки, если её ссылки установки утекли, и проверка целостности полок.
-Только от appshelf."""
+cookie нет и у владельца, — новый токен каталога полки, если её ссылки установки утекли, проверка целостности полок и
+снимок базы для восстановления. Только от appshelf."""
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 from contextlib import closing
+from dataclasses import replace
+from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
 from .config import from_env
@@ -25,11 +27,17 @@ def main(argv=None) -> int:
                                        "2 — проверка не выполнена")
     chk.add_argument("--deep", action="store_true", help="ещё SHA-256 и содержимое каждого IPA (читает весь архив)")
     chk.add_argument("--json", action="store_true", help="отчёт в JSON")
+    chk.add_argument("--db", type=Path, help="снимок базы (appshelf backup) вместо живой")
+    chk.add_argument("--archive", type=Path, help="копия архива вместо APPSHELF_PUB")
+    bak = sub.add_parser("backup", help="согласованный снимок базы для восстановления; архив — копией, затем check")
+    bak.add_argument("--out", required=True, type=Path, help="новый или пустой каталог")
     args = p.parse_args(argv)
     cfg = from_env()
     jobs.check_user(cfg)
     if args.cmd == "check":
         return check(cfg, args)
+    if args.cmd == "backup":
+        return backup(cfg, args.out)
     with closing(store.connect(cfg.db, cfg.owner_email)) as c:
         if args.cmd in ("login-link", "rotate-token"):
             acct = people.account_by_email(c, args.email)
@@ -55,12 +63,31 @@ def main(argv=None) -> int:
 
 
 def check(cfg, args) -> int:
-    """Только чтение: база открыта mode=ro (без перехода схемы), архив не меняется."""
+    """Только чтение: база открыта mode=ro (без перехода схемы), архив не меняется. --db и --archive — проверка
+    набора восстановления: снимок и копия архива, без обращений к Apple и писем."""
+    if args.archive:
+        cfg = replace(cfg, pub_dir=args.archive)
     try:
-        with closing(integrity.open_ro(cfg.db)) as c:
+        with closing(integrity.open_ro(args.db or cfg.db)) as c:
             rep = integrity.check(cfg, c, deep=args.deep)
     except (integrity.DbError, jobs.ArchiveUnavailable) as e:
         print(e, file=sys.stderr)
         return 2
     print(json.dumps(rep.as_dict(), ensure_ascii=False, indent=1) if args.json else rep.text())
     return 0 if rep.ok else 1
+
+
+def backup(cfg, out: Path) -> int:
+    try:
+        dst = integrity.backup(cfg.db, out)
+    except (integrity.DbError, integrity.BackupError) as e:
+        print(e, file=sys.stderr)
+        return 2
+    print(f"снимок базы: {dst}\n"
+          f"дальше:\n"
+          f"  1. скопируйте архив {cfg.archive} (например, rsync -a {cfg.archive}/ {out / 'pub'}/)\n"
+          f"  2. проверьте копию: appshelf check --db {dst} --archive {out / 'pub'} [--deep]\n"
+          f"  пропавшие файлы или каталоги — между снимком и копией прошла ротация версий или rotate-token: "
+          f"повторите набор\n"
+          f"  appshelf.env и cookie-key — отдельно, в защищённое место")
+    return 0
