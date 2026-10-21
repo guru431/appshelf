@@ -267,6 +267,12 @@ def test_refresh_history_job(ctx, cfg, conn, clock):
     assert [r["name"] for r in store.list_purchases(conn, 1)] == ["VK"]
 
 
+def test_empty_history_is_remembered(ctx, cfg, conn, clock):
+    acct = owner(conn, clock)
+    assert jobs.refresh_history(ctx.env, conn, acct) == 0                # Apple ответил: покупок нет
+    assert people.get_account(conn, 1).history_at == clock.iso() == store.history_refreshed_at(conn, 1)
+
+
 def test_wrong_item_id_in_ipa_is_error(ctx, cfg, conn, clock, tmp_path):
     acct = published(conn, clock)
     ctx.tool.ipas[123] = make_ipa(tmp_path / "s.ipa", item_id=999)
@@ -581,6 +587,7 @@ def test_rotate_owner_shelf_leaves_pub_token(ctx, cfg, conn, clock):
 def test_move_refused_while_apple_id_downloads(ctx, cfg, conn, clock):
     petr = member(conn, clock, session="ok")
     seed_app(conn, cfg, clock, app_id=7, acct=petr)
+    petr = people.get_account(conn, petr.id)                           # с history_at загруженной истории
     store.take_job(conn)                                               # публикация Петра качается
     with pytest.raises(jobs.AccountBusy):
         jobs.move_shelf(cfg, conn, petr)

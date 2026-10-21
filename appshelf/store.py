@@ -294,11 +294,13 @@ def claim_state(c, key: str, value: str) -> bool:
 # --- история покупок ---------------------------------------------------------
 
 def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
-    """Ответ DAAP: строки — source 'daap', и прежние по ссылке или из справочника тоже. Apple ID удалили, пока шёл
-    запрос (замок ipatool уже отпущен), — AccountGone."""
+    """Ответ DAAP: строки — source 'daap', и прежние по ссылке или из справочника тоже; время успешной загрузки — в
+    accounts.history_at, и для пустого ответа. Apple ID удалили, пока шёл запрос (замок ipatool уже отпущен), —
+    AccountGone."""
     n = 0
     with tx(c):
         _require_account(c, aid)
+        c.execute("UPDATE accounts SET history_at=? WHERE id=?", (now, aid))
         for it in items:
             app_id = int(it.get("id") or 0)
             if app_id <= 0:
@@ -326,7 +328,9 @@ def has_purchase(c, aid: int, app_id: int) -> bool:
 
 
 def history_refreshed_at(c, aid: int) -> str:
-    return c.execute("SELECT MAX(refreshed_at) AS t FROM purchases WHERE account_id=?", (aid,)).fetchone()["t"] or ""
+    """Время последней успешной загрузки истории (в том числе пустой); '' — ещё не загружалась."""
+    row = c.execute("SELECT history_at FROM accounts WHERE id=?", (aid,)).fetchone()
+    return row["history_at"] if row is not None else ""
 
 
 # --- каталог -----------------------------------------------------------------

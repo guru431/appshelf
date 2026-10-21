@@ -5,11 +5,11 @@ import pytest
 from PIL import Image
 from starlette.testclient import TestClient
 
-from appshelf import store
+from appshelf import jobs, store
 from appshelf.config import GB
 from appshelf.ipatool import LicenseNotFound
 from appshelf.web.app import parse_app_id
-from helpers import HOST, TOKEN, make_account, seed_app, set_session, sign_in
+from helpers import HOST, TOKEN, FakeTool, make_account, seed_app, set_session, sign_in
 from ipa_factory import make_ipa
 
 
@@ -274,6 +274,25 @@ def test_link_confirmed_by_download_is_owned(web, conn, monkeypatch, tmp_path):
     web.app.state.worker.tick()
     assert [r["source"] for r in store.list_purchases(conn, 1)] == ["license"]
     assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+
+
+@pytest.mark.parametrize("catalog_row", [False, True])
+def test_login_after_empty_history_does_not_reload_it(make_web, cfg, conn, clock, acct, catalog_row):
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(acct.id, FakeTool())
+    jobs.refresh_history(jobs.Env(cfg, lambda a: tool, now=clock.iso), conn, acct)   # DAAP пуст
+    if catalog_row:                                                                   # удалённое нашёл справочник
+        store.add_known(conn, 1, 492224193, "СберБанк Онлайн", "license")
+    r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
+    assert r.status_code == 303 and conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+    text = wb.client.get("/history").text
+    assert "ещё не загружалась" not in text and f"обновлено {clock.iso()[:16].replace('T', ' ')} UTC" in text
+    assert ("СберБанк Онлайн" if catalog_row else "История загружена — покупок в ней нет") in text
+
+
+def test_history_not_loaded_yet_says_so(web):
+    text = web.client.get("/history").text
+    assert "ещё не загружалась" in text and "покупок в ней нет" not in text
 
 
 def test_theme_switch_sets_cookie(web):
