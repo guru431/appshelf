@@ -309,7 +309,8 @@ def test_manual_app_gets_name_from_ipa(ctx, cfg, conn, clock, tmp_path):
     worker(ctx, cfg).tick()
     app = store.list_apps(conn, 1)[0]
     assert (app.name, app.bundle_id, app.status) == ("Пример & Ко", "ru.example.app", "ok")
-    assert [(r["name"], r["bundle_id"]) for r in store.list_purchases(conn, 1)] == [("Пример & Ко", "ru.example.app")]
+    assert [(r["name"], r["bundle_id"], r["source"]) for r in store.list_purchases(conn, 1)] == \
+        [("Пример & Ко", "ru.example.app", "license")]                 # Apple отдал IPA — лицензия подтверждена
 
 
 def test_download_updates_version_of_history_row_not_from_daap(ctx, cfg, conn, clock, tmp_path):
@@ -479,16 +480,19 @@ def test_link_to_app_not_in_purchases_is_not_retried(ctx, cfg, conn, clock):
     app = store.list_apps(conn, 1)[0]
     assert (app.status, app.last_error) == ("nolicense", jobs.NOT_PURCHASED)
     assert store.retry(conn, 1, 987654321, clock.iso()) is False
+    assert store.no_license_ids(conn, 1) == {987654321}
     jobs.unpublish(cfg, conn, acct, 987654321)                       # заглушка уходит и из «Истории»
     assert store.list_purchases(conn, 1) == []
 
 
-def test_unpublish_keeps_catalog_and_downloaded_history_rows(ctx, cfg, conn, clock, monkeypatch):
-    monkeypatch.setattr(removed, "load", lambda: [{"id": 5, "name": "СберБанк Онлайн"}])
+def test_unpublish_keeps_confirmed_history_rows(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 5, "name": "СберБанк Онлайн"}, {"id": 7, "name": "ВТБ"}])
     acct = owner(conn, clock)
-    store.add_manual(conn, 1, 5, clock.iso())                        # из справочника удалённых
+    store.add_known(conn, 1, 5, "СберБанк Онлайн", "license")       # лицензию нашла проверка справочника
+    store.publish(conn, 1, 5, clock.iso())
     seed_app(conn, cfg, clock, app_id=6, versions=("1.0",))          # из истории покупок
-    for app_id in (5, 6):
+    store.add_manual(conn, 1, 7, clock.iso())                        # по ссылке: ID из справочника, не подтверждено
+    for app_id in (5, 6, 7):
         jobs.unpublish(cfg, conn, acct, app_id)
     assert sorted(r["app_id"] for r in store.list_purchases(conn, 1)) == [5, 6]
 

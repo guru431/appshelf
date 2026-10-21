@@ -30,24 +30,21 @@ def aliases() -> dict[int, str]:
     return {a["id"]: " ".join(a.get("aliases", [])) for a in load() if a.get("aliases")}
 
 
-def ids() -> set[int]:
-    return {a["id"] for a in load()}
-
-
 def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
           stop=lambda: False) -> tuple[int, int, int]:
-    """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются;
-    «нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
+    """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются, кроме
+    добавленных по ссылке и не подтверждённых (manual): найдена лицензия — подтверждаются, нет — «нет лицензии».
+    «Нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
     делает ночь — раз в неделю на Apple ID. Она же обновляет версию (и version_at) известных строк не из DAAP:
-    +2 запроса в неделю на каждое своё удалённое приложение. stop() перед каждым запросом к Apple: True — Interrupted. Apple ID
-    удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается."""
+    +2 запроса в неделю на каждое своё удалённое приложение. stop() перед каждым запросом к Apple: True —
+    Interrupted. Apple ID удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается."""
     tool = env.tools(acct)
     rows = {r["app_id"]: r for r in store.list_purchases(c, acct.id)}
     skip = set() if full else store.no_license_ids(c, acct.id)
     added = missing = errors = 0
     for app in load() if catalog is None else catalog:
         row = rows.get(app["id"])
-        if row is not None:
+        if row is not None and row["source"] != "manual":
             if full and row["source"] != "daap":  # ночью: последняя версия своего удалённого (DAAP её не обновит)
                 _fill_version(env, c, acct, app["id"])
             continue
@@ -75,10 +72,13 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
         except IpatoolError:  # сбой одного id не останавливает проверку остальных
             errors += 1
             continue
-        store.add_known(c, acct.id, app["id"], app["name"], "license")
+        if row is None:
+            store.add_known(c, acct.id, app["id"], app["name"], "license")
+            added += 1
+        else:
+            store.confirm_license(c, acct.id, app["id"])
         store.clear_no_license(c, acct.id, app["id"])
         _fill_version(env, c, acct, app["id"], latest)
-        added += 1
     return added, missing, errors
 
 

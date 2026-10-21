@@ -7,8 +7,10 @@ from starlette.testclient import TestClient
 
 from appshelf import store
 from appshelf.config import GB
+from appshelf.ipatool import LicenseNotFound
 from appshelf.web.app import parse_app_id
 from helpers import HOST, TOKEN, make_account, seed_app, set_session, sign_in
+from ipa_factory import make_ipa
 
 
 def test_healthz_without_login(web):
@@ -241,6 +243,37 @@ def test_history_and_removed_show_when_version_was_checked(web, conn, monkeypatc
     store.set_purchase_version(conn, 1, 492224193, "2.0", "2026-10-21T03:00:00+00:00")
     for page in ("/history", "/blocked"):
         assert "2.0 · проверено 21.10" in web.client.get(page).text, page
+
+
+CATALOG_SBER = [{"id": 492224193, "name": "СберБанк Онлайн"}]
+
+
+def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch):
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: CATALOG_SBER)
+    web.client.post("/blocked/add", data={"ref": "id492224193"})
+    text = web.client.get("/blocked").text
+    assert "Есть в аккаунте: 0" in text and "не проверено: 1" in text
+    assert "по ссылке, не подтверждено" in web.client.get("/history").text
+    set_session(conn, 1, "ok")
+    web.tool.errors["download"] = LicenseNotFound("license_not_found", "no license")
+    web.app.state.worker.tick()
+    assert store.list_apps(conn, 1)[0].status == "nolicense"                  # повторять бесполезно
+    text = web.client.get("/blocked").text
+    assert "Есть в аккаунте: 0" in text and "нет в аккаунте: 1" in text and "ID 492224193 · нет в аккаунте" in text
+    web.client.post("/apps/492224193/unpublish")
+    assert store.list_purchases(conn, 1) == []                                # ложной покупки в «Истории» нет
+
+
+def test_link_confirmed_by_download_is_owned(web, conn, monkeypatch, tmp_path):
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: CATALOG_SBER)
+    web.client.post("/blocked/add", data={"ref": "492224193"})
+    set_session(conn, 1, "ok")
+    web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
+    web.app.state.worker.tick()
+    assert [r["source"] for r in store.list_purchases(conn, 1)] == ["license"]
+    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
 
 
 def test_theme_switch_sets_cookie(web):

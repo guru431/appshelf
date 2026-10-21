@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -115,15 +115,18 @@ def describe(e: Exception) -> str:
 
 
 def stub(c, aid: int, app_id: int) -> bool:
-    """Добавлено по ссылке или ID и ни разу не скачано: строка «Истории» без bundle id не из справочника."""
-    return store.no_bundle(c, aid, app_id) and app_id not in removed.ids()
+    """Добавлено по ссылке или ID, и лицензию Apple не подтвердил — в справочнике ID или нет."""
+    return store.unconfirmed(c, aid, app_id)
 
 
-def app_failed(c, aid: int, app_id: int, e: Exception) -> None:
+def app_failed(c, aid: int, app_id: int, e: Exception, now: str) -> None:
     """Ошибка скачивания — у карточки. Есть рабочая версия — приложение остаётся «ok», ошибка — строкой «не удалось
-    обновить»: ставить можно, повторит ночь. Добавленное по ссылке без лицензии — nolicense: повторять бесполезно."""
+    обновить»: ставить можно, повторит ночь. Добавленное по ссылке без лицензии — nolicense (повторять бесполезно) и
+    отметка «нет лицензии» (на «Удалённых» — «нет в аккаунте»)."""
     if isinstance(e, LicenseNotFound) and stub(c, aid, app_id):
         store.set_app_status(c, aid, app_id, "nolicense", NOT_PURCHASED)
+        with suppress(store.AccountGone):  # Apple ID удалили, пока шёл запрос, — отмечать нечего
+            store.mark_no_license(c, aid, app_id, now)
     elif store.current_version(c, aid, app_id) is not None:
         store.set_app_status(c, aid, app_id, "ok", describe(e))
     else:
@@ -232,8 +235,8 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
 
 def unpublish(cfg: Config, c, acct, app_id: int) -> None:
     """Снять с публикации. Архив недоступен — ArchiveUnavailable и ничего не тронуто: файлы остались бы на шаре без
-    строк, и удалить их из панели было бы нечем. Добавленное по ошибочному ID и ни разу не скачанное уходит и
-    из «Истории»."""
+    строк, и удалить их из панели было бы нечем. Добавленное по ссылке, лицензию на которое Apple не подтвердил,
+    уходит и из «Истории»."""
     _archive(cfg)
     store.unpublish(c, acct.id, cfg.shelf_root(acct), app_id)
     if stub(c, acct.id, app_id):
@@ -456,4 +459,4 @@ class Worker:
                 low_space(env, c, e)
             store.finish_job(c, job["id"], "error", env.now(), describe(e))
             if app_id is not None:
-                app_failed(c, acct.id, app_id, e)
+                app_failed(c, acct.id, app_id, e, env.now())

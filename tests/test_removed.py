@@ -186,6 +186,19 @@ def test_check_fills_versions_of_owned_removed_apps(ctx, conn, clock):
     assert {r["app_id"]: r["version"] for r in store.list_purchases(conn, 1)}[3] == "8.1"
 
 
+def test_check_confirms_or_refutes_links_to_catalog_apps(ctx, conn, clock):
+    # добавленное по ссылке — ещё не покупка: справочник проверяет его, как не известное истории
+    acct = owner(conn, clock)
+    for app_id in (1, 2):
+        store.add_manual(conn, 1, app_id, clock.iso())
+    ctx.tool.latest[1] = "900"
+    ctx.tool.versions[1] = "12.0"
+    ctx.tool.no_license.add(2)
+    assert removed.check(ctx.env, conn, acct, CATALOG[:2]) == (0, 1, 0)
+    rows = {r["app_id"]: (r["source"], r["version"]) for r in store.list_purchases(conn, 1)}
+    assert rows == {1: ("license", "12.0"), 2: ("manual", "")} and store.no_license_ids(conn, 1) == {2}
+
+
 def test_full_check_refreshes_versions_of_known_removed_apps(ctx, conn, clock):
     # удалённое из App Store DAAP не обновит: версия строки — последняя доступная, с датой проверки
     acct = owner(conn, clock)

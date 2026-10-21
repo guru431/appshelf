@@ -294,7 +294,8 @@ def claim_state(c, key: str, value: str) -> bool:
 # --- история покупок ---------------------------------------------------------
 
 def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
-    """Ответ DAAP. Apple ID удалили, пока шёл запрос (замок ipatool уже отпущен), — AccountGone."""
+    """Ответ DAAP: строки — source 'daap', и прежние по ссылке или из справочника тоже. Apple ID удалили, пока шёл
+    запрос (замок ipatool уже отпущен), — AccountGone."""
     n = 0
     with tx(c):
         _require_account(c, aid)
@@ -302,11 +303,12 @@ def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
             app_id = int(it.get("id") or 0)
             if app_id <= 0:
                 continue
-            c.execute("""INSERT INTO purchases (account_id, app_id, bundle_id, name, purchase_date, refreshed_at, version)
-                         VALUES (?, ?, ?, ?, ?, ?, ?)
+            c.execute("""INSERT INTO purchases (account_id, app_id, bundle_id, name, purchase_date, refreshed_at, version,
+                             source) VALUES (?, ?, ?, ?, ?, ?, ?, 'daap')
                          ON CONFLICT(account_id, app_id) DO UPDATE SET bundle_id=excluded.bundle_id,
                              name=excluded.name, purchase_date=excluded.purchase_date,
-                             refreshed_at=excluded.refreshed_at, version=excluded.version""",
+                             refreshed_at=excluded.refreshed_at, version=excluded.version, source='daap',
+                             version_at=''""",
                       (aid, app_id, str(it.get("bundleId", "")), str(it.get("name", "")),
                        str(it.get("purchaseDate", "")), now, str(it.get("version", ""))))
             n += 1
@@ -356,7 +358,8 @@ def publish(c, aid: int, app_id: int, now: str) -> bool:
 def add_manual(c, aid: int, app_id: int, now: str) -> bool:
     """Публикация по ссылке или ID App Store: удалённые из магазина приложения (СберБанк, VK, банки)
     Apple не отдаёт в истории покупок DAAP, хотя по id они скачиваются. Строка истории — заглушка
-    без bundle id; имя и bundle id подставит первое скачивание (fill_names)."""
+    без bundle id, не подтверждённая (manual), пока лицензию не подтвердит скачивание или справочник; имя и
+    bundle id подставит первое скачивание (fill_names)."""
     add_known(c, aid, app_id, f"App Store {app_id}", "manual")
     return publish(c, aid, app_id, now)
 
@@ -387,9 +390,16 @@ def set_purchase_version(c, aid: int, app_id: int, version: str, now: str) -> No
 
 
 def set_downloaded(c, aid: int, app_id: int, version: str, now: str) -> None:
-    """Apple отдал IPA: версия из него — в строку «Истории» не из DAAP (свои строки DAAP обновляет сам)."""
-    c.execute("UPDATE purchases SET version=?, version_at=? WHERE account_id=? AND app_id=? AND source != 'daap'",
-              (version, now, aid, app_id))
+    """Apple отдал IPA: лицензия подтверждена (manual → license), версия из него — в строку «Истории» не из DAAP
+    (свои строки DAAP обновляет сам)."""
+    c.execute("UPDATE purchases SET version=?, version_at=?, source='license' "
+              "WHERE account_id=? AND app_id=? AND source != 'daap'", (version, now, aid, app_id))
+
+
+def confirm_license(c, aid: int, app_id: int) -> None:
+    """Добавленное по ссылке подтвердила проверка справочника: Apple отдаёт его версии этому Apple ID."""
+    c.execute("UPDATE purchases SET source='license' WHERE account_id=? AND app_id=? AND source='manual'",
+              (aid, app_id))
 
 
 def clear_no_license(c, aid: int, app_id: int) -> None:
@@ -407,9 +417,9 @@ def add_known(c, aid: int, app_id: int, name: str, source: str) -> None:
         _require_account(c, aid)
 
 
-def no_bundle(c, aid: int, app_id: int) -> bool:
-    """Строка «Истории» без bundle id: ни разу не скачивалась (имя и bundle id даёт первое скачивание)."""
-    return c.execute("SELECT 1 FROM purchases WHERE account_id=? AND app_id=? AND bundle_id=''",
+def unconfirmed(c, aid: int, app_id: int) -> bool:
+    """Строка «Истории» добавлена по ссылке, и лицензию Apple не подтвердил (ни скачивание, ни справочник)."""
+    return c.execute("SELECT 1 FROM purchases WHERE account_id=? AND app_id=? AND source='manual'",
                      (aid, app_id)).fetchone() is not None
 
 

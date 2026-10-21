@@ -195,7 +195,11 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         items = []
         for e in catalog:
             row = rows.get(e["id"])
-            status = "owned" if row is not None else ("missing" if e["id"] in no_license else "unknown")
+            # добавленное по ссылке (manual) — не покупка, пока лицензию не подтвердит скачивание или справочник
+            if row is not None and row["source"] != "manual" and e["id"] not in no_license:
+                status = "owned"
+            else:
+                status = "missing" if e["id"] in no_license else "unknown"
             items.append({"id": e["id"], "name": row["name"] if row is not None else e["name"],
                           "catalog_name": e["name"], "aliases": " ".join(e.get("aliases", [])),
                           "version": row["version"] if row is not None else "",

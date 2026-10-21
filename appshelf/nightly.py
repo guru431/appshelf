@@ -106,7 +106,7 @@ def _run_account(env: Env, c, acct, work, full: bool) -> str:
             errors += 1
             if job_id is not None:
                 store.finish_job(c, job_id, "error", env.now(), describe(e))
-            app_failed(c, acct.id, app_id, e)
+            app_failed(c, acct.id, app_id, e, env.now())
     if names:  # удалённое из App Store сам App Store не обновит — новую версию ставят с полки
         notes.append("новые версии: " + ", ".join(names))
     return "; ".join([f"обновлено {updated}, без изменений {same}, ошибок {errors}", *notes])
