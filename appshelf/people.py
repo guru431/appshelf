@@ -43,6 +43,7 @@ class Account:
     last_login_at: str
     shelf: str = ""      # токен каталога в архиве (config.shelf_token); '' — legacy_pub или Apple ID версии 2
     shelf_next: str = ""  # новый токен, пока каталог переезжает (jobs.move_shelf)
+    history_at: str = ""  # время последней успешной загрузки истории покупок, в том числе пустой
 
 
 def _user(r) -> User | None:
@@ -52,7 +53,7 @@ def _user(r) -> User | None:
 def _account(r) -> Account | None:
     return None if r is None else Account(r["id"], r["user_id"], r["email"], r["name"], r["storefront"],
                                           r["session"], r["session_since"], r["device_mac"], bool(r["legacy_pub"]),
-                                          r["last_login_at"], r["shelf"], r["shelf_next"])
+                                          r["last_login_at"], r["shelf"], r["shelf_next"], r["history_at"])
 
 
 def normalize_email(email: str) -> str:

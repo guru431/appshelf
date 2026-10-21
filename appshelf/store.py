@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     last_login_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     shelf TEXT NOT NULL DEFAULT '',
-    shelf_next TEXT NOT NULL DEFAULT ''
+    shelf_next TEXT NOT NULL DEFAULT '',
+    history_at TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS links (
     id INTEGER PRIMARY KEY,
@@ -59,6 +60,8 @@ CREATE TABLE IF NOT EXISTS purchases (
     purchase_date TEXT NOT NULL DEFAULT '',
     refreshed_at TEXT NOT NULL,
     version TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'daap',
+    version_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (account_id, app_id)
 );
 CREATE TABLE IF NOT EXISTS apps (
@@ -70,6 +73,7 @@ CREATE TABLE IF NOT EXISTS apps (
     status TEXT NOT NULL,
     last_error TEXT NOT NULL DEFAULT '',
     checked_at TEXT NOT NULL DEFAULT '',
+    check_result TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (account_id, app_id)
 );
 CREATE TABLE IF NOT EXISTS versions (
@@ -85,7 +89,9 @@ CREATE TABLE IF NOT EXISTS versions (
     dir TEXT NOT NULL,
     downloaded_at TEXT NOT NULL,
     role TEXT NOT NULL,
-    built TEXT NOT NULL DEFAULT ''
+    built TEXT NOT NULL DEFAULT '',
+    sha256 TEXT NOT NULL DEFAULT '',
+    pinned INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
@@ -95,7 +101,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     finished_at TEXT NOT NULL DEFAULT '',
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    progress TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS removed_checks (
     account_id INTEGER NOT NULL,
@@ -105,6 +112,18 @@ CREATE TABLE IF NOT EXISTS removed_checks (
 );
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 """
+# появились в версии 4: время успешной загрузки истории Apple ID; происхождение строки истории (daap — DAAP,
+# license — лицензия подтверждена Apple, manual — добавлено по ссылке и не подтверждено) и время проверки её версии;
+# итог проверки обновления; SHA-256 IPA и закрепление версии; ход задания
+V4_COLUMNS = (
+    ("accounts", "history_at TEXT NOT NULL DEFAULT ''"),
+    ("purchases", "source TEXT NOT NULL DEFAULT 'daap'"),
+    ("purchases", "version_at TEXT NOT NULL DEFAULT ''"),
+    ("apps", "check_result TEXT NOT NULL DEFAULT ''"),
+    ("versions", "sha256 TEXT NOT NULL DEFAULT ''"),
+    ("versions", "pinned INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "progress TEXT NOT NULL DEFAULT ''"),
+)
 SHELF_TABLES = ("purchases", "apps", "versions", "jobs", "removed_checks")
 LEGACY_STATE = ("session", "session_since", "account_name", "storefront", "expired_mail_sent")
 DIR_RE = re.compile(r"^\d+-[A-Za-z0-9._-]+$")
@@ -130,6 +149,7 @@ class NewVersion:
     size: int
     dir: str
     built: str = ""
+    sha256: str = ""
 
 
 @dataclass
@@ -176,14 +196,29 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version == 2:  # токен каталога полки — в базе; каталоги переносит jobs.move_shelves
-            c.execute("ALTER TABLE accounts ADD COLUMN shelf TEXT NOT NULL DEFAULT ''")
-            c.execute("ALTER TABLE accounts ADD COLUMN shelf_next TEXT NOT NULL DEFAULT ''")
+        if version in (2, 3):
+            if version == 2:  # токен каталога полки — в базе; каталоги переносит jobs.move_shelves
+                c.execute("ALTER TABLE accounts ADD COLUMN shelf TEXT NOT NULL DEFAULT ''")
+                c.execute("ALTER TABLE accounts ADD COLUMN shelf_next TEXT NOT NULL DEFAULT ''")
+            for table, column in V4_COLUMNS:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
+            _fill_v4(c)
         elif "purchases" in tables:
             _from_v1(c, tables, owner_email)
+            _fill_v4(c)
         else:
             _create(c)
         c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _fill_v4(c) -> None:
+    """Столбцы версии 4 для прежних данных. Строка истории не из DAAP (refreshed_at пуст): заглушка «App Store <id>»
+    без bundle id — добавлена по ссылке и не подтверждена, остальные нашла проверка справочника или подтвердило
+    скачивание. История загружалась — когда, видно по её строкам."""
+    c.execute("""UPDATE purchases SET source = CASE WHEN bundle_id = '' AND name = 'App Store ' || app_id
+                     THEN 'manual' ELSE 'license' END WHERE refreshed_at = ''""")
+    c.execute("""UPDATE accounts SET history_at = COALESCE((SELECT MAX(refreshed_at) FROM purchases p
+                     WHERE p.account_id = accounts.id), '')""")
 
 
 def _from_v1(c, tables: set[str], owner_email: str) -> None:
@@ -428,10 +463,10 @@ def add_version(c, aid: int, root: Path, app_id: int, v: NewVersion, now: str) -
         c.execute("DELETE FROM versions WHERE account_id=? AND app_id=? AND role='previous'", (aid, app_id))
         c.execute("UPDATE versions SET role='previous' WHERE account_id=? AND app_id=? AND role='current'", (aid, app_id))
         c.execute("""INSERT INTO versions (account_id, app_id, version, build, external_version_id, min_ios,
-                         device_family, size, dir, downloaded_at, built, role)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current')""",
+                         device_family, size, dir, downloaded_at, built, sha256, role)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current')""",
                   (aid, app_id, v.version, v.build, v.external_version_id, v.min_ios, v.device_family,
-                   v.size, v.dir, now, v.built))
+                   v.size, v.dir, now, v.built, v.sha256))
         c.execute("UPDATE apps SET status='ok', last_error='' WHERE account_id=? AND app_id=?", (aid, app_id))
     remove_dirs(root, old)
 

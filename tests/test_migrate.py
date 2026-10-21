@@ -48,7 +48,8 @@ def test_v1_shelf_becomes_owner_apple_id(tmp_path):
         (1, "owner@example", "Иван Петров", "RU", "ok", "t2", True, "")
     for t in store.SHELF_TABLES:
         assert {r[0] for r in c.execute(f"SELECT account_id FROM {t}")} == {1}, t
-    assert [r["version"] for r in store.list_purchases(c, 1)] == ["12.15"]
+    assert [(r["version"], r["source"]) for r in store.list_purchases(c, 1)] == [("12.15", "daap")]
+    assert a.history_at == "t0"
     assert store.current_version(c, 1, 123)["id"] == 5 and store.no_license_ids(c, 1) == {564177498}
     assert c.execute("SELECT id FROM jobs").fetchone()[0] == 9
     assert {r["key"] for r in c.execute("SELECT key FROM state")} == {"nightly_last", "nightly_result"}
@@ -78,12 +79,26 @@ def test_empty_database_gets_schema_without_owner(tmp_path):
     c.close()
 
 
+def v3_schema() -> str:
+    """Схема версии 3: нынешняя без столбцов версии 4."""
+    schema = store.SCHEMA
+    for _, column in store.V4_COLUMNS:
+        assert schema.count(",\n    " + column) == 1, column
+        schema = schema.replace(",\n    " + column, "")
+    return schema
+
+
+def columns(c) -> dict:
+    tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name != 'sqlite_sequence'")]
+    return {t: sorted(r[1] for r in c.execute(f"PRAGMA table_info({t})")) for t in tables}
+
+
 def test_v2_accounts_get_shelf_columns(tmp_path):
     db = tmp_path / "appshelf.db"
     shelf_columns = ",\n    shelf TEXT NOT NULL DEFAULT '',\n    shelf_next TEXT NOT NULL DEFAULT ''"
     assert shelf_columns in store.SCHEMA
     c = sqlite3.connect(db)
-    c.executescript(store.SCHEMA.replace(shelf_columns, ""))
+    c.executescript(v3_schema().replace(shelf_columns, ""))
     c.execute("INSERT INTO users (id, name, role, created_at) VALUES (2, 'Пётр', 'member', 't0')")
     c.execute("INSERT INTO accounts (id, user_id, email, created_at) VALUES (2, 2, 'petr@example', 't0')")
     c.execute("PRAGMA user_version = 2")
@@ -91,8 +106,38 @@ def test_v2_accounts_get_shelf_columns(tmp_path):
     c.close()
     c = store.connect(db)
     a = people.get_account(c, 2)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert (a.email, a.shelf, a.shelf_next) == ("petr@example", "", "")   # каталог переносит jobs.move_shelves
+    c.close()
+
+
+def test_v3_gets_v4_columns_and_fills_them(tmp_path):
+    """Строки истории: из DAAP, найденная справочником, заглушка по ссылке, скачанная по ссылке. Время загрузки
+    истории — по строкам DAAP; у Apple ID без них — пусто."""
+    db = tmp_path / "appshelf.db"
+    c = sqlite3.connect(db)
+    c.executescript(v3_schema())
+    c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
+    c.executemany("INSERT INTO accounts (id, user_id, email, created_at) VALUES (?, 1, ?, 't0')",
+                  [(1, "owner@example"), (2, "second@example")])
+    c.executemany("INSERT INTO purchases (account_id, app_id, bundle_id, name, refreshed_at) VALUES (?, ?, ?, ?, ?)", [
+        (1, 1, "ru.a", "Из DAAP", "2026-10-01T00:00:00+00:00"),
+        (1, 2, "", "СберБанк Онлайн", ""),
+        (1, 3, "", "App Store 3", ""),
+        (1, 4, "ru.d", "Скачано по ссылке", ""),
+        (2, 5, "", "App Store 5", "")])
+    c.execute("PRAGMA user_version = 3")
+    c.commit()
+    c.close()
+    c = store.connect(db)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+    assert {r["app_id"]: r["source"] for r in c.execute("SELECT app_id, source FROM purchases")} == \
+        {1: "daap", 2: "license", 3: "manual", 4: "license", 5: "manual"}
+    assert {r["id"]: r["history_at"] for r in c.execute("SELECT id, history_at FROM accounts")} == \
+        {1: "2026-10-01T00:00:00+00:00", 2: ""}
+    fresh = store.connect(tmp_path / "fresh.db")
+    assert columns(c) == columns(fresh)            # перенесённая схема — та же, что у новой базы
+    fresh.close()
     c.close()
 
 
