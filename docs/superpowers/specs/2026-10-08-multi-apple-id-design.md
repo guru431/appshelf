@@ -107,7 +107,9 @@ SameSite=Lax) → редирект на `/login` с плашкой «Пригл�
 минуту». Пароль удаляется после шага 2 при любом исходе и по TTL; вместе с ним по TTL удаляется временный HOME
 нового Apple ID (§7).
 
-**Успех.** Новый Apple ID → строки `users`/`accounts` (§5), временный HOME → `accounts/<id>`. Известный →
+**Успех.** Новый Apple ID → строки `users`/`accounts` (§5) с `session=none`, временный HOME → `accounts/<id>`,
+затем `session=ok` (до этого обработчик и ночная проверка его не берут; сбой переноса удаляет строки, сбой на
+отметке или падение процесса доделывает следующий вход тем же Apple ID — с 2026-10-21). Известный →
 обновить `name`, `storefront`, `session=ok`, `session_since`, сбросить `expired_mail_sent` — задания в
 ожидании продолжаются. Устройство получает cookie `appshelf_auth` на год:
 `<user_id>:<epoch>:<expires>:<HMAC(cookie-key, user_id \0 epoch \0 expires)>`; активной полкой становится
