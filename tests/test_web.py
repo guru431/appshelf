@@ -200,6 +200,15 @@ def test_history_search_uses_catalog_aliases(web, conn, monkeypatch):  # «vk»,
     assert "МАКС" in r.text and "ВКонтакте" not in r.text
 
 
+def test_history_search_finds_downloaded_clone_by_catalog_brand(web, conn, monkeypatch):
+    """Клон банка после скачивания называется по IPA («DriveFlow»), а бренд — в названии справочника."""
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 1640000001, "name": "Банк Зенит (DriveFlow)"}])
+    store.add_known(conn, 1, 1640000001, "Банк Зенит (DriveFlow)", "license")
+    store.fill_names(conn, 1, 1640000001, "DriveFlow", "com.example.driveflow")
+    assert "DriveFlow" in names_in(web.client.get("/history", params={"q": "Зенит"}).text)
+
+
 def names_in(html: str) -> list[str]:
     return re.findall(r"<b>([^<]*)</b>", html)
 

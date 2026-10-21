@@ -25,9 +25,10 @@ def load() -> list[dict]:
     return doc["apps"]
 
 
-def aliases() -> dict[int, str]:
-    """id → поисковые синонимы одной строкой («vk вк» для ВКонтакте, «max макс» для МАКС)."""
-    return {a["id"]: " ".join(a.get("aliases", [])) for a in load() if a.get("aliases")}
+def search_terms() -> dict[int, str]:
+    """id → поисковые слова одной строкой: название в справочнике и синонимы («vk вк» для ВКонтакте, «max макс» для
+    МАКС). Название держит бренд клона («Банк Зенит (DriveFlow)»), а строка «Истории» после скачивания — имя из IPA."""
+    return {a["id"]: " ".join([a["name"].casefold(), *a.get("aliases", [])]) for a in load()}
 
 
 def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,

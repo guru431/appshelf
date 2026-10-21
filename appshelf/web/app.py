@@ -41,6 +41,7 @@ HISTORY_SORTS = {  # ключ → (подпись, направление по �
     "status": ("В каталоге", "desc", lambda r: (bool(r["published"]),)),
 }
 
+
 def progress_text(p: dict) -> str:
     """Ход проверки справочника для «Удалённых», «Истории» и опроса /api/status."""
     return f"проверено {p['done']} из {p['total']}: " + counts_text(p)
@@ -177,7 +178,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             checking, _ = store.removed_progress(c, aid)
         needle = q.strip().casefold()  # в Python: lower()/LIKE SQLite кириллицу не понимают
         if needle:
-            alias = removed.aliases()  # «vk» найдёт «ВКонтакте», «max» — «МАКС»
+            alias = removed.search_terms()  # «vk» найдёт «ВКонтакте», «зенит» — скачанный клон «DriveFlow»
             rows = [r for r in rows if matches(needle, alias, r["app_id"], r["name"], r["bundle_id"])]
         sort = sort if sort in HISTORY_SORTS else "name"
         label, default_dir, key = HISTORY_SORTS[sort]
