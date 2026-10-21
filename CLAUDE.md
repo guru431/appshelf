@@ -8,6 +8,7 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
   `people.py` (люди, Apple ID, ссылки), `jobs.py` (задания, обработчик, общий путь скачивания), `nightly.py`,
+  `removed.py` (справочник удалённых из App Store), `integrity.py` (проверка целостности полок, снимки базы),
   `notify.py`, `webauth.py` (cookie вошедших людей), `web/` (вход — `signin.py`), `cli.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
@@ -24,7 +25,8 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
-  <Apple ID>` (на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется).
+  <Apple ID>`, проверка целостности: `appshelf check [--deep]` (только чтение), снимок базы: `appshelf backup --out
+  <каталог>` (ночной — `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
 
 ## Правила
 - Репозиторий публикуется на GitHub: внутренних имён, адресов, путей, почты и учётных данных в git нет нигде
