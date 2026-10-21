@@ -161,6 +161,7 @@ class AppView:
     last_error: str
     current: sqlite3.Row | None
     previous: sqlite3.Row | None
+    kept: sqlite3.Row | None  # закреплённая версия, вышедшая из двух слотов
 
 
 def connect(path: Path, owner_email: str = "") -> sqlite3.Connection:
@@ -423,7 +424,7 @@ def list_apps(c, aid: int) -> list[AppView]:
         vs = {r["role"]: r for r in c.execute("SELECT * FROM versions WHERE account_id=? AND app_id=?",
                                               (aid, a["app_id"]))}
         out.append(AppView(a["app_id"], a["name"], a["bundle_id"], a["status"], a["last_error"],
-                           vs.get("current"), vs.get("previous")))
+                           vs.get("current"), vs.get("previous"), vs.get("kept")))
     # по алфавиту в Python: COLLATE NOCASE в SQLite не знает кириллицу («альфа» после «Яндекс»)
     return sorted(out, key=lambda v: (v.name.casefold(), v.app_id))
 
@@ -454,13 +455,15 @@ def dir_in_use(c, aid: int, name: str) -> bool:
 
 
 def add_version(c, aid: int, root: Path, app_id: int, v: NewVersion, now: str) -> None:
-    """Новая версия — current, прежняя current — previous, прежняя previous — с диска (spec 2026-10-05 §7.4)."""
+    """Новая версия — current, прежняя current — previous, прежняя previous — с диска (spec 2026-10-05 §7.4),
+    а закреплённая — в kept, каталог остаётся."""
     with tx(c):
         if not has_app(c, aid, app_id):
             raise AppGone(app_id)
         old = [r["dir"] for r in c.execute(
-            "SELECT dir FROM versions WHERE account_id=? AND app_id=? AND role='previous'", (aid, app_id))]
-        c.execute("DELETE FROM versions WHERE account_id=? AND app_id=? AND role='previous'", (aid, app_id))
+            "SELECT dir FROM versions WHERE account_id=? AND app_id=? AND role='previous' AND NOT pinned", (aid, app_id))]
+        c.execute("DELETE FROM versions WHERE account_id=? AND app_id=? AND role='previous' AND NOT pinned", (aid, app_id))
+        c.execute("UPDATE versions SET role='kept' WHERE account_id=? AND app_id=? AND role='previous'", (aid, app_id))
         c.execute("UPDATE versions SET role='previous' WHERE account_id=? AND app_id=? AND role='current'", (aid, app_id))
         c.execute("""INSERT INTO versions (account_id, app_id, version, build, external_version_id, min_ios,
                          device_family, size, dir, downloaded_at, built, sha256, role)
@@ -469,6 +472,48 @@ def add_version(c, aid: int, root: Path, app_id: int, v: NewVersion, now: str) -
                    v.size, v.dir, now, v.built, v.sha256))
         c.execute("UPDATE apps SET status='ok', last_error='' WHERE account_id=? AND app_id=?", (aid, app_id))
     remove_dirs(root, old)
+
+
+def _version_row(c, aid: int, app_id: int, version_id: int):
+    return c.execute("SELECT id, role, dir, pinned FROM versions WHERE id=? AND account_id=? AND app_id=?",
+                     (version_id, aid, app_id)).fetchone()
+
+
+def _unpin(c, rows) -> list[str]:
+    """Снять закрепление: kept — строка (каталог — вызывающему после COMMIT), current/previous — только флаг."""
+    dirs = []
+    for r in rows:
+        if r["role"] == "kept":
+            c.execute("DELETE FROM versions WHERE id=?", (r["id"],))
+            dirs.append(r["dir"])
+        else:
+            c.execute("UPDATE versions SET pinned=0 WHERE id=?", (r["id"],))
+    return dirs
+
+
+def pin_version(c, aid: int, root: Path, app_id: int, version_id: int) -> bool:
+    """Закрепить версию: переживёт ротацию в роли kept. Не больше одной на приложение — прежнее закрепление снимается
+    (прежняя kept — с диска). False — нет такой версии у приложения этой полки."""
+    with tx(c):
+        row = _version_row(c, aid, app_id, version_id)
+        if row is None:
+            return False
+        old = [] if row["pinned"] else _unpin(c, c.execute(
+            "SELECT id, role, dir FROM versions WHERE account_id=? AND app_id=? AND pinned", (aid, app_id)).fetchall())
+        c.execute("UPDATE versions SET pinned=1 WHERE id=?", (version_id,))
+    remove_dirs(root, old)
+    return True
+
+
+def unpin_version(c, aid: int, root: Path, app_id: int, version_id: int) -> bool:
+    """Снять закрепление: kept — строка и каталог, current/previous — только флаг. False — нет такой версии."""
+    with tx(c):
+        row = _version_row(c, aid, app_id, version_id)
+        if row is None:
+            return False
+        old = _unpin(c, [row]) if row["pinned"] else []
+    remove_dirs(root, old)
+    return True
 
 
 def remove_dirs(root: Path, names) -> None:

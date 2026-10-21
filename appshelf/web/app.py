@@ -25,6 +25,7 @@ PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel")
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
 NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
+PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
 
 
 def version_key(v: str) -> tuple:
@@ -266,6 +267,26 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             except jobs.ArchiveUnavailable:
                 return catalog_page(request, 503, UNPUBLISH_ARCHIVE_DOWN)
         return back("/")
+
+    def change_pin(request: Request, app_id: int, version_id: int, fn):
+        """Закрепление может удалить каталог прежней kept: архив недоступен — 503 и ничего не тронуто, как у unpublish."""
+        a = request.state.acct
+        try:
+            jobs._archive(cfg)
+        except jobs.ArchiveUnavailable:
+            return catalog_page(request, 503, PIN_ARCHIVE_DOWN)
+        with w.conn() as c:
+            if not fn(c, a.id, cfg.shelf_root(a), app_id, version_id):  # чужая или несуществующая — как нет
+                return not_found()
+        return back("/")
+
+    @app.post("/apps/{app_id}/versions/{version_id}/pin", response_class=HTMLResponse)
+    def pin(request: Request, app_id: int, version_id: int):
+        return change_pin(request, app_id, version_id, store.pin_version)
+
+    @app.post("/apps/{app_id}/versions/{version_id}/unpin", response_class=HTMLResponse)
+    def unpin(request: Request, app_id: int, version_id: int):
+        return change_pin(request, app_id, version_id, store.unpin_version)
 
     @app.get("/api/status")
     def api_status(request: Request):

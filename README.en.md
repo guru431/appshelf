@@ -21,8 +21,9 @@ The web UI is in Russian.
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
   appshelf checks which of them your Apple ID holds a license for.
-- Catalog with an "Install" button; the current and the previous version are kept. iOS does not install over an
-  installed app — offload it first (see "Updating an installed app").
+- Catalog with an "Install" button; the current and the previous version are kept, and one of them can be pinned to
+  survive later updates. iOS does not install over an installed app — offload it first (see "Updating an installed
+  app").
 - Nightly check for new versions (versions downloaded this week are marked in the catalog: apps removed from the
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
@@ -181,6 +182,11 @@ before the download, by the app identifier alone. There is no need to delete the
 General → iPhone Storage → the app → Offload App, then "Install" in the catalog. Offloading removes the app but
 keeps its data, so you get the shelf's version with your data in place. The Home Screen icon will not bring back an
 offloaded app that was removed from the App Store — only "Install" from the shelf will.
+
+A pinned version ("⋯" → "Pin", one per app) is not deleted by updates: once it leaves the current and previous
+slots it stays in the catalog as "kept" with a regular install link and takes space in the archive until unpinned.
+Only the file is kept: rolling back does not guarantee that the app accepts data left by a newer version —
+installing it over that data (after offloading the newer one) is at your own risk.
 
 ## New shelf token
 

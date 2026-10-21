@@ -10,10 +10,13 @@
       {%- if a.app_id in fresh %}{% set d = a.current['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}</div>
     {% if a.current %}
     <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ (a.current['size'] / 1048576) | round | int }} МБ
-      {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}</div>
+      {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}
+      {%- if a.current['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
     <p class="install"><a class="btn pill" href="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Установить</a>
-      {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a></span>{% endif %}</p>
+      {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a>
+        {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</p>
     {% endif %}
+    {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ (a.kept['size'] / 1048576) | round | int }} МБ</div>{% endif %}
     {% if a.status == 'queued' %}<div class="meta">{{ 'в очереди' if acct.session == 'ok' else 'ждёт входа в Apple ID' }}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
@@ -23,7 +26,11 @@
     {% endif %}
   </div>
   <details class="pop more"><summary aria-label="Действия">⋯</summary>
-    <div class="sheet"><form method="post" action="/apps/{{ a.app_id }}/unpublish"><button class="danger">Снять с публикации</button></form></div>
+    <div class="sheet">
+      {%- for v in (a.current, a.previous, a.kept) if v %}{# kept всегда закреплена #}
+      <form method="post" action="/apps/{{ a.app_id }}/versions/{{ v['id'] }}/{{ 'unpin' if v['pinned'] else 'pin' }}"><button>{{ 'Снять закрепление' if v['pinned'] else 'Закрепить' }} {{ v['version'] }}</button></form>
+      {%- endfor %}
+      <form method="post" action="/apps/{{ a.app_id }}/unpublish"><button class="danger">Снять с публикации</button></form></div>
   </details>
 </div>
 {% endfor %}
@@ -35,6 +42,8 @@
   <p>Обновить уже установленное приложение: поверх iOS не ставит («… is Already Installed»), но удалять его не нужно.
     «Настройки → Основные → Хранилище iPhone» → приложение → «Сгрузить приложение», затем «Установить» здесь —
     встанет версия с полки, данные приложения останутся.</p>
+  <p>«⋯» → «Закрепить»: версия переживёт следующие обновления («сохранённая») и ставится так же. Файл сохранён, но
+    откат не гарантирован: старая версия может не принять данные, оставленные новой, — ставить её поверх них на свой риск.</p>
   <p>Выключите «Настройки → App Store → Сгружать неиспользуемые»: выгруженное приложение App Store не вернёт.</p>
   <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] }}{% else %}ещё не запускалась{% endif %}</p>
 </div>
