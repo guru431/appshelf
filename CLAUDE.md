@@ -31,8 +31,8 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
   (код, тесты, документы, сообщения коммитов). Публикация — только `/github-push`.
 - Пароль Apple ID — только stdin ipatool и память appshelf-web (≤ 10 мин); не в файлы, логи, `jobs.error`, argv.
 - ipatool запускать только от `appshelf` с `HOME=/etc/appshelf/accounts/<id>` (и `IPATOOL_DEVICE_MAC` из
-  `accounts.device_mac`, если не пуст): учётка зашифрована ключом от machine-id (у root — ещё product_uuid),
-  файл, созданный root'ом или с другим HOME, служба не прочитает.
+  `accounts.device_mac`, если не пуст): HOME выбирает учётку Apple ID (путь в ключ не входит), ключ — от
+  machine-id, а у root ещё и от product_uuid: файл, сохранённый root'ом, служба не расшифрует.
 - appshelf-web — строго один процесс uvicorn: незавершённые входы, счётчики лимитов и обработчик заданий живут в его памяти.
 - PUB_TOKEN — только в `/etc/appshelf/appshelf.env` и имени каталога Apple ID, перенесённого из первой версии;
   каталоги остальных Apple ID — свои случайные токены (`accounts.shelf`); не в git, конфиге Apache, выводе команд.

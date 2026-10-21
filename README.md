@@ -150,8 +150,13 @@ Apple ID» с Apple ID другого участника, приглашение
 
     sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, если не пуст> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
 
-Учётка ipatool зашифрована ключом от `machine-id`: файл, созданный другим пользователем или с другим
-`HOME`, служба не прочитает.
+Учётка ipatool — файл `$HOME/.ipatool/account`, и требования к запуску тут разные по причине:
+- `HOME` только выбирает, чью учётку взять: у каждого Apple ID свой `accounts/<id>`. В ключ шифрования путь
+  не входит — готовую `.ipatool` можно перенести в другой `HOME` на этой же машине.
+- Ключ — PBKDF2 от `machine-id`, passphrase (у appshelf пустой) и соли из самого файла. У root к `machine-id`
+  добавляется `product_uuid`, который читает только root: учётку, сохранённую от root, служба не расшифрует, а
+  сохранённую службой — root. На другой машине (другой `machine-id`) не расшифровывается ни одна.
+- Файлы учётки — `appshelf`, `0700`/`0600`: другой пользователь, кроме root, их не прочитает.
 
 ## Удалённые из App Store приложения
 

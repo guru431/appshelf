@@ -154,8 +154,14 @@ that Apple ID's lock (otherwise the service cannot read the account file or coll
 
     sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, if not empty> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
 
-The ipatool account file is encrypted with a key derived from `machine-id`: a file created by another user or with
-another `HOME` cannot be read by the service.
+The ipatool account is the file `$HOME/.ipatool/account`, and each launch requirement has its own reason:
+- `HOME` only selects whose account to use: every Apple ID has its own `accounts/<id>`. The path is not part of
+  the encryption key — a ready `.ipatool` can be moved to another `HOME` on the same machine.
+- The key is PBKDF2 over `machine-id`, a passphrase (empty for appshelf) and a salt stored in the file itself. For
+  root, `product_uuid` (readable only by root) is added to `machine-id`: an account saved as root cannot be
+  decrypted by the service, and one saved by the service cannot be decrypted by root. On another machine
+  (different `machine-id`) none of them decrypt.
+- The account files belong to `appshelf` with `0700`/`0600`: no other user except root can read them.
 
 ## Removed apps
 
