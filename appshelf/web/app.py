@@ -41,6 +41,15 @@ HISTORY_SORTS = {  # ключ → (подпись, направление по �
     "status": ("В каталоге", "desc", lambda r: (bool(r["published"]),)),
 }
 
+def progress_text(p: dict) -> str:
+    """Ход проверки справочника для «Удалённых», «Истории» и опроса /api/status."""
+    return f"проверено {p['done']} из {p['total']}: " + counts_text(p)
+
+
+def counts_text(p: dict) -> str:
+    return f"найдено {p['added']}, нет лицензии {p['missing']}, ошибок {p['errors']}"
+
+
 APP_ID_RE = re.compile(r"^\s*(?:id)?(\d{5,12})\s*$|/id(\d{5,12})(?:[/?#]|$)")
 
 
@@ -165,6 +174,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             refreshed = store.history_refreshed_at(c, aid)
             refreshing, refresh_error, refresh_error_at = store.refresh_status(c, aid)
             busy = store.has_active_jobs(c, aid)
+            checking, _ = store.removed_progress(c, aid)
         needle = q.strip().casefold()  # в Python: lower()/LIKE SQLite кириллицу не понимают
         if needle:
             alias = removed.aliases()  # «vk» найдёт «ВКонтакте», «max» — «МАКС»
@@ -181,7 +191,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                           ("↓" if dir == "desc" else "↑") if k == sort else ""))
         return w.page(request, "history.html", "history", rows=rows, q=q, refreshed=refreshed, busy=busy,
                       refreshing=refreshing, refresh_error=refresh_error, refresh_error_at=refresh_error_at,
-                      sort=sort, dir=dir, sort_links=links)
+                      progress=progress_text(checking) if checking else "", sort=sort, dir=dir, sort_links=links)
 
     def blocked_page(request: Request, q: str = "", status_code: int = 200, add_error: str = "", add_ref: str = ""):
         aid = request.state.acct.id
@@ -192,6 +202,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             published = {x.app_id for x in store.list_apps(c, aid)}
             refreshing, _, _ = store.refresh_status(c, aid)
             busy = store.has_active_jobs(c, aid)
+            progress, last = store.removed_progress(c, aid)
+        failed = set((progress or last or {}).get("failed", []))  # техническая ошибка в последней проверке
         items = []
         for e in catalog:
             row = rows.get(e["id"])
@@ -199,22 +211,24 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if row is not None and row["source"] != "manual" and e["id"] not in no_license:
                 status = "owned"
             else:
-                status = "missing" if e["id"] in no_license else "unknown"
+                status = "missing" if e["id"] in no_license else "failed" if e["id"] in failed else "unknown"
             # имя строки — только из IPA или DAAP (есть bundle id); заглушка по ссылке — «App Store <id>»
             items.append({"id": e["id"], "name": row["name"] if row is not None and row["bundle_id"] else e["name"],
                           "catalog_name": e["name"], "aliases": " ".join(e.get("aliases", [])),
                           "version": row["version"] if row is not None else "",
                           "version_at": row["version_at"] if row is not None else "", "status": status,
                           "published": e["id"] in published})
-        counts = {s: sum(1 for i in items if i["status"] == s) for s in ("owned", "missing", "unknown")}
+        counts = {s: sum(1 for i in items if i["status"] == s) for s in ("owned", "missing", "unknown", "failed")}
         needle = q.strip().casefold()
         if needle:
             items = [i for i in items if needle in i["name"].casefold() or needle in i["catalog_name"].casefold()
                      or needle in i["aliases"]]
-        order = {"owned": 0, "unknown": 1, "missing": 2}
+        order = {"owned": 0, "failed": 1, "unknown": 1, "missing": 2}
         items.sort(key=lambda i: (order[i["status"]], i["name"].casefold()))
         return w.page(request, "blocked.html", "blocked", status_code, items=items, counts=counts, q=q,
-                      checking=refreshing == "check_removed", busy=busy, add_error=add_error, add_ref=add_ref)
+                      checking=refreshing == "check_removed", busy=busy, add_error=add_error, add_ref=add_ref,
+                      progress=progress_text(progress) if progress else "",
+                      last=last and {"at": last["at"], "text": counts_text(last)})
 
     @app.get("/blocked", response_class=HTMLResponse)
     def blocked(request: Request, q: str = ""):
@@ -298,8 +312,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def api_status(request: Request):
         aid = request.state.acct.id
         with w.conn() as c:
-            return JSONResponse({"busy": store.has_active_jobs(c, aid), "session": people.get_account(c, aid).session,
-                                 "apps": {str(x.app_id): x.status for x in store.list_apps(c, aid)}})
+            status = {"busy": store.has_active_jobs(c, aid), "session": people.get_account(c, aid).session,
+                      "apps": {str(x.app_id): x.status for x in store.list_apps(c, aid)}}
+            progress, _ = store.removed_progress(c, aid)  # только активной полки: чужие Apple ID не видны
+        if progress:
+            status["progress"] = {**{k: progress[k] for k in ("done", "total", "added", "missing", "errors")},
+                                  "text": progress_text(progress)}
+        return JSONResponse(status)
 
     signin.register_routes(app, w)
     accounts.register_routes(app, w)

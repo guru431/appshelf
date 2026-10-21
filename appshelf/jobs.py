@@ -3,6 +3,7 @@
 свои. Всё — по Apple ID: свой ipatool (Env.tools), своя полка в архиве (cfg.shelf_root)."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -29,6 +30,7 @@ LOW_SPACE_SUBJECT = f"appshelf: мало места на {notify.HOST}"
 REMOVE_LOCK_WAIT = 10.0  # идёт вызов ipatool этого Apple ID — ждём, как вход; скачивание отсекает проверка заданий
 NOT_PURCHASED = "этого приложения нет в покупках Apple ID — проверьте ссылку или ID"
 ACCOUNT_GONE = "Apple ID удалён"
+FAILED_MAX = 50          # id с технической ошибкой в ходе проверки справочника — не больше
 
 
 class LowSpace(Exception):
@@ -363,6 +365,17 @@ def move_shelves(cfg: Config, c) -> None:
                 print(f"appshelf: каталог полки Apple ID №{acct.id} не перенесён: {why}", file=sys.stderr)
 
 
+def merge_progress(prev: dict | None, cur: dict) -> dict:
+    """Ход проверки справочника для jobs.progress — накопительно по проходам задания (уступила очередь, ждала входа,
+    перезапуск службы). id с технической ошибкой нигде не запоминаются, и следующий проход спрашивает их снова:
+    прежние ошибки из счёта уходят, остаются ошибки этого прохода."""
+    if prev:
+        base = prev["done"] - prev["errors"]
+        cur = {**cur, "done": base + cur["done"], "total": base + cur["total"],
+               "added": prev["added"] + cur["added"], "missing": prev["missing"] + cur["missing"]}
+    return {**cur, "failed": cur["failed"][:FAILED_MAX]}
+
+
 class Worker:
     """Обработчик заданий publish, refresh_history, check_removed всех Apple ID — один поток в appshelf-web."""
 
@@ -430,8 +443,10 @@ class Worker:
             if job["kind"] == "refresh_history":
                 refresh_history(env, c, acct)
             elif job["kind"] == "check_removed":
+                prev = json.loads(job["progress"]) if job["progress"] else None
                 try:
-                    removed.check(env, c, acct, stop=lambda: store.has_runnable(c, "publish"))
+                    removed.check(env, c, acct, stop=lambda: store.has_runnable(c, "publish"),
+                                  progress=lambda p: store.set_progress(c, job["id"], merge_progress(prev, p)))
                 except removed.Interrupted:  # публикация вперёд, проверка — следом с того же места
                     store.requeue_job(c, job["id"])
                     return

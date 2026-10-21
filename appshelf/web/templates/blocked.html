@@ -2,10 +2,14 @@
 {% block main %}
 <p>Удалённые из App Store приложения (банки и их клоны, VK, МАКС…): Apple их не показывает в истории покупок,
 но то, что есть у вашего Apple ID, скачивается. Серые — нет в вашем аккаунте или ещё не проверены.</p>
-<div class="stats"><span class="tag">Есть в аккаунте: {{ counts.owned }}</span><span class="tag">нет в аккаунте: {{ counts.missing }}</span><span class="tag">не проверено: {{ counts.unknown }}</span></div>
+<div class="stats"><span class="tag">Есть в аккаунте: {{ counts.owned }}</span><span class="tag">нет в аккаунте: {{ counts.missing }}</span><span class="tag">не проверено: {{ counts.unknown }}</span>
+  {%- if counts.failed %}<span class="tag">ошибка проверки: {{ counts.failed }}</span>{% endif %}</div>
 <form method="post" action="/blocked/check" class="bar">
   <button>Проверить новые</button>
-  <span class="meta{{ ' busy' if checking and acct.session == 'ok' }}">{% if checking %}{{ 'проверяю…' if acct.session == 'ok' else 'ждёт входа в Apple ID' }}{% else %}всё заново — ночная проверка, раз в неделю{% endif %}</span>
+  {% if checking and acct.session == 'ok' %}<span class="meta busy" id="progress">{{ progress or 'проверяю…' }}</span>
+  {%- else %}<span class="meta">{% if checking %}ждёт входа в Apple ID{% else %}
+    {%- if last %}последняя проверка {{ last.at[8:10] }}.{{ last.at[5:7] }} {{ last.at[11:16] }} UTC: {{ last.text }} · {% endif -%}
+    всё заново — ночная проверка, раз в неделю{% endif %}</span>{% endif %}
 </form>
 <form method="get" action="/blocked" class="search"><input type="search" name="q" value="{{ q }}" placeholder="Поиск: сбер, vk, max, тинькофф…"></form>
 <div class="card list">
@@ -14,7 +18,8 @@
   <div class="body"><b>{{ i.name }}</b><div class="meta">
     {%- if i.version %}{{ i.version }}{% if i.version_at %} · проверено {{ i.version_at[8:10] }}.{{ i.version_at[5:7] }}{% endif %} · {% endif -%}
     {%- if i.name != i.catalog_name %}{{ i.catalog_name }} · {% endif -%}
-    ID {{ i.id }} · {{ {'owned': 'есть в аккаунте', 'missing': 'нет в аккаунте', 'unknown': 'не проверено'}[i.status] }}</div></div>
+    ID {{ i.id }} · {{ {'owned': 'есть в аккаунте', 'missing': 'нет в аккаунте', 'unknown': 'не проверено',
+                        'failed': 'ошибка проверки'}[i.status] }}</div></div>
   {% if i.status == 'owned' %}<div class="act">{% if i.published %}<span class="meta done">в каталоге</span>{% else %}
     <form method="post" action="/apps/{{ i.id }}/publish"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>{% endif %}
 </div>

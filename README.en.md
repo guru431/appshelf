@@ -174,6 +174,11 @@ page (`/blocked`) shows the whole catalog and lets you add an app by link or ID.
 `{"id", "name", "aliases"}` to the JSON. Whether an ID is gone from the RU App Store:
 `itunes.apple.com/lookup?id=…&country=ru` (empty — removed).
 
+The catalog check takes minutes (~480 requests) and yields to publishing. While it runs, "Removed" and "History"
+show "checked X of Y: found …, no license …, errors …" — the progress lives in the job (`jobs.progress`) and survives
+a page reload and yielding. When it ends, "Removed" shows the result of the last check, and IDs that Apple answered
+with a technical error are marked "check failed", separately from "not in account"; the next check asks them again.
+
 ## Updating an installed app
 
 iOS does not install over an app that is already on the device via `itms-services`: "Install" is answered with

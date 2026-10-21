@@ -252,6 +252,8 @@ addEventListener('pointerdown', function (e) {   // меню закрывает�
   var seen = {{ statuses | default('null') | safe }};
   var timer = setInterval(function () {
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+      var p = document.getElementById('progress');   // ход проверки справочника — без перезагрузки
+      if (p && s.progress) p.textContent = s.progress.text;
       if (s.busy && (seen === null || JSON.stringify(s.apps) === JSON.stringify(seen))) return;
       clearInterval(timer);
       if (!editing()) { location.reload(); return; }

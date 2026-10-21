@@ -5,6 +5,7 @@
 WAL, busy_timeout и явные транзакции BEGIN IMMEDIATE (tx). Версия схемы — PRAGMA user_version."""
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sqlite3
@@ -634,6 +635,21 @@ def has_runnable(c, kind: str) -> bool:
 
 def requeue_job(c, job_id: int) -> None:
     c.execute("UPDATE jobs SET status='queued' WHERE id=?", (job_id,))
+
+
+def set_progress(c, job_id: int, progress: dict) -> None:
+    c.execute("UPDATE jobs SET progress=? WHERE id=?", (json.dumps(progress), job_id))
+
+
+def removed_progress(c, aid: int) -> tuple[dict | None, dict | None]:
+    """Проверка справочника Apple ID: (ход идущей или ждущей в очереди — None, пока не начата; итог последней
+    завершённой — с временем окончания at)."""
+    active = c.execute("SELECT progress FROM jobs WHERE account_id=? AND kind='check_removed' "
+                       "AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1", (aid,)).fetchone()
+    last = c.execute("SELECT progress, finished_at FROM jobs WHERE account_id=? AND kind='check_removed' "
+                     "AND status='done' AND progress != '' ORDER BY id DESC LIMIT 1", (aid,)).fetchone()
+    return (json.loads(active["progress"]) if active is not None and active["progress"] else None,
+            {**json.loads(last["progress"]), "at": last["finished_at"]} if last is not None else None)
 
 
 def requeue_running(c) -> None:

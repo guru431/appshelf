@@ -31,18 +31,30 @@ def aliases() -> dict[int, str]:
 
 
 def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
-          stop=lambda: False) -> tuple[int, int, int]:
+          stop=lambda: False, progress=None) -> tuple[int, int, int]:
     """(добавлено своих, без лицензии, ошибок) для Apple ID acct. Уже известные истории id не проверяются, кроме
     добавленных по ссылке и не подтверждённых (manual): найдена лицензия — подтверждаются, нет — «нет лицензии».
     «Нет лицензии» запоминается, и кнопка их пропускает (~480 проверок — около восьми минут), полную перепроверку
     делает ночь — раз в неделю на Apple ID. Она же обновляет версию (и version_at) известных строк не из DAAP:
     +2 запроса в неделю на каждое своё удалённое приложение. stop() перед каждым запросом к Apple: True —
-    Interrupted. Apple ID удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается."""
+    Interrupted. Apple ID удалили посреди обхода — запись итога бросает store.AccountGone, и обход прекращается.
+    progress(ход) — в начале и после ответа на каждый id: done из total (сколько id этот проход спросит у Apple),
+    added, missing, errors и failed — id с технической ошибкой."""
     tool = env.tools(acct)
     rows = {r["app_id"]: r for r in store.list_purchases(c, acct.id)}
     skip = set() if full else store.no_license_ids(c, acct.id)
-    added = missing = errors = 0
-    for app in load() if catalog is None else catalog:
+    apps = load() if catalog is None else catalog
+    total = sum(1 for a in apps if (a["id"] not in rows or rows[a["id"]]["source"] == "manual") and a["id"] not in skip)
+    added = missing = errors = done = 0
+    failed = []
+
+    def report():
+        if progress is not None:
+            progress({"done": done, "total": total, "added": added, "missing": missing, "errors": errors,
+                      "failed": failed})
+
+    report()
+    for app in apps:
         row = rows.get(app["id"])
         if row is not None and row["source"] != "manual":
             if full and row["source"] != "daap":  # ночью: последняя версия своего удалённого (DAAP её не обновит)
@@ -52,6 +64,7 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
             continue
         if stop():
             raise Interrupted
+        done += 1
         try:
             latest = tool.latest_version_id(app["id"])
         except SessionExpired as e:
@@ -61,16 +74,20 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
             print(f"appshelf: Apple ID #{acct.id}: list-versions {app['id']} — {e.message}; "
                   f"список покупок {'отдаётся' if alive else 'тоже нет'}", file=sys.stderr)
             store.mark_no_license(c, acct.id, app["id"], env.now())
+            missing += 1
+            report()
             if not alive:
                 raise
-            missing += 1
             continue
         except LicenseNotFound:
             store.mark_no_license(c, acct.id, app["id"], env.now())
             missing += 1
+            report()
             continue
         except IpatoolError:  # сбой одного id не останавливает проверку остальных
             errors += 1
+            failed.append(app["id"])
+            report()
             continue
         if row is None:
             store.add_known(c, acct.id, app["id"], app["name"], "license")
@@ -78,6 +95,7 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
         else:
             store.confirm_license(c, acct.id, app["id"])
         store.clear_no_license(c, acct.id, app["id"])
+        report()  # до версии: лицензия уже записана, а за версией может истечь вход
         _fill_version(env, c, acct, app["id"], latest)
     return added, missing, errors
 
