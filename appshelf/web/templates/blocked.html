@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block main %}
 <p>Удалённые из App Store приложения (банки и их клоны, VK, МАКС…): Apple их не показывает в истории покупок,
-но то, что есть у вашего Apple ID, скачивается. Серые — нет в вашем аккаунте или ещё не проверены.</p>
+но то, что есть у вашего Apple ID, скачивается. Серые — нет в вашем аккаунте, ещё не проверены или проверка не
+удалась (повторит следующая).</p>
 <div class="stats"><span class="tag">Есть в аккаунте: {{ counts.owned }}</span><span class="tag">нет в аккаунте: {{ counts.missing }}</span><span class="tag">не проверено: {{ counts.unknown }}</span>
   {%- if counts.failed %}<span class="tag">ошибка проверки: {{ counts.failed }}</span>{% endif %}</div>
 <form method="post" action="/blocked/check" class="bar">
