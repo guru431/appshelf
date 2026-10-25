@@ -340,3 +340,13 @@ def test_limiter_global_minute_and_apple_id_hour():
     assert lim.email_wait("a@example") == 1800
     clock.advance(1800)
     assert lim.email_wait("a@example") == 0
+
+
+def test_limiter_forgets_apple_ids_nobody_tries_again():
+    # адрес, которым больше не входят, email_wait не почистит: словарь рос бы весь срок жизни процесса
+    clock = Clock()
+    lim = Limiter(clock.monotonic)
+    lim.email_fail("a@example")
+    clock.advance(3600)
+    lim.email_fail("b@example")
+    assert list(lim._emails) == ["b@example"]

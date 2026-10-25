@@ -72,6 +72,25 @@ def test_v1_with_data_needs_owner(tmp_path):
     c.close()
 
 
+def test_newer_schema_refused_unless_declared_readable(tmp_path):
+    # откат кода через переход схемы: прежний код не знает новых столбцов и статусов — ясная ошибка, а не тихие
+    # сбои; переход, лишь добавивший столбцы с умолчаниями, объявляет схему годной прежней версии кода
+    db = tmp_path / "appshelf.db"
+    store.connect(db, "").close()
+    c = sqlite3.connect(db)
+    c.execute(f"PRAGMA user_version = {store.SCHEMA_VERSION + 1}")
+    c.close()
+    with pytest.raises(store.MigrationError, match=f"версии {store.SCHEMA_VERSION + 1}"):
+        store.connect(db, "")
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO state (key, value) VALUES (?, ?)", (store.READABLE_BY_KEY, str(store.SCHEMA_VERSION)))
+    c.commit()
+    c.close()
+    c = store.connect(db, "")
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION + 1   # прежний код схему не трогает
+    c.close()
+
+
 def test_empty_database_gets_schema_without_owner(tmp_path):
     c = store.connect(tmp_path / "appshelf.db", "")
     assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION

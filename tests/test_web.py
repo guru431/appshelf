@@ -132,6 +132,19 @@ def test_api_status(web, conn, cfg, clock):
     assert web.client.get("/api/status").json() == {"busy": True, "session": "ok", "apps": {"123": "queued"}}
 
 
+def test_api_status_when_apple_id_removed_mid_request(web, conn, monkeypatch):
+    # Apple ID удалили между проверкой входа и ответом: опрос получает «не занят» (страница перезагрузится), а не 500
+    set_session(conn, 1, "ok")
+    real = store.has_active_jobs
+
+    def removed_first(c, aid):
+        c.execute("DELETE FROM accounts WHERE id=?", (aid,))
+        return real(c, aid)
+
+    monkeypatch.setattr(store, "has_active_jobs", removed_first)
+    assert web.client.get("/api/status").json()["busy"] is False
+
+
 def test_history_shows_failed_refresh(web, conn, clock):
     set_session(conn, 1, "ok")
     store.enqueue_once(conn, 1, "refresh_history", None, clock.iso())

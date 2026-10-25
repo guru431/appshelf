@@ -11,19 +11,35 @@ def test_only_committed_head_is_deployed():
 
 
 def test_code_group_reaches_server_as_one_shell_word():
-    # значение из .env вставлялось в удалённую команду между кавычками как есть: $(…) или " в нём исполнил бы сервер
+    # значение из .env вставлялось в удалённую команду между кавычками как есть: $(…) или " в нём исполнил бы сервер;
+    # printf %q давал $'…', а его разбирает только bash — не любая оболочка входа на сервере
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
-    assert """GROUP="$(printf '%q' "${APPSHELF_CODE_GROUP:-root}")\"""" in text
-    assert text.count("APPSHELF_CODE_GROUP") == 2 and text.rstrip().endswith("""install.sh" '"$GROUP\"""")
+    check = text.index('[[ ! "$GROUP" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]]')
+    assert check < text.index('git -C "$D" archive --format=tar.gz HEAD') and "%q" not in text
+    assert text.rstrip().endswith("""install.sh" '"$GROUP\"""")
 
 
 def test_new_code_goes_live_only_after_checks_and_pip():
     # проверка после установки оставляла новый код без APPSHELF_OWNER: ближайший перезапуск — MigrationError;
-    # упавший pip — новый код со старыми зависимостями
+    # упавший pip — новый код со старыми зависимостями; www-data, читающий секреты, ловился уже после перезапуска
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     swap = text.index('mv "$NEW/$p" "$R/$p"')
     assert text.index('grep -qE "^APPSHELF_OWNER=.+"') < swap and text.index("mountpoint -q") < swap
+    assert text.index('sudo -u www-data test -r "$ENV_FILE"') < swap
     assert text.index("pip\" install") < swap and "--no-deps --force-reinstall" in text
+
+
+def test_failed_swap_puts_previous_code_back():
+    # mv, упавший посреди подмены, оставлял на диске смесь нового и прежнего кода
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    swap = text.index('mv "$NEW/$p" "$R/$p"')
+    assert text.index("' ERR") < swap < text.index("trap - ERR")
+
+
+def test_build_refuses_host_without_machine_id():
+    # на месте отсутствующего файла Docker создал бы каталог — и в /etc хоста сборки
+    docker = (DEPLOY / "build-ipatool-docker.sh").read_text(encoding="utf-8")
+    assert docker.index("[ ! -s /etc/machine-id ]") < docker.index("-v /etc/machine-id:/etc/machine-id:ro")
 
 
 def test_backup_timer_installed_and_enabled_only_with_backup_dir():

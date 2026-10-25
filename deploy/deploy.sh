@@ -16,8 +16,12 @@ fi
 SSH=(ssh -o BatchMode=yes -p "${APPSHELF_SSH_PORT:-22}")
 if [ -n "${APPSHELF_SSH_KEY:-}" ]; then SSH+=(-i "$APPSHELF_SSH_KEY" -o IdentitiesOnly=yes); fi
 SSH+=("$APPSHELF_SSH")
-# имя группы — одним словом удалённой оболочки: вставленное как есть, $(…) или " из .env исполнил бы сервер
-GROUP="$(printf '%q' "${APPSHELF_CODE_GROUP:-root}")"
+# имя группы уходит в удалённую команду как есть: $(…) или " из .env исполнил бы сервер — только имя группы POSIX
+GROUP="${APPSHELF_CODE_GROUP:-root}"
+if [[ ! "$GROUP" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]]; then
+  echo "ОШИБКА: APPSHELF_CODE_GROUP=$GROUP — не имя группы (латиница, цифры, «._-»)" >&2
+  exit 1
+fi
 git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
   set -e
   R=/var/_sh/appshelf

@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 4
+# Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
+# schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Переход, лишь добавляющий столбцы
+# с умолчаниями, пишет туда прежний SCHEMA_VERSION (или значение, что уже там) — откат остаётся рабочим.
+READABLE_BY_KEY = "schema_readable_by"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +137,7 @@ RUNNABLE = "account_id IN (SELECT id FROM accounts WHERE session = 'ok')"  # з�
 
 
 class MigrationError(RuntimeError):
-    """Переход с версии 1 невозможен: нынешним данным нужен владелец (APPSHELF_OWNER)."""
+    """Схему не перевести: данным версии 1 нужен владелец (APPSHELF_OWNER) или база новее этого кода (откат)."""
 
 
 class AppGone(Exception):
@@ -183,7 +187,12 @@ def connect(path: Path, owner_email: str = "") -> sqlite3.Connection:
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA busy_timeout=30000")
-    if _version(c) < SCHEMA_VERSION:
+    version = _version(c)
+    if version > SCHEMA_VERSION and _readable_by(c, version) > SCHEMA_VERSION:  # откат через переход схемы
+        c.close()
+        raise MigrationError(f"база — схемы версии {version}, а этот appshelf знает только {SCHEMA_VERSION}: "
+                             "выложите версию, создавшую базу, или новее")
+    if version < SCHEMA_VERSION:
         try:
             _upgrade(c, owner_email)
         except BaseException:
@@ -194,6 +203,11 @@ def connect(path: Path, owner_email: str = "") -> sqlite3.Connection:
 
 def _version(c) -> int:
     return c.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _readable_by(c, version: int) -> int:
+    """Самая старая версия кода, которой годится схема базы; переход её не записал — только своя."""
+    return int(get_state(c, READABLE_BY_KEY) or version)
 
 
 def _create(c) -> None:

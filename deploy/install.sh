@@ -25,6 +25,10 @@ if id -nG appshelf | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "ОШИБКА: appshelf входит в группу кода $GROUP — APPSHELF_CODE_GROUP в .env должна быть другой" >&2
   exit 1
 fi
+if sudo -u www-data test -r "$ENV_FILE"; then
+  echo "ОШИБКА: www-data читает $ENV_FILE (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
+  exit 1
+fi
 
 chown -R root:"$GROUP" "$NEW"
 chmod -R u=rwX,go=rX "$NEW"
@@ -39,10 +43,13 @@ done
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
 rm -rf "$OLD"
 install -d -o root -g root -m 0700 "$OLD"
+# сбой посреди подмены — прежние части на место: иначе на диске смесь нового и прежнего кода
+trap 'for p in "${PARTS[@]}"; do if [ -e "$OLD/$p" ]; then rm -rf "$R/$p"; mv "$OLD/$p" "$R/$p"; fi; done' ERR
 for p in "${PARTS[@]}"; do  # убранные из репозитория файлы уходят вместе с прежним каталогом
   if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/"; fi
   mv "$NEW/$p" "$R/$p"
 done
+trap - ERR
 rm -rf "$NEW"
 
 for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer appshelf-backup.service appshelf-backup.timer; do
@@ -73,10 +80,6 @@ if [ "$want" != "$(cat "$R/bin/ipatool.src-sha256" 2>/dev/null || true)" ]; then
 fi
 
 systemctl restart appshelf-web
-if sudo -u www-data test -r "$ENV_FILE"; then
-  echo "ОШИБКА: www-data читает $ENV_FILE (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
-  exit 1
-fi
 # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
 # От www-data — так к сокету ходит Apache; /healthz без пароля.
 code=000

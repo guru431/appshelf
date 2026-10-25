@@ -210,9 +210,10 @@ class LoginFlow:
 
 
 class Limiter:
-    """Неудачные входы. Общий лимит — 10 за минуту, дальше минуту никого. На Apple ID — 5 ответов Apple «неверный
-    пароль» за час, дальше этим Apple ID — до часа с первой неудачи: посторонний, знающий адрес, не доведёт учётку
-    до блокировки у Apple. Счётчики — в памяти процесса (один uvicorn)."""
+    """Неудачные входы — отказы Apple «неверный пароль или код». Общий лимит — 10 за минуту, дальше минуту никого.
+    На Apple ID — 5 таких отказов за час, дальше этим Apple ID — до часа с первой неудачи: посторонний, знающий адрес,
+    не доведёт учётку до блокировки у Apple. Неизвестный адрес и плохие ссылки не считаются: к Apple они не ходят,
+    токен не подобрать, а их счёт давал анониму закрыть вход всем. Счётчики — в памяти процесса (один uvicorn)."""
 
     def __init__(self, clock=time.monotonic, fail_limit: int = 10, fail_window: float = 60.0,
                  email_limit: int = 5, email_window: float = 3600.0):
@@ -246,5 +247,9 @@ class Limiter:
             return self.email_window - (t - times[0]) if len(times) >= self.email_limit else 0.0
 
     def email_fail(self, email: str) -> None:
+        t = self.clock()
         with self._lock:
-            self._emails.setdefault(email, []).append(self.clock())
+            # адреса, которыми больше не входят, email_wait не почистит — старые неудачи уходят здесь
+            for old in [e for e, times in self._emails.items() if t - times[-1] >= self.email_window]:
+                del self._emails[old]
+            self._emails.setdefault(email, []).append(t)

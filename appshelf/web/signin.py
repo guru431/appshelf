@@ -210,7 +210,6 @@ def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *
     with w.conn() as c:
         intent = decide(w, c, request, email, user_id)
         if intent is None:
-            w.limiter.fail()
             configured = bool(w.cfg.owner_email) or people.owner_exists(c)
             return again(NOT_REGISTERED if configured else NOT_CONFIGURED, 403)
         tool = (w.env.tools(people.get_account(c, intent.account_id)) if intent.account_id is not None
@@ -302,7 +301,6 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         with w.conn() as c:
             invite = people.active_invite(c, token)
         if invite is None:
-            w.limiter.fail()
             return login_page(w, request, error=INVITE_GONE, status_code=400)
         resp = back("/login")
         w.set_cookie(resp, INVITE_COOKIE, token, INVITE_AGE)
@@ -311,27 +309,22 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     @app.get("/l/{token}", response_class=HTMLResponse)
     def login_link_page(request: Request, token: str):
         """Запасная ссылка: GET только показывает кнопку входа. Telegram, iMessage и WhatsApp сами открывают
-        ссылку ради превью — расходуй её GET, войти успел бы их робот, а человек увидел бы «недействительна»."""
-        if w.limiter.blocked():
-            return login_page(w, request, error=TOO_MANY, status_code=429)
+        ссылку ради превью — расходуй её GET, войти успел бы их робот, а человек увидел бы «недействительна».
+        Лимит неудач ссылок не касается: токен не подобрать, а запасной вход нужен и во время перебора паролей."""
         with w.conn() as c:
             uid = people.login_link_user(c, token, w.now())
             user = people.get_user(c, uid) if uid is not None else None
         if user is None:
-            w.limiter.fail()
             return login_page(w, request, error=LINK_GONE, status_code=400)
         return login_page(w, request, link=user.name)
 
     @app.post("/l/{token}", response_class=HTMLResponse)
     def login_link(request: Request, token: str):
-        if w.limiter.blocked():
-            return login_page(w, request, error=TOO_MANY, status_code=429)
         with w.conn() as c:
             uid = people.use_login_link(c, token, w.now())
             user = people.get_user(c, uid) if uid is not None else None
             accounts = people.accounts_of(c, uid) if user is not None else []
         if not accounts:
-            w.limiter.fail()
             return login_page(w, request, error=LINK_GONE, status_code=400)
         return signed_in(w, request, back("/"), user, accounts[0].id)
 

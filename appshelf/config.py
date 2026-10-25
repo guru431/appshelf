@@ -81,7 +81,7 @@ class Config:
 def from_env(env=None) -> Config:
     env = os.environ if env is None else env
     token = env.get("PUB_TOKEN", "")
-    if not TOKEN_RE.fullmatch(token):  # не match с «$»: тот пропускает хвостовой перевод строки
+    if not TOKEN_RE.fullmatch(token):  # fullmatch, а не match с «$»: «$» совпадает и перед хвостовым «\n»
         raise ValueError("PUB_TOKEN в appshelf.env — 32 символа 0-9a-f")
     base = env.get("APPSHELF_PUBLIC_BASE", "")
     if not base.startswith(("https://", "http://")):

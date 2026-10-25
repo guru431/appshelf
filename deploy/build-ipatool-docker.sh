@@ -8,6 +8,11 @@ set -euo pipefail
 D="$(cd "$(dirname "$0")/.." && pwd)"
 . "$D/ipatool/UPSTREAM"                       # URL, COMMIT
 OUT="$D/bin/ipatool"
+# без файла Docker создал бы на его месте каталог — и в /etc хоста сборки
+if [ ! -s /etc/machine-id ]; then
+  echo "ОШИБКА: на хосте сборки нет /etc/machine-id (systemd-machine-id-setup)" >&2
+  exit 1
+fi
 WORK="$(mktemp -d)"
 # хост сборки может быть чужим: образ, который скачала эта сборка, после неё удаляется
 PULLED=1

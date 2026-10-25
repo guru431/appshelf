@@ -14,7 +14,7 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from .. import ipatool, jobs, notify, people, removed, store, webauth
+from .. import ipatool, jobs, notify, removed, store, webauth
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, pwa, signin
@@ -323,8 +323,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     @app.get("/api/status")
     def api_status(request: Request):
         aid = request.state.acct.id
-        with w.conn() as c:
-            status = {"busy": store.has_active_jobs(c, aid), "session": people.get_account(c, aid).session,
+        with w.conn() as c:  # session — из проверки входа: Apple ID могли удалить до этой строки
+            status = {"busy": store.has_active_jobs(c, aid), "session": request.state.acct.session,
                       "apps": {str(x.app_id): x.status for x in store.list_apps(c, aid)}}
             progress, _ = store.removed_progress(c, aid)  # только активной полки: чужие Apple ID не видны
         if progress:

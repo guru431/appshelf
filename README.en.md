@@ -111,7 +111,9 @@ www-data to the `appshelf` group**: Apache reaches the socket through the `www-d
     bash deploy/build-ipatool.sh                                   # bin/ipatool (after changing ipatool/ and deploying)
 
 What ships is the committed `HEAD` (`git archive`): with uncommitted changes in the code `deploy.sh` refuses. The new
-code replaces the old one as a whole and only after `pip` succeeds; to roll back, deploy the previous commit. If
+code replaces the old one as a whole and only after `pip` succeeds; to roll back, deploy the previous commit (across a
+database schema change — only if that migration declared the schema readable by the older code, see `SCHEMA_VERSION`
+in `store.py`). If
 `bin/ipatool` was not built from the deployed patches, `deploy.sh` reminds you to rebuild; when to rebuild without
 changes — [ipatool/README.md](ipatool/README.md). `build-ipatool.sh` builds the `ipatool/` deployed on the server
 in a throwaway `debian:trixie` container on the `APPSHELF_BUILD_SSH` host (or on the server itself if unset) and
