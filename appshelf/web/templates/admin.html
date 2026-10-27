@@ -23,7 +23,7 @@
   <div class="title">{{ p.user.name }} <span class="tag">{{ 'владелец' if p.user.role == 'owner' else 'участник' }}</span></div>
   {% for r in p.accounts %}<div class="meta body">{{ r.a.email }} ·
     {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}вход истёк{% else %}нет входа{% endif %}
-    · последний вход {{ r.a.last_login_at[:10] or '—' }} · {{ (r.size / 1073741824) | round(1) }} ГБ</div>{% endfor %}
+    · последний вход {{ r.a.last_login_at[:10] or '—' }} · {{ r.size | gb }} ГБ</div>{% endfor %}
   <div class="bar">
     <form method="post" action="/admin/users/{{ p.user.id }}/login-link"><button class="sm secondary">Ссылка входа</button></form>
     <form method="post" action="/admin/users/{{ p.user.id }}/logout-all"><button class="sm secondary">Выйти везде</button></form>

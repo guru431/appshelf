@@ -13,10 +13,11 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import jobs, people, store, webauth
-from ..config import Config
+from ..config import GB, Config
 from .login import Limiter, LoginFlow
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+TEMPLATES.env.filters["gb"] = lambda size: f"{size / GB:.1f}"  # размер полки в ГБ — как в подтверждении удаления
 THEMES = ("light", "dark")
 ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID одного из вошедших
 LOGIN_COOKIE = "appshelf_login"    # незавершённый вход (шаг кода 2FA): id в памяти LoginFlow

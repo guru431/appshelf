@@ -8,7 +8,7 @@
 <div class="row">
   <div class="body"><div class="title">{{ r.a.email }}</div><div class="meta">{{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
     {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}<span class="err">вход истёк</span>{% else %}нет входа{% endif %}
-    {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ (r.size / 1073741824) | round(1) }} ГБ</div></div>
+    {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ r.size | gb }} ГБ</div></div>
   <div class="act"><a class="btn sm tint" href="/login?{{ r.relogin }}">Войти заново</a><a class="btn sm danger" href="/apple/{{ r.a.id }}/delete">Удалить полку</a></div>
 </div>
 {% endfor %}

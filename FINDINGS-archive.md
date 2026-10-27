@@ -1,6 +1,20 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-26 · code-review role:review-dsflash: Решение о выходе человека принимается по общему числу Apple ... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=dsflash), `appshelf/web/accounts.py:78-83`
+**What:** в браузере двое; один удаляет свой единственный Apple ID — `len(request.state.accounts) > 1`, cookie не чистится, «человек остаётся вошедшим без полок и виден в /apple с пустым списком»; предложено снимать его запись `webauth.without_user`.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-27 — опровергнуто, тот же довод, что у отклонённой 2026-10-24: последний Apple ID удаляется вместе с человеком (`jobs._remove`), его запись cookie `signed_users` отбрасывает (`get_user` → None) — входа она не даёт, в `/apple` его нет. Сценарий находки покрыт тестом `test_owner_last_apple_id_is_judged_by_the_shelf_person` (полку «Общего» удалили — переход на `/apple`, человека нет, на странице только владелец). Мёртвая запись уходит из cookie при следующем входе (`with_user` собирает её из годных), номер человека другому не достанется (AUTOINCREMENT).
+
+## 2026-10-26 · code-review role:review-dsflash: При вычислении метки «новая версия» условие проверяет x.prev... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=dsflash), `appshelf/web/app.py:148-149`
+**What:** метка «новая версия» проверяет `x.previous is not None`, а читает `x.current["downloaded_at"]`; при нарушении инварианта «previous есть только при current» каталог упадёт; предложено проверять `x.current` вместо `x.previous`.
+**Proposal:** —
+**Status:** wontfix
+**Resolved:** 2026-10-27 — предложенная замена ломает смысл метки: `previous` и есть признак обновления, без него первая скачанная версия получила бы «новая версия» (против `test_catalog_marks_versions_downloaded_this_week`: у «Первой» метки нет). Инвариант держит схема записи: роли версий назначает только `store.add_version` одной транзакцией (current → previous и сразу новая current), `_unpin` удаляет лишь kept, `unpublish` — все версии разом. Проверка current рядом с previous была бы обработкой невозможного случая.
+
 ## 2026-10-24 · code-review role:review: После удаления последнего Apple ID человека cookie удаляется... [P3]
 **Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), `appshelf/web/accounts.py:78-83`
 **What:** удаление последнего Apple ID в браузере стирает cookie входа целиком; записи других людей «без Apple ID» пропали бы вместе с ней — предложено `webauth.without_user`.
