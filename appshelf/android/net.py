@@ -11,6 +11,7 @@ import ipaddress
 import json as jsonlib
 import socket
 import ssl
+import sys
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -92,7 +93,11 @@ class Http:
                  timeout: float = 60.0):
         self.ctx = ssl.create_default_context()
         if extra_ca:
-            self.ctx.load_verify_locations(cafile=str(extra_ca))
+            try:
+                self.ctx.load_verify_locations(cafile=str(extra_ca))
+            except (ssl.SSLError, OSError) as e:  # необязательный файл не роняет службу: CDN под НУЦ — ошибка TLS
+                print(f"appshelf: APPSHELF_SOURCES_CA {extra_ca} не загружен, только системные корни: {e}",
+                      file=sys.stderr)
         self.resolve, self.connect, self.timeout = resolve, connect or _PinnedHTTPS, timeout
 
     def head(self, url: str, headers: dict | None = None) -> Meta:

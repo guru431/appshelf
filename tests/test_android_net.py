@@ -181,6 +181,20 @@ def test_json_errors():
             net.Http(resolve=fake_resolve("8.8.8.8"), connect=Server(resp)).json("https://api.example/a")
 
 
+BROKEN_PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE----------BEGIN CERTIFICATE-----\nMIIC\n" \
+             "-----END CERTIFICATE-----\n"
+
+
+def test_broken_extra_ca_logs_and_works_without_it(tmp_path, capsys):
+    ca = tmp_path / "ca.pem"
+    ca.write_text(BROKEN_PEM)
+    for extra in (ca, tmp_path / "missing.pem"):
+        http = net.Http(extra, resolve=fake_resolve("8.8.8.8"), connect=Server(Resp(200, {"ETag": '"1"'})))
+        assert http.head("https://bank.example/app.apk").etag == '"1"'
+        err = capsys.readouterr().err
+        assert "appshelf: APPSHELF_SOURCES_CA" in err and str(extra) in err
+
+
 def test_unresolvable_name_is_fetch_error():
     def resolve(*a):
         raise socket.gaierror("no such name")

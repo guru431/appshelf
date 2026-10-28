@@ -27,6 +27,7 @@ DRAWABLE_RE = re.compile(r"^res/drawable-[^/]+/ic_launcher[^/]*\.(png|webp)$")
 MAGIC = b"APK Sig Block 42"
 V2_ID, V3_ID = 0x7109871a, 0xf05368c0
 MAX_MANIFEST = 16 << 20
+ICON_MAX = 8 << 20  # «иконка» больше — не читается: zip-бомба съела бы память appshelf-web
 MAX_SIG_BLOCK = 64 << 20
 VERSIONS = {21: "5", 22: "5.1", 23: "6", 24: "7", 25: "7.1", 26: "8", 27: "8.1", 28: "9", 29: "10", 30: "11",
             31: "12", 32: "12L", 33: "13", 34: "14", 35: "15", 36: "16"}
@@ -103,6 +104,8 @@ def extract_icon(path: Path) -> bytes | None:
         for pattern in (MIPMAP_RE, DRAWABLE_RE):
             best = None
             for name in (n for n in names if pattern.match(n)):
+                if z.getinfo(name).file_size > ICON_MAX:
+                    continue
                 try:
                     img = Image.open(io.BytesIO(z.read(name)))
                     img.load()

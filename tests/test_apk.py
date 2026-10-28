@@ -74,6 +74,19 @@ def test_icon_largest_launcher_png(tmp_path):
     assert apk.extract_icon(broken) is None
 
 
+def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
+    huge = png_bytes(144) + b"\0" * (apk.ICON_MAX + 1)  # годный PNG с хвостом: без предела была бы выбрана она
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48),
+                                               "res/mipmap-xxhdpi/ic_launcher.png": huge})
+    import zipfile
+    read, names = zipfile.ZipFile.read, []
+    monkeypatch.setattr(zipfile.ZipFile, "read", lambda z, name, *a: names.append(name) or read(z, name, *a))
+    assert Image.open(io.BytesIO(apk.extract_icon(path))).size == (48, 48)
+    assert "res/mipmap-xxhdpi/ic_launcher.png" not in names
+    only_huge = make_apk(tmp_path / "h.apk", files={"res/mipmap-xxhdpi/ic_launcher.png": huge})
+    assert apk.extract_icon(only_huge) is None
+
+
 def test_android_version():
     assert apk.android_version(26) == "8" and apk.android_version(99) == "API 99"
     assert [apk.android_version(s) for s in (21, 23, 24, 28, 29, 35, 36)] == ["5", "6", "7", "9", "10", "15", "16"]

@@ -1,9 +1,13 @@
+from dataclasses import replace
+
 import pytest
+from starlette.testclient import TestClient
 
 from apk_factory import cert_sha, make_apk
 from appshelf.android import db, fetch, net, rustore
 from appshelf.android.sources import Latest
-from helpers import make_account
+from appshelf.web.app import create_app
+from helpers import HOST, make_account
 
 UA_ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile"
 UA_IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1"
@@ -228,6 +232,13 @@ def test_status_api_reports_android_apps(web, conn, tmp_path):
     assert web.client.get("/api/android/status").json() == {"busy": True, "apps": {PKG: "queued"}}
     page = web.client.get("/android").text
     assert "/api/android/status" in page
+
+
+def test_app_starts_with_broken_sources_ca(cfg, conn, tmp_path):
+    ca = tmp_path / "ca.pem"  # склеено без перевода строки — load_verify_locations бросает ssl.SSLError
+    ca.write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE----------BEGIN CERTIFICATE-----\n")
+    app = create_app(replace(cfg, sources_ca=ca), lambda acct: None, start_worker=False)
+    assert TestClient(app, base_url=f"https://{HOST}").get("/healthz").status_code == 200
 
 
 @pytest.mark.parametrize("path", ["/android", "/android/add", "/api/android/status"])
