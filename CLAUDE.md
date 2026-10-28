@@ -4,7 +4,7 @@ IPA из истории покупок основного Apple ID владел�
 Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026-10-05-appshelf-design.md`.
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
 Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
-Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этап 1 реализован).
+Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–2 реализованы).
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
@@ -12,7 +12,8 @@ Android-полки, вход Google, публичная полка — `docs/sup
   `removed.py` (справочник удалённых из App Store), `integrity.py` (проверка целостности полок, снимки базы),
   `notify.py`, `webauth.py` (cookie вошедших людей), `web/` (вход — `signin.py`, раздел Android — `android.py`), `cli.py`.
 - `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
-  (HTTP источников: только https и глобальные адреса), `rustore.py`, `sources.py`, `fetch.py` (конвейер и задания).
+  (HTTP источников: только https и глобальные адреса), `rustore.py`, `sources.py`, `fetch.py` (конвейер и задания),
+  `pin.py` (PIN публичной полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
   `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker
@@ -28,8 +29,9 @@ Android-полки, вход Google, публичная полка — `docs/sup
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
-  <Apple ID>`, проверка целостности: `appshelf check [--deep]` (только чтение), снимок базы: `appshelf backup --out
-  <каталог>` (ночной — `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
+  <Apple ID>` (Android-полки участника — `--email <Apple ID> --android`, публичной — `--public`), проверка
+  целостности: `appshelf check [--deep]` (только чтение), снимок базы: `appshelf backup --out <каталог>` (ночной —
+  `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
 
 ## Правила
 - Репозиторий публикуется на GitHub: внутренних имён, адресов, путей, почты и учётных данных в git нет нигде
@@ -52,3 +54,6 @@ Android-полки, вход Google, публичная полка — `docs/sup
 - Сеть к источникам APK — только через `android/net.py`: адрес проверяется перед каждым запросом и после каждого
   редиректа, проверка сертификата не отключается (доп. корни НУЦ — файл `APPSHELF_SOURCES_CA`).
 - Android-полка — у участника (`android_shelves.user_id`); удаление участника удаляет и её (`jobs._remove`).
+- Публичная Android-полка — одна (`user_id IS NULL`), менять её — только владельцу (проверка на сервере).
+- PIN публичной полки — только соль и хэш в `state`; сам PIN не в git, базе, журнале, `jobs.error`, письмах. Адрес
+  гостя для счётчиков перебора — последний элемент `X-Forwarded-For` (его дописывает Apache), не первый.

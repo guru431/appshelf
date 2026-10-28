@@ -31,6 +31,8 @@ The web UI is in Russian.
 - Android: a section with each person's Android shelf — APKs from RuStore, from a direct link on a bank's site or an
   uploaded file; install and update from the phone's browser, nightly check for new versions, a signing rule (see
   "Android").
+- A public Android shelf: the owner fills it, a guest opens it with a 6-digit PIN and can only install; brute-force
+  protection.
 
 ## How it works
 
@@ -211,7 +213,7 @@ The same server also keeps Android shelves: the **Android** section of the panel
 the header. From an Android phone the panel opens right in it, from an iPhone in Apple, from a computer in the
 section opened last. An Android shelf belongs to a person, not to an Apple ID: an APK is not tied to any account.
 Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/superpowers/specs/2026-10-28-android-design.md)
-(stage 1 is done: RuStore, direct link, uploaded file).
+(stages 1–2 are done: RuStore, direct link, uploaded file, public shelf by PIN).
 
 - **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
   paid apps are unavailable), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own
@@ -238,11 +240,34 @@ Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/sup
   downloads fail.
 - **Apache.** In the archive's `<Directory>` — `AddType application/vnd.android.package-archive .apk` and
   `Content-Disposition: attachment` for `.apk` (with `application/zip` Chrome saves `.apk.zip`); for the upload
-  URLs — `LimitRequestBody 1100000000`. Uploads go to `TMPDIR=/var/lib/appshelf/tmp` (set in the `appshelf-web`
-  unit), not to `/tmp`.
+  URLs of own and public shelves — `LimitRequestBody 1100000000`. Uploads go to `TMPDIR=/var/lib/appshelf/tmp`
+  (set in the `appshelf-web` unit), not to `/tmp`.
 
 Hints for the phone are in the section's catalog: Samsung Auto Blocker, Huawei Pure Mode, Play Protect; from 2027
 Google requires developer verification for installs outside stores too.
+
+### Public shelf
+
+One Android shelf per server for people without a panel sign-in. The owner fills it (Android → **Публичная** →
+"Добавить в публичную": the same RuStore, link and own file), people see it on the same tab without a PIN and without
+actions, a guest opens `<site address>/p` and enters the PIN — and sees only the list with "Download APK" and the
+hints, no menu and no panel.
+
+- **PIN** — 6 digits, set and changed by the owner in the "Гостевой доступ" block of the public tab. Until a PIN is
+  set, `/p` shows guests nothing. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
+  PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie
+  signed with `cookie-key`).
+- **Changing the PIN** invalidates all guest cookies and gives the public shelf a new directory token: APK links
+  shared before stop working. While a download runs, the PIN is not changed — "try again in a minute".
+- **Brute force.** 20 wrong PINs from one address in an hour close that address for an hour (IPv6 — by its /64).
+  100 wrong PINs from all addresses in a day close PIN entry to new guests for a day; guests with a valid cookie
+  still see the shelf. Anything but 6 digits is not an attempt. Counters live in the database, a deploy does not
+  reset them. The guest's address is the last element of `X-Forwarded-For`, which Apache appends: there must be no
+  other proxy in front of it, or all guests share one counter.
+- **The "ввод PIN публичной полки закрыт" mail** — one per episode: someone is guessing the PIN. To reopen entry
+  right away — "Открыть ввод PIN" on the public tab; if the PIN may have leaked, change it (that reopens entry too).
+- File links, as with IPAs, work without the PIN: the PIN guards the page, not the files. Purchased apps never go to
+  the public shelf.
 
 ## New shelf token
 
@@ -251,6 +276,10 @@ shelf's links leaked, give it a new token (the directory is renamed, manifests a
 installed apps stay):
 
     sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf rotate-token --email <Apple ID>'
+
+Android shelves likewise: `rotate-token --email <Apple ID> --android` — the shelf of that Apple ID's person,
+`rotate-token --public` — the public one (changing the PIN rotates it too). The directory is renamed, APK links on the
+page become new, old ones stop working.
 
 `PUB_TOKEN` names only the directory of the shelf carried over from the first version; after `rotate-token` on that
 shelf no shelf needs it. Directories that version 2 derived as an HMAC of `PUB_TOKEN` are moved to random tokens by

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
@@ -87,3 +88,12 @@ def test_vhost_serves_apk_as_attachment_and_limits_upload():
     assert "AddType application/vnd.android.package-archive .apk" in text
     assert 'Header set Content-Disposition "attachment"' in text
     assert "LimitRequestBody 1100000000" in text
+
+
+def test_vhost_upload_limit_covers_own_and_public_shelf():
+    text = (DEPLOY / "apache-appshelf.conf").read_text(encoding="utf-8")
+    pattern = re.search(r'<LocationMatch "([^"]+)">\s*LimitRequestBody', text).group(1)
+    for path in ("/android/add/upload", "/android/apps/ru.x/upload", "/android/public/add/upload",
+                 "/android/public/apps/ru.x/upload"):
+        assert re.match(pattern, path), path
+    assert not re.match(pattern, "/android/add/link")
