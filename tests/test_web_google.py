@@ -193,6 +193,13 @@ def test_same_new_google_twice_one_person(gw, conn, cfg, clock, monkeypatch):
     assert r.status_code == 303 and signed_uids(second, cfg, conn, clock) == [people.google_by_sub(conn, "g-1").user_id]
 
 
+def test_no_google_http_without_settings(make_web, cfg, conn, acct, monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("TLS-контекст строится на каждый create_app: ~50 мс на Windows")
+    monkeypatch.setattr("appshelf.android.net.Http", boom)
+    make_web(cfg, conn)                                                     # Google не настроен — Http не нужен
+
+
 def test_google_routes_404_when_not_configured(make_web, cfg, conn, acct):
     wb = make_web(cfg, conn)
     assert wb.client.get("/google/start", follow_redirects=False).status_code == 404

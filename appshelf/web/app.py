@@ -357,7 +357,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return JSONResponse(status)
 
     signin.register_routes(app, w)
-    google_signin.register_routes(app, w, google_http or net.Http())
+    # TLS-контекст Http — десятки мс: без настроек Google он не нужен, маршруты /google/* тогда отвечают 404
+    google_signin.register_routes(app, w, google_http or (net.Http() if cfg.google_enabled else None))
     accounts.register_routes(app, w)
     admin.register_routes(app, w)
     android.register_routes(app, w)
