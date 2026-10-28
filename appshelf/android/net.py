@@ -6,6 +6,7 @@ link-local, multicast, зарезервированный) — отказ до �
 недостающие промежуточные — только здесь, файлом APPSHELF_SOURCES_CA."""
 from __future__ import annotations
 
+import base64
 import http.client
 import ipaddress
 import json as jsonlib
@@ -76,21 +77,99 @@ def _public(addr: str) -> bool:
                                 or a.is_reserved or a.is_unspecified)
 
 
-class _PinnedHTTPS(http.client.HTTPSConnection):
-    """Сокет — к проверенному адресу, TLS — с именем хоста (SNI и проверка сертификата)."""
+def tunnel(proxy: str, host: str, port: int, timeout: float, dial=socket.create_connection, name: str = ""):
+    """Сокет до host:port через прокси: http:// — CONNECT, socks5h:// — SOCKS5 с именем узла (RFC 1928/1929): имя
+    резолвит прокси, локально — нет. Сбой — FetchError «прокси <имя> недоступен: …» без адреса и пароля прокси."""
+    u = urllib.parse.urlsplit(proxy)
+    user, password = urllib.parse.unquote(u.username or ""), urllib.parse.unquote(u.password or "")
+    label = name or u.hostname
 
-    def __init__(self, host: str, ip: str, port: int, ctx: ssl.SSLContext, timeout: float):
+    def fail(reason: str):
+        return FetchError(f"прокси {label} недоступен: {reason}")
+
+    try:
+        sock = dial((u.hostname, u.port), timeout)
+    except OSError as e:
+        raise fail(f"{e.__class__.__name__}: {e.strerror or e}") from None
+    try:
+        if u.scheme == "socks5h":
+            _socks5(sock, host, port, user, password, fail)
+        else:
+            _connect_tunnel(sock, host, port, user, password, fail)
+    except OSError as e:
+        sock.close()
+        raise fail(f"{e.__class__.__name__}: {e.strerror or e}") from None
+    except FetchError:
+        sock.close()
+        raise
+    return sock
+
+
+def _recv_exact(sock, n: int, fail) -> bytes:
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            raise fail("оборвал соединение")
+        data += chunk
+    return data
+
+
+def _socks5(sock, host: str, port: int, user: str, password: str, fail) -> None:
+    sock.sendall(b"\x05\x02\x00\x02" if user else b"\x05\x01\x00")
+    ver, method = _recv_exact(sock, 2, fail)
+    if ver != 5 or method not in ((0, 2) if user else (0,)):
+        raise fail("не принял способ входа")
+    if method == 2:
+        u, p = user.encode(), password.encode()
+        sock.sendall(bytes([1, len(u)]) + u + bytes([len(p)]) + p)
+        if _recv_exact(sock, 2, fail)[1] != 0:
+            raise fail("не принял логин и пароль")
+    name = host.encode("idna")
+    sock.sendall(b"\x05\x01\x00\x03" + bytes([len(name)]) + name + port.to_bytes(2, "big"))
+    ver, rep, _, atyp = _recv_exact(sock, 4, fail)
+    if ver != 5 or rep != 0:
+        raise fail(f"отказал в соединении (код {rep})")
+    size = {1: 4, 4: 16}.get(atyp)
+    if size is None:
+        size = _recv_exact(sock, 1, fail)[0] if atyp == 3 else -1
+    if size < 0:
+        raise fail("ответил непонятно")
+    _recv_exact(sock, size + 2, fail)                   # адрес и порт, которыми прокси вышел, — не нужны
+
+
+def _connect_tunnel(sock, host: str, port: int, user: str, password: str, fail) -> None:
+    auth = ""
+    if user:
+        auth = f"Proxy-Authorization: Basic {base64.b64encode(f'{user}:{password}'.encode()).decode()}\r\n"
+    sock.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{auth}\r\n".encode())
+    head = b""
+    while not head.endswith(b"\r\n\r\n"):               # по байту: дальше ответа не читаем — там уже TLS
+        head += _recv_exact(sock, 1, fail)
+        if len(head) > 16384:
+            raise fail("ответил непонятно")
+    status = head.split(b"\r\n", 1)[0].split()
+    if len(status) < 2 or not status[0].startswith(b"HTTP/") or status[1] != b"200":
+        raise fail(f"ответил {status[1].decode('latin-1') if len(status) > 1 else '?'}")
+
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    """Сокет — к проверенному адресу (или через прокси), TLS — с именем хоста (SNI и проверка сертификата)."""
+
+    def __init__(self, host: str, ip: str | None, port: int, ctx: ssl.SSLContext, timeout: float, opener):
         super().__init__(host, port, timeout=timeout, context=ctx)
-        self._ip, self._ctx = ip, ctx
+        self._ip, self._ctx, self._opener = ip, ctx, opener
 
     def connect(self):
-        sock = socket.create_connection((self._ip, self.port), self.timeout)
+        sock = self._opener(self.host, self._ip, self.port, self.timeout)
         self.sock = self._ctx.wrap_socket(sock, server_hostname=self.host)
 
 
 class Http:
     def __init__(self, extra_ca: Path | None = None, *, resolve=socket.getaddrinfo, connect=None,
-                 timeout: float = 60.0):
+                 timeout: float = 60.0, proxy: str = "", proxy_name: str = "", dial=socket.create_connection):
+        """proxy — только для Google Play (адреса — константы клиента): с ним адрес не проверяется на «глобальный» и
+        локально не резолвится, а сбой прокси — ошибка, не прямое соединение."""
         self.ctx = ssl.create_default_context()
         if extra_ca:
             try:
@@ -98,7 +177,15 @@ class Http:
             except (ssl.SSLError, OSError) as e:  # необязательный файл не роняет службу: CDN под НУЦ — ошибка TLS
                 print(f"appshelf: APPSHELF_SOURCES_CA {extra_ca} не загружен, только системные корни: {e}",
                       file=sys.stderr)
-        self.resolve, self.connect, self.timeout = resolve, connect or _PinnedHTTPS, timeout
+        self.resolve, self.timeout = resolve, timeout
+        self.proxy, self.proxy_name, self.dial = proxy, proxy_name, dial
+        self.connect = connect or (lambda host, ip, port, ctx, timeout:
+                                   _PinnedHTTPS(host, ip, port, ctx, timeout, self._socket))
+
+    def _socket(self, host: str, ip: str | None, port: int, timeout: float):
+        if self.proxy:
+            return tunnel(self.proxy, host, port, timeout, self.dial, self.proxy_name)
+        return self.dial((ip, port), timeout)
 
     def head(self, url: str, headers: dict | None = None) -> Meta:
         """HEAD; 405/501 — GET с Range: bytes=0-0, тело не читается."""
@@ -183,12 +270,15 @@ class Http:
         """(ответ, соединение, адрес после редиректов). Каждый шаг — check_url и проверка адресов."""
         for _ in range(MAX_REDIRECTS + 1):
             u = check_url(url)
-            ip = self._vetted_ip(u.hostname, u.port or 443)
+            ip = None if self.proxy else self._vetted_ip(u.hostname, u.port or 443)
             conn = self.connect(u.hostname, ip, u.port or 443, self.ctx, self.timeout)
             target = (u.path or "/") + (f"?{u.query}" if u.query else "")
             try:
                 conn.request(method, target, body, {"User-Agent": USER_AGENT, **headers})
                 resp = conn.getresponse()
+            except FetchError:  # прокси не пустил (tunnel)
+                conn.close()
+                raise
             except (OSError, http.client.HTTPException) as e:
                 conn.close()
                 raise FetchError(f"{u.hostname}: {e.__class__.__name__}: {e}") from None

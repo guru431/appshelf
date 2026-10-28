@@ -4,7 +4,7 @@
 любым из них открывает все его полки. С 2026-10-13 новый Apple ID всегда приходит отдельным человеком
 (web/signin.py) — связки остались от прежних версий; Google-аккаунт переходит к другому только через «Связать».
 Ссылки (links) — приглашения и запасной вход; в базе только SHA-256 токена. Транзакции открывают только
-claim_expired_mail и use_login_link: несколько записей подряд вызывающий оборачивает в store.tx."""
+claim_expired_mail, claim_play_mail и use_login_link: несколько записей подряд вызывающий оборачивает в store.tx."""
 from __future__ import annotations
 
 import hashlib
@@ -56,6 +56,10 @@ class GoogleAccount:
     name: str
     created_at: str
     last_login_at: str
+    play: str = "none"       # подключение к Google Play: none / ok / expired (мастер-токен — файлом, не здесь)
+    play_since: str = ""
+    play_country: str = ""   # страна аккаунта из обмена токена; '' — неизвестна
+    proxy: str = ""          # имя прокси из APPSHELF_PROXIES; '' — напрямую
 
 
 def _user(r) -> User | None:
@@ -192,7 +196,8 @@ def has_apple(c, uid: int) -> bool:
 
 def _google(r) -> GoogleAccount | None:
     return None if r is None else GoogleAccount(r["id"], r["user_id"], r["sub"], r["email"], r["name"],
-                                                r["created_at"], r["last_login_at"])
+                                                r["created_at"], r["last_login_at"], r["play"], r["play_since"],
+                                                r["play_country"], r["proxy"])
 
 
 def google_by_sub(c, sub: str) -> GoogleAccount | None:
@@ -216,6 +221,37 @@ def create_google(c, uid: int, sub: str, email: str, name: str, now: str) -> int
 def mark_google_login(c, gid: int, email: str, name: str, now: str) -> None:
     """Вход: адрес и имя — как сейчас у Google (их меняют), время входа."""
     c.execute("UPDATE google_accounts SET email=?, name=?, last_login_at=? WHERE id=?", (email, name, now, gid))
+
+
+def set_play(c, gid: int, state: str, now: str, country: str = "") -> None:
+    """ok — подключили (страна из обмена; эпизод «истекло» окончен), expired — Play не принял токен: только у
+    подключённого, начало эпизода не сдвигается, а отключённый опоздавшим отказом не «истекает»; none — отключили."""
+    if state == "ok":
+        c.execute("UPDATE google_accounts SET play='ok', play_since=?, play_country=?, play_mail_sent='' WHERE id=?",
+                  (now, country, gid))
+    elif state == "expired":
+        c.execute("UPDATE google_accounts SET play='expired', play_since=? WHERE id=? AND play='ok'", (now, gid))
+    else:
+        c.execute("UPDATE google_accounts SET play='none', play_since=?, play_country='', play_mail_sent='' "
+                  "WHERE id=?", (now, gid))
+
+
+def set_proxy(c, gid: int, name: str) -> None:
+    c.execute("UPDATE google_accounts SET proxy=? WHERE id=?", (name, gid))
+
+
+def claim_play_mail(c, gid: int, now: str) -> bool:
+    """Метка «письмо об истечении подключения к Play отправлено» на эпизод, как claim_expired_mail."""
+    with store.tx(c):
+        row = c.execute("SELECT play_mail_sent FROM google_accounts WHERE id=?", (gid,)).fetchone()
+        if row is None or row["play_mail_sent"]:
+            return False
+        c.execute("UPDATE google_accounts SET play_mail_sent=? WHERE id=?", (now, gid))
+    return True
+
+
+def release_play_mail(c, gid: int) -> None:
+    c.execute("UPDATE google_accounts SET play_mail_sent='' WHERE id=?", (gid,))
 
 
 def link_roles(c, a_uid: int, b_uid: int, order: list[int]) -> tuple[int, int] | None:

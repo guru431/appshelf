@@ -5,11 +5,13 @@ import hashlib
 import hmac
 import os
 import re
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
 GB = 1024 ** 3
 TOKEN_RE = re.compile(r"[0-9a-f]{32}")
+PROXY_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,13 @@ class Config:
     sources_ca: Path | None = None  # APPSHELF_SOURCES_CA: PEM доп. корней (НУЦ) — только для загрузчика источников APK
     google_client_id: str = ""      # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET: клиент OAuth входа через Google; секрет —
     google_client_secret: str = field(default="", repr=False)  # только в appshelf.env и запросе к token endpoint
+    # APPSHELF_PROXIES: имя → http://… или socks5h://… (бывает с паролем) — только для запросов к Google Play
+    proxies: dict[str, str] = field(default_factory=dict, repr=False)
+
+    @property
+    def google_dir(self) -> Path:
+        """Мастер-токены Google Play и профили «устройства» — google/<id Google-аккаунта> (spec 2026-10-28 §6.4)."""
+        return self.ipatool_home / "google"
 
     @property
     def google_enabled(self) -> bool:
@@ -108,4 +117,25 @@ def from_env(env=None) -> Config:
         sources_ca=Path(env["APPSHELF_SOURCES_CA"]) if env.get("APPSHELF_SOURCES_CA") else None,
         google_client_id=env.get("GOOGLE_CLIENT_ID", "").strip(),
         google_client_secret=env.get("GOOGLE_CLIENT_SECRET", "").strip(),
+        proxies=_proxies(env.get("APPSHELF_PROXIES", "")),
     )
+
+
+def _proxies(text: str) -> dict[str, str]:
+    """«имя=url имя=url»; url — http://хост:порт или socks5h://[логин:пароль@]хост:порт. В тексте ошибки — только
+    имя: в url бывает пароль."""
+    proxies: dict[str, str] = {}
+    for item in text.split():
+        name, _, url = item.partition("=")
+        if not PROXY_NAME_RE.fullmatch(name) or name in proxies:
+            raise ValueError(f"APPSHELF_PROXIES в appshelf.env — «имя=url» через пробел, имена разные: «{name}»")
+        try:
+            u = urllib.parse.urlsplit(url)
+            ok = u.scheme in ("http", "socks5h") and bool(u.hostname) and u.port is not None
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ValueError(f"APPSHELF_PROXIES в appshelf.env: у «{name}» нужен http://хост:порт или "
+                             "socks5h://хост:порт")
+        proxies[name] = url
+    return proxies

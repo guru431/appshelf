@@ -22,11 +22,11 @@ ExecStartPost=+/bin/sh -c 'until [ -S /run/appshelf/web.sock ]; do sleep 0.1; do
 LimitCORE=0
 # Данные и токен магазина — только владельцу; публичные файлы /d/ jobs.py открывает явно (0644/0755)
 UMask=0077
-# /usr, /boot, /etc — только чтение, кроме HOME ipatool; код, .venv и bin/ — root (deploy/install.sh).
+# /usr, /boot, /etc — только чтение, кроме HOME ipatool и токенов Google Play; код, .venv и bin/ — root (deploy/install.sh).
 # /var открыт: архив (APPSHELF_PUB) бывает где угодно, а sendmail (exim4) пишет очередь в /var/spool.
 # NoNewPrivileges не ставим: с ним setuid-sendmail не отправит ни одного письма.
 ProtectSystem=full
-ReadWritePaths=/etc/appshelf/accounts
+ReadWritePaths=/etc/appshelf/accounts /etc/appshelf/google
 PrivateTmp=yes
 # Загрузка своего APK (до 1 ГБ): multipart-разбор кладёт файл во временный каталог — на диск данных, не в /tmp
 # (tmpfs в Debian 13); каталог создаёт deploy/install.sh

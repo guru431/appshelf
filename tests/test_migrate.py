@@ -1,3 +1,4 @@
+import re
 import sqlite3
 
 import pytest
@@ -196,7 +197,7 @@ def test_v6_upgrades_to_v7(tmp_path):
     c.commit()
     c.close()
     c = store.connect(db)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 7 == store.SCHEMA_VERSION
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert c.execute("SELECT COUNT(*) FROM google_accounts").fetchone()[0] == 0
     assert [a.email for a in people.all_accounts(c)] == ["owner@example"]
     assert c.execute("SELECT count FROM pin_attempts").fetchone()[0] == 3
@@ -204,6 +205,43 @@ def test_v6_upgrades_to_v7(tmp_path):
     fresh = store.connect(tmp_path / "fresh.db")
     assert columns(c) == columns(fresh)
     fresh.close()
+    c.close()
+
+
+def v7_schema() -> str:
+    """Схема версии 7: нынешняя без столбцов версии 8 (Google Play)."""
+    schema = store.SCHEMA
+    for _, column in store.V8_COLUMNS:
+        schema, n = re.subn(r",\s+" + re.escape(column), "", schema)
+        assert n == 1, column
+    return schema
+
+
+def test_v7_upgrades_to_v8(tmp_path):
+    db = tmp_path / "appshelf.db"
+    c = sqlite3.connect(db)
+    c.executescript(v7_schema())
+    c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
+    c.execute("INSERT INTO google_accounts (id, user_id, sub, email, created_at) VALUES (1, 1, 's', 'i@g', 't0')")
+    c.execute("INSERT INTO android_shelves (id, user_id, shelf, created_at) VALUES (1, 1, 'tok', 't0')")
+    c.execute("INSERT INTO android_apps (shelf_id, package, name, source, status, published_at) "
+              "VALUES (1, 'ru.x', 'Икс', 'rustore', 'ok', 't0')")
+    c.execute("INSERT INTO state (key, value) VALUES (?, '4')", (store.READABLE_BY_KEY,))
+    c.execute("PRAGMA user_version = 7")
+    c.commit()
+    c.close()
+    c = store.connect(db)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 8 == store.SCHEMA_VERSION
+    g = people.get_google(c, 1)
+    assert (g.email, g.play, g.play_since, g.play_country, g.proxy) == ("i@g", "none", "", "", "")
+    assert tuple(c.execute("SELECT google_account_id, paid FROM android_apps").fetchone()) == (None, 0)
+    assert store.get_state(c, store.READABLE_BY_KEY) == "4"   # только столбцы с умолчаниями: откат возможен
+    fresh = store.connect(tmp_path / "fresh.db")
+    assert columns(c) == columns(fresh)
+    fresh.close()
+    c.close()
+    c = store.connect(db)                                     # повторное открытие ничего не меняет
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 8 and people.get_google(c, 1).play == "none"
     c.close()
 
 

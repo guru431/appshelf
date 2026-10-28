@@ -32,3 +32,25 @@ def test_sub_is_unique(conn, clock):
     people.create_google(conn, uid, "sub-1", "a@gmail.example", "", clock.iso())
     with pytest.raises(sqlite3.IntegrityError):
         people.create_google(conn, uid, "sub-1", "b@gmail.example", "", clock.iso())
+
+
+def test_play_state_proxy_and_mail_episode(conn, clock):
+    uid = people.create_user(conn, "Иван", people.MEMBER, None, clock.iso())
+    gid = people.create_google(conn, uid, "sub-1", "a@gmail.example", "", clock.iso())
+    g = people.get_google(conn, gid)
+    assert (g.play, g.play_since, g.play_country, g.proxy) == ("none", "", "", "")
+    people.set_proxy(conn, gid, "de")
+    people.set_play(conn, gid, "ok", "t1", country="DE")
+    assert people.claim_play_mail(conn, gid, "t2") and not people.claim_play_mail(conn, gid, "t3")   # одно на эпизод
+    people.set_play(conn, gid, "expired", "t2")
+    people.set_play(conn, gid, "expired", "t3")                      # время начала эпизода не сдвигается
+    g = people.get_google(conn, gid)
+    assert (g.play, g.play_since, g.play_country, g.proxy) == ("expired", "t2", "DE", "de")
+    people.set_play(conn, gid, "ok", "t4", country="")                # подключили заново — эпизод окончен
+    assert people.claim_play_mail(conn, gid, "t5")
+    people.release_play_mail(conn, gid)                               # письмо не ушло — следующая попытка напишет
+    assert people.claim_play_mail(conn, gid, "t6")
+    people.set_play(conn, gid, "none", "t7")                          # отключили: опоздавший отказ токена — не «истекло»
+    people.set_play(conn, gid, "expired", "t8")
+    assert (people.get_google(conn, gid).play, people.get_google(conn, gid).play_country) == ("none", "")
+    assert not people.claim_play_mail(conn, 99, "t9")

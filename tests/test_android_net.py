@@ -1,3 +1,4 @@
+import base64
 import json
 import socket
 
@@ -206,6 +207,80 @@ def test_broken_extra_ca_logs_and_works_without_it(tmp_path, capsys):
         assert http.head("https://bank.example/app.apk").etag == '"1"'
         err = capsys.readouterr().err
         assert "appshelf: APPSHELF_SOURCES_CA" in err and str(extra) in err
+
+
+class Sock:
+    """Подставной сокет до прокси: его ответы — заранее, отправленное — в .sent."""
+
+    def __init__(self, reply: bytes):
+        self.reply, self.sent, self.closed = reply, b"", False
+
+    def sendall(self, data):
+        self.sent += data
+
+    def recv(self, n):
+        chunk, self.reply = self.reply[:n], self.reply[n:]
+        return chunk
+
+    def close(self):
+        self.closed = True
+
+
+def dialer(sock, dialed):
+    def dial(addr, timeout):
+        dialed.append(addr)
+        return sock
+    return dial
+
+
+def test_connect_tunnel_via_http_proxy():
+    sock, dialed = Sock(b"HTTP/1.1 200 Connection established\r\nVia: 1.1 p\r\n\r\n"), []
+    got = net.tunnel("http://u:p%40ss@proxy.example:3128", "android.clients.google.com", 443, 5,
+                     dialer(sock, dialed))
+    assert got is sock and dialed == [("proxy.example", 3128)]
+    head = sock.sent.decode()
+    assert head.startswith("CONNECT android.clients.google.com:443 HTTP/1.1\r\n")
+    assert "Host: android.clients.google.com:443\r\n" in head and head.endswith("\r\n\r\n")
+    assert f"Proxy-Authorization: Basic {base64.b64encode(b'u:p@ss').decode()}\r\n" in head
+    sock = Sock(b"HTTP/1.0 200 OK\r\n\r\n")
+    net.tunnel("http://proxy.example:3128", "a.example", 443, 5, dialer(sock, []))
+    assert "Proxy-Authorization" not in sock.sent.decode()
+
+
+def test_socks5h_sends_hostname_and_auth():
+    sock, dialed = Sock(b"\x05\x02" + b"\x01\x00" + b"\x05\x00\x00\x01" + bytes(4) + b"\x00\x00"), []
+    got = net.tunnel("socks5h://user:pw@proxy.example:1080", "play.googleapis.com", 443, 5, dialer(sock, dialed))
+    assert got is sock and dialed == [("proxy.example", 1080)]
+    assert sock.sent == (b"\x05\x02\x00\x02"                        # без проверки и логин/пароль (RFC 1928)
+                         + b"\x01\x04user\x02pw"                    # RFC 1929
+                         + b"\x05\x01\x00\x03\x13play.googleapis.com\x01\xbb")   # имя узла, не адрес
+    sock = Sock(b"\x05\x00" + b"\x05\x00\x00\x03\x04host\x01\xbb")  # без пароля; адрес ответа — именем
+    net.tunnel("socks5h://proxy.example:1080", "a.example", 443, 5, dialer(sock, []))
+    assert sock.sent == b"\x05\x01\x00" + b"\x05\x01\x00\x03\x09a.example\x01\xbb"
+
+
+def test_proxy_failure_no_direct_fallback():
+    dialed, resolved = [], []
+
+    def refuse(addr, timeout):
+        dialed.append(addr)
+        raise ConnectionRefusedError(111, "Connection refused")
+    http = net.Http(proxy="socks5h://user:s3cret@proxy.example:1080", proxy_name="de", dial=refuse,
+                    resolve=lambda *a: resolved.append(a) or [])
+    with pytest.raises(net.FetchError) as e:
+        http.json("https://android.clients.google.com/x")
+    assert "прокси de недоступен" in str(e.value) and "s3cret" not in str(e.value)
+    assert dialed == [("proxy.example", 1080)] and resolved == []            # прямого соединения не было
+    for url, reply in (("socks5h://user:s3cret@proxy.example:1080", b"\x05\x02\x01\x01"),   # пароль не принят
+                       ("socks5h://proxy.example:1080", b"\x05\x00\x05\x05\x00\x01"),       # отказ в соединении
+                       ("socks5h://proxy.example:1080", b"\x05\xff"),
+                       ("http://user:s3cret@proxy.example:3128", b"HTTP/1.1 407 Proxy Auth\r\n\r\n"),
+                       ("http://proxy.example:3128", b"")):                                 # оборвал
+        sock = Sock(reply)
+        with pytest.raises(net.FetchError) as e:
+            net.Http(proxy=url, proxy_name="de", dial=dialer(sock, [])).json("https://play.googleapis.com/x")
+        assert str(e.value).startswith("прокси de недоступен") and "s3cret" not in str(e.value)
+        assert sock.closed
 
 
 def test_unresolvable_name_is_fetch_error():

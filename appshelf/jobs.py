@@ -289,12 +289,16 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
             for a in fresh:
                 store.delete_shelf(c, a.id)
                 c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
+            gids = []
             if user_id is not None:
+                gids = [g.id for g in people.google_of(c, user_id)]
                 c.execute("DELETE FROM google_accounts WHERE user_id=?", (user_id,))
             uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
             gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
         for shelf in gone:
             _drop_android_dirs(cfg, shelf)
+        for gid in gids:
+            store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
         for a in fresh:
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога
@@ -368,6 +372,7 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
             gone = _drop_user_if_empty(c, g.user_id)
         if gone is not None:
             _drop_android_dirs(cfg, gone)
+        store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
     return last
 
 

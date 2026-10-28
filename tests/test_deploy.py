@@ -97,3 +97,13 @@ def test_vhost_upload_limit_covers_own_and_public_shelf():
                  "/android/public/apps/ru.x/upload"):
         assert re.match(pattern, path), path
     assert not re.match(pattern, "/android/add/link")
+
+
+def test_units_allow_google_dir():
+    # мастер-токены Google Play — /etc/appshelf/google/<id>/ (spec 2026-10-28 §6.4); ProtectSystem=full закрыл бы /etc
+    for unit in ("appshelf-web.service", "appshelf-nightly.service"):
+        line = next(s for s in (DEPLOY / unit).read_text(encoding="utf-8").splitlines() if s.startswith("ReadWritePaths="))
+        assert "/etc/appshelf/google" in line.split("=", 1)[1].split(), unit
+    install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    made = install.index("install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /etc/appshelf/google")
+    assert made < install.index("systemctl restart appshelf-web")

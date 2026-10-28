@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 # Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
 # schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Правило для переходов с версии 4:
 # лишь добавляющий столбцы с умолчаниями или таблицы, которых прежний код не читает, пишет туда прежний
@@ -122,7 +122,8 @@ CREATE TABLE IF NOT EXISTS android_shelves (id INTEGER PRIMARY KEY AUTOINCREMENT
 CREATE TABLE IF NOT EXISTS android_apps (shelf_id INTEGER NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL,
     source TEXT NOT NULL, source_ref TEXT NOT NULL DEFAULT '', signer TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
     last_error TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL DEFAULT '', check_result TEXT NOT NULL DEFAULT '',
-    source_etag TEXT NOT NULL DEFAULT '', published_at TEXT NOT NULL, PRIMARY KEY (shelf_id, package));
+    source_etag TEXT NOT NULL DEFAULT '', published_at TEXT NOT NULL, google_account_id INTEGER,
+    paid INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (shelf_id, package));
 CREATE TABLE IF NOT EXISTS android_versions (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, package TEXT NOT NULL,
     version_name TEXT NOT NULL, version_code INTEGER NOT NULL, min_sdk INTEGER NOT NULL, target_sdk INTEGER NOT NULL,
     abis TEXT NOT NULL DEFAULT '', signer TEXT NOT NULL, source TEXT NOT NULL, size INTEGER NOT NULL,
@@ -135,7 +136,8 @@ CREATE TABLE IF NOT EXISTS pin_attempts (key TEXT PRIMARY KEY, count INTEGER NOT
     blocked_until TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS google_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
     sub TEXT NOT NULL UNIQUE, email TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
-    last_login_at TEXT NOT NULL DEFAULT '');
+    last_login_at TEXT NOT NULL DEFAULT '', play TEXT NOT NULL DEFAULT 'none', play_since TEXT NOT NULL DEFAULT '',
+    play_country TEXT NOT NULL DEFAULT '', proxy TEXT NOT NULL DEFAULT '', play_mail_sent TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 """
 # появились в версии 4: время успешной загрузки истории Apple ID; происхождение строки истории (daap — DAAP,
@@ -149,6 +151,17 @@ V4_COLUMNS = (
     ("versions", "sha256 TEXT NOT NULL DEFAULT ''"),
     ("versions", "pinned INTEGER NOT NULL DEFAULT 0"),
     ("jobs", "progress TEXT NOT NULL DEFAULT ''"),
+)
+# появились в версии 8 (Google Play): подключение Google-аккаунта к Play, его прокси и письмо об истечении; каким
+# аккаунтом качать приложение из Play и купленное ли оно
+V8_COLUMNS = (
+    ("google_accounts", "play TEXT NOT NULL DEFAULT 'none'"),
+    ("google_accounts", "play_since TEXT NOT NULL DEFAULT ''"),
+    ("google_accounts", "play_country TEXT NOT NULL DEFAULT ''"),
+    ("google_accounts", "proxy TEXT NOT NULL DEFAULT ''"),
+    ("google_accounts", "play_mail_sent TEXT NOT NULL DEFAULT ''"),
+    ("android_apps", "google_account_id INTEGER"),
+    ("android_apps", "paid INTEGER NOT NULL DEFAULT 0"),
 )
 SHELF_TABLES = ("purchases", "apps", "versions", "jobs", "removed_checks")
 LEGACY_STATE = ("session", "session_since", "account_name", "storefront", "expired_mail_sent")
@@ -244,9 +257,13 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version in (4, 5, 6):  # таблицы Android (5), счётчики PIN (6), Google-аккаунты (7): код версии 4 их не
-            # читает — откат возможен; участник без Apple ID для него просто не вошедший
+        if version in (4, 5, 6, 7):  # таблицы Android (5), счётчики PIN (6), Google-аккаунты (7): код версии 4 их не
+            # читает — откат возможен; участник без Apple ID для него просто не вошедший. Столбцы Play (8) — с
+            # умолчаниями: таблицам, что были до перехода, — ALTER
             _create(c)
+            for table, column in V8_COLUMNS:
+                if column.split()[0] not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             if not get_state(c, READABLE_BY_KEY):
                 set_state(c, READABLE_BY_KEY, "4")
         elif version in (2, 3):

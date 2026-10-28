@@ -74,3 +74,16 @@ def test_sources_ca_is_optional():
     assert from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}).sources_ca is None
     cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE, "APPSHELF_SOURCES_CA": "/etc/appshelf/ca.pem"})
     assert cfg.sources_ca == Path("/etc/appshelf/ca.pem")
+
+
+def test_proxies_parsed_from_env():
+    env = {"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}
+    assert from_env(env).proxies == {} and from_env(env).google_dir == Path("/etc/appshelf/google")
+    cfg = from_env({**env, "APPSHELF_PROXIES": " de=socks5h://u:s3cret@de.example:1080  us=http://us.example:3128\n"})
+    assert cfg.proxies == {"de": "socks5h://u:s3cret@de.example:1080", "us": "http://us.example:3128"}
+    assert "s3cret" not in repr(cfg)
+    for bad in ("de", "=http://x.example:1", "de=ftp://u:s3cret@x.example:1", "de=http://u:s3cret@", "de=http://x",
+                "de=http://x.example:1 de=http://y.example:2", "d e=http://x.example:1"):
+        with pytest.raises(ValueError) as e:
+            from_env({**env, "APPSHELF_PROXIES": bad})
+        assert "APPSHELF_PROXIES" in str(e.value) and "s3cret" not in str(e.value)

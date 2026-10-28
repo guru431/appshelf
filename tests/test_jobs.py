@@ -453,6 +453,21 @@ def test_deleting_google_of_person_with_apple_keeps_person(ctx, cfg, conn, clock
     assert people.get_user(conn, petr.user_id) is not None and people.google_of(conn, petr.user_id) == []
 
 
+def test_remove_google_drops_token_dir(ctx, cfg, conn, clock):
+    uid, (g1, g2) = google_only(conn, clock, "sub-1", "sub-2")
+    petr = member(conn, clock)
+    g3 = people.create_google(conn, petr.user_id, "sub-p", "petr@gmail.example", "", clock.iso())
+    for gid in (g1, g2, g3):
+        (cfg.google_dir / str(gid)).mkdir(parents=True)
+        (cfg.google_dir / str(gid) / "aas").write_text("x")          # мастер-токен Play (spec 2026-10-28 §11)
+    jobs.remove_google(cfg, conn, g1)
+    assert not (cfg.google_dir / str(g1)).exists() and (cfg.google_dir / str(g2)).is_dir()
+    jobs.remove_user(cfg, conn, petr.user_id)
+    assert not (cfg.google_dir / str(g3)).exists() and (cfg.google_dir / str(g2)).is_dir()
+    jobs.remove_user(cfg, conn, uid)
+    assert list(cfg.google_dir.iterdir()) == []
+
+
 def test_remove_google_refused_while_downloading(ctx, cfg, conn, clock, monkeypatch):
     uid, (gid,) = google_only(conn, clock, "sub-1")
     shelf = android_shelf_of(cfg, conn, clock, uid)
