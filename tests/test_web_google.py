@@ -127,6 +127,17 @@ def test_add_google_from_panel_creates_separate_person(gw, conn, cfg, clock):
     assert "добавлен из панели участника «Иван Петров» (owner@example)" in body
 
 
+def test_add_google_by_cross_site_link_is_plain_login(gw, conn, cfg, clock):
+    sign_in(gw.client, cfg, conn, clock, 1)
+    r = gw.client.get("/google/start", params={"next": "/apple", "add": 1}, headers={"Sec-Fetch-Site": "cross-site"},
+                      follow_redirects=False)
+    q = parse_qs(urlsplit(r.headers["location"]).query)
+    gw.http.token = id_token(nonce=q["nonce"][0], sub="g-1", aud=CID)
+    r = gw.client.get("/google/callback", params={"code": "c", "state": q["state"][0]}, follow_redirects=False)
+    assert r.status_code == 403 and "нужна ссылка-приглашение" in r.text      # ссылка чужого сайта — не «Добавить»
+    assert people.google_by_sub(conn, "g-1") is None
+
+
 def test_adder_signed_out_before_callback_refused(gw, conn, cfg, clock):
     sign_in(gw.client, cfg, conn, clock, 1)
     q = start(gw.client, "/apple", 1)
