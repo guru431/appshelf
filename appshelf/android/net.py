@@ -20,6 +20,7 @@ MAX_JSON = 5 << 20
 MAX_REDIRECTS = 5
 CHUNK = 1 << 20
 REDIRECTS = (301, 302, 303, 307, 308)
+BLOCKED = "адрес недоступен для сервера: ссылка ведёт во внутреннюю сеть"
 # ВТБ на User-Agent curl отвечает 403, на браузерный — файлом (живая проверка 2026-10-28)
 USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
 
@@ -57,6 +58,12 @@ def check_url(url: str) -> urllib.parse.SplitResult:
         raise FetchError("нужна ссылка https://…")
     if "@" in u.netloc:
         raise FetchError("ссылка с логином и паролем не годится")
+    try:
+        literal = ipaddress.ip_address(u.hostname.split("%")[0])
+    except ValueError:
+        return u
+    if not _public(str(literal)):  # адрес прямо в ссылке — отказ без резолва (имена проверяет Http перед запросом)
+        raise BlockedAddress(BLOCKED)
     return u
 
 
@@ -158,7 +165,7 @@ class Http:
         if not addrs:
             raise FetchError(f"адрес {host} не найден")
         if not all(_public(a.split("%")[0]) for a in addrs):
-            raise BlockedAddress("адрес недоступен для сервера: ссылка ведёт во внутреннюю сеть")
+            raise BlockedAddress(BLOCKED)
         return addrs[0]
 
     def _request(self, method: str, url: str, headers: dict, body: bytes | None = None):

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block main %}
+{% if error %}<div class="banner">{{ error }}</div>{% endif %}
+<h2>RuStore</h2>
+<form method="get" action="/android/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название приложения" aria-label="Поиск в RuStore"><button>Найти</button></form>
+{% if search_error %}<p class="err">{{ search_error }}</p>
+{% elif q and not found %}<p class="meta">Ничего не нашлось.</p>{% endif %}
+{% if found %}
+<div class="card list">
+  {%- for s in found %}
+  <div class="row">
+    <div class="body"><b>{{ s.name }}</b><div class="meta">{{ s.package }}</div></div>
+    <div class="act">
+      {%- if s.package in on_shelf %}<span class="tag">на полке</span>
+      {%- elif s.price > 0 %}<span class="tag">платное — недоступно</span>
+      {%- else %}<form method="post" action="/android/add/rustore"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><button class="sm tint">Добавить</button></form>{% endif %}
+    </div>
+  </div>
+  {%- endfor %}
+</div>
+{% endif %}
+<p class="hint">RuStore — универсальный APK, подпись сверяется с той, что сообщает RuStore. Платные без входа в RuStore
+  не скачать.</p>
+<h2>По ссылке</h2>
+<form method="post" action="/android/add/link" class="card">
+  <label>Ссылка на APK<input name="url" type="url" value="{{ link_url }}" placeholder="https://…/app.apk" required></label>
+  <label>Название (необязательно)<input name="name"></label>
+  <button>Добавить</button></form>
+<p class="hint">Ссылка — на сам файл .apk на сайте банка или разработчика, только https. Ночью полка проверяет, не сменился
+  ли файл. Адреса локальной сети не принимаются.</p>
+<h2>Свой файл</h2>
+<form method="post" action="/android/add/upload" enctype="multipart/form-data" class="card">
+  <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label>
+  <label>Название (необязательно)<input name="name"></label>
+  <button>Загрузить</button></form>
+<p class="hint">Один целый APK до 1 ГБ. Наборы (split APK, XAPK, APKS) из браузера не ставятся. Ночью свой файл не
+  обновляется — новую версию загрузите на карточку («⋯»).</p>
+{% endblock %}

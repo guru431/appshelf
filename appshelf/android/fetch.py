@@ -171,9 +171,7 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
     ставить можно, повторит ночь или «Проверить обновление»."""
     if db.get_app(c, shelf_id, package) is None:
         return
-    has_current = c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='current'",
-                            (shelf_id, package)).fetchone() is not None
-    if has_current:
+    if db.has_current(c, shelf_id, package):
         db.set_status(c, shelf_id, package, "ok", describe(e))
         db.set_checked(c, shelf_id, package, now, "error")
     else:

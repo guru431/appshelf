@@ -126,6 +126,11 @@ def list_apps(c, shelf_id: int) -> list[AppView]:
     return sorted(out, key=lambda v: (v.name.casefold(), v.package))
 
 
+def has_current(c, shelf_id: int, package: str) -> bool:
+    return c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='current'",
+                     (shelf_id, package)).fetchone() is not None
+
+
 def apps_to_check(c) -> list[sqlite3.Row]:
     """Ночная проверка: все полки; свой файл (upload) не проверяется."""
     return c.execute("SELECT * FROM android_apps WHERE source IN ('rustore', 'link') AND status IN ('ok', 'error') "
@@ -295,6 +300,12 @@ def open_jobs(c, shelf_id: int) -> list[sqlite3.Row]:
 def dismiss_job(c, shelf_id: int, job_id: int) -> bool:
     return c.execute("UPDATE android_jobs SET status='dismissed' WHERE id=? AND shelf_id=? AND status='error'",
                      (job_id, shelf_id)).rowcount > 0
+
+
+def active_for(c, shelf_id: int, package: str) -> bool:
+    """Есть ли у пакета задание в очереди или в работе: двойной клик — одно задание."""
+    return c.execute("SELECT 1 FROM android_jobs WHERE shelf_id=? AND package=? AND status IN ('queued', 'running') "
+                     "LIMIT 1", (shelf_id, package)).fetchone() is not None
 
 
 def has_active(c, shelf_id: int) -> bool:

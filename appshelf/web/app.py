@@ -15,9 +15,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from starlette.concurrency import run_in_threadpool
 
 from .. import ipatool, jobs, notify, removed, store, webauth
+from ..android import net
+from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
-from . import accounts, admin, pwa, signin
+from . import accounts, admin, android, pwa, signin
 from .common import THEMES, WebCtx, back, back_to
 from .login import Limiter, LoginFlow
 
@@ -61,9 +63,11 @@ def parse_app_id(ref: str) -> int | None:
 
 
 def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=time.monotonic, send=notify.send_mail,
-               disk_free=jobs.free_bytes, start_worker: bool = True) -> FastAPI:
-    """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID."""
-    env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free)
+               disk_free=jobs.free_bytes, start_worker: bool = True, sources=None) -> FastAPI:
+    """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID;
+    sources — источники APK (по умолчанию RuStore и ссылки, с доп. корнями APPSHELF_SOURCES_CA)."""
+    env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
+                   sources=sources or Sources(net.Http(cfg.sources_ca)))
     flow = LoginFlow(clock=clock)
     w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
                webauth.load_key(cfg.cookie_key))
@@ -151,8 +155,15 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                       busy=busy, statuses=statuses, fresh=fresh, public_url=lambda d, f: cfg.shelf_url(a, d, f))
 
     @app.get("/", response_class=HTMLResponse)
-    def catalog(request: Request):
-        return catalog_page(request)
+    def catalog(request: Request, explicit: str = Query("", alias="os")):
+        """Раздел по умолчанию (spec 2026-10-28 §5): телефон Android — Android-раздел; ?os=apple — Apple и на нём."""
+        if android.default_section(request.headers.get("user-agent", ""), request.cookies.get(android.OS_COOKIE),
+                                   explicit or None) == "android":
+            return back("/android")
+        resp = catalog_page(request)
+        if explicit == "apple":
+            android.set_section(w, resp, "apple")
+        return resp
 
     @app.get("/theme")
     def theme(request: Request, set: str = "", back_url: str = Query("", alias="back")):
@@ -335,6 +346,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     signin.register_routes(app, w)
     accounts.register_routes(app, w)
     admin.register_routes(app, w)
+    android.register_routes(app, w)
     return app
 
 

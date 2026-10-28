@@ -101,7 +101,11 @@ def test_rejects_http_userinfo_and_ip_literal_private():
             http.head(url)
     with pytest.raises(net.FetchError):
         net.check_url("http://a.example/x.apk")
+    for url in ("https://10.0.0.1/x.apk", "https://[fe80::1]/x.apk", "https://127.0.0.1:8443/x"):
+        with pytest.raises(net.BlockedAddress):                 # адрес в ссылке — без резолва, сразу
+            net.check_url(url)
     assert net.check_url("https://a.example/x.apk?v=1").hostname == "a.example"
+    assert net.check_url("https://8.8.8.8/x.apk").hostname == "8.8.8.8"
 
 
 def test_redirect_to_http_refused():
