@@ -99,8 +99,8 @@ def test_empty_database_gets_schema_without_owner(tmp_path):
 
 
 def v3_schema() -> str:
-    """Схема версии 3: нынешняя без столбцов версии 4."""
-    schema = store.SCHEMA
+    """Схема версии 3: нынешняя без таблиц Android (версия 5) и без столбцов версии 4."""
+    schema = ";".join(s for s in store.SCHEMA.split(";") if "android_" not in s)
     for _, column in store.V4_COLUMNS:
         assert schema.count(",\n    " + column) == 1, column
         schema = schema.replace(",\n    " + column, "")

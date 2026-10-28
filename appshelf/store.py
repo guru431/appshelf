@@ -15,11 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 # Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
 # schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Правило для переходов с версии 4:
-# лишь добавляющий столбцы с умолчаниями пишет туда прежний SCHEMA_VERSION (или значение, что уже там) — откат
-# остаётся рабочим. Переходы до версии 4 ключ не пишут: код версий 1–3 базу новее себя не проверяет.
+# лишь добавляющий столбцы с умолчаниями или таблицы, которых прежний код не читает, пишет туда прежний
+# SCHEMA_VERSION (или значение, что уже там) — откат остаётся рабочим. Переходы до версии 4 ключ не пишут: код
+# версий 1–3 базу новее себя не проверяет.
 READABLE_BY_KEY = "schema_readable_by"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -116,6 +117,20 @@ CREATE TABLE IF NOT EXISTS removed_checks (
     checked_at TEXT NOT NULL,
     PRIMARY KEY (account_id, app_id)
 );
+CREATE TABLE IF NOT EXISTS android_shelves (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER UNIQUE,
+    shelf TEXT NOT NULL, shelf_next TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS android_apps (shelf_id INTEGER NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL,
+    source TEXT NOT NULL, source_ref TEXT NOT NULL DEFAULT '', signer TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+    last_error TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL DEFAULT '', check_result TEXT NOT NULL DEFAULT '',
+    source_etag TEXT NOT NULL DEFAULT '', published_at TEXT NOT NULL, PRIMARY KEY (shelf_id, package));
+CREATE TABLE IF NOT EXISTS android_versions (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, package TEXT NOT NULL,
+    version_name TEXT NOT NULL, version_code INTEGER NOT NULL, min_sdk INTEGER NOT NULL, target_sdk INTEGER NOT NULL,
+    abis TEXT NOT NULL DEFAULT '', signer TEXT NOT NULL, source TEXT NOT NULL, size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL, dir TEXT NOT NULL, downloaded_at TEXT NOT NULL, role TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS android_jobs (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, kind TEXT NOT NULL,
+    package TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 """
 # появились в версии 4: время успешной загрузки истории Apple ID; происхождение строки истории (daap — DAAP,
@@ -224,13 +239,18 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version in (2, 3):
+        if version == 4:  # таблицы Android (версия 5): код версии 4 их не читает — откат на него возможен
+            _create(c)
+            if not get_state(c, READABLE_BY_KEY):
+                set_state(c, READABLE_BY_KEY, "4")
+        elif version in (2, 3):
             if version == 2:  # токен каталога полки — в базе; каталоги переносит jobs.move_shelves
                 c.execute("ALTER TABLE accounts ADD COLUMN shelf TEXT NOT NULL DEFAULT ''")
                 c.execute("ALTER TABLE accounts ADD COLUMN shelf_next TEXT NOT NULL DEFAULT ''")
             for table, column in V4_COLUMNS:
                 c.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
             _fill_v4(c)
+            _create(c)
         elif "purchases" in tables:
             _from_v1(c, tables, owner_email)
             _fill_v4(c)
