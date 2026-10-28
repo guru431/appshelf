@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from .. import apk, jobs, people, store
+from .. import apk, jobs, notify, people, store
 from ..android import db, fetch, net, pin
 from ..config import GB
 from ..nightly import SEP
@@ -71,6 +71,20 @@ def _job_view(j) -> dict:
     return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title}
 
 
+def _fresh(apps, now: str) -> set[str]:
+    """Метка «новая версия»: текущая скачана за NEW_VERSION_DAYS и есть предыдущая."""
+    since = datetime.fromisoformat(now) - timedelta(days=NEW_VERSION_DAYS)
+    return {a.package for a in apps
+            if a.previous is not None and datetime.fromisoformat(a.current["downloaded_at"]) >= since}
+
+
+def _lock_mail(until: str, base: str) -> str:
+    return (f"За сутки на публичной Android-полке введено {pin.ALL_LIMIT} неверных PIN с разных адресов: ввод PIN "
+            f"закрыт для новых гостей до {until[:16].replace('T', ' ')} UTC. Гости, уже вводившие PIN, полку видят.\n\n"
+            f"Открыть сразу — «Открыть ввод PIN» на вкладке Android → «Публичная» ({base}/android/public) или смена "
+            f"PIN там же; если PIN мог утечь — смените его.")
+
+
 def register_routes(app, w) -> None:
     _register_scope(app, w, MINE)
     public_page = _register_scope(app, w, PUBLIC)
@@ -101,6 +115,51 @@ def register_routes(app, w) -> None:
         with w.conn() as c:
             pin.reopen(c)
         return back(PUBLIC.prefix)
+
+    def guest_page(request: Request, status_code: int = 200, error: str = ""):
+        """Страница гостя (spec §8): вне входа в панель — middleware её пропускает, request.state пуст. Список видят
+        гость с действующей cookie и вошедший участник; остальным — форма PIN, пока ввод не закрыт всем."""
+        with w.conn() as c:
+            shelf = db.public_shelf(c)
+            if shelf is None or not pin.is_set(c):
+                return w.page(request, "guest.html", "guest", status_code, configured=False)
+            guest = pin.guest_ok(w.key, request.cookies.get(pin.COOKIE, ""), pin.epoch(c), w.now())
+            closed = pin.closed_until(c, w.now())
+            apps = [a for a in db.list_apps(c, shelf.id) if a.current is not None]
+        allowed = guest or w.person(request) is not None
+        return w.page(request, "guest.html", "guest", status_code, configured=True, allowed=allowed,
+                      closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
+                      sources=SOURCES, android_version=apk.android_version, apk_name=fetch.apk_name,
+                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f))
+
+    @app.get("/p", response_class=HTMLResponse)
+    def guest(request: Request):
+        return guest_page(request)
+
+    @app.post("/p", response_class=HTMLResponse)
+    def guest_pin(request: Request, value: str = Form("", alias="pin")):
+        key = pin.client_key(request.headers.get("x-forwarded-for"), request.client.host if request.client else None)
+        with w.conn() as c:
+            if db.public_shelf(c) is None or not pin.is_set(c):
+                return guest_page(request)
+            epoch = pin.epoch(c)  # до проверки: PIN сменили посередине — cookie прежней эпохи, гость введёт заново
+            a = pin.try_pin(c, key, value, w.now())
+            if a.just_closed:
+                notify.once(c, pin.MAIL_KEY, "appshelf: ввод PIN публичной полки закрыт",
+                            _lock_mail(a.until, cfg.public_base), w.env.send, cfg.mail_to, w.now())
+        if a.result == "ok":
+            resp = back("/p")
+            w.set_cookie(resp, pin.COOKIE, pin.guest_cookie(w.key, epoch, w.now()), pin.GUEST_DAYS * 86400)
+            return resp
+        if a.result == "wrong":
+            return guest_page(request, 401, f"Неверный PIN, осталось попыток: {a.left}")
+        if a.result == "format":
+            return guest_page(request, 400, "PIN — 6 цифр")
+        if a.result == "ip_blocked":
+            left = datetime.fromisoformat(a.until) - datetime.fromisoformat(w.now())
+            minutes = max(1, -(-int(left.total_seconds()) // 60))
+            return guest_page(request, 429, f"Слишком много попыток с этого адреса, попробуйте через {minutes} мин")
+        return guest_page(request, 429)  # closed: страница сама скажет «ввод временно закрыт»
 
     @app.get("/api/android/status")
     def api_status(request: Request, public: int = 0):
@@ -156,11 +215,8 @@ def _register_scope(app, w, scope: Scope):
         else:
             if free < jobs.BANNER_FREE:
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
-        since = datetime.fromisoformat(w.now()) - timedelta(days=NEW_VERSION_DAYS)
-        fresh = {a.package for a in apps
-                 if a.previous is not None and datetime.fromisoformat(a.current["downloaded_at"]) >= since}
         resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners,
-                      busy=busy, nightly=nightly, fresh=fresh, statuses=json.dumps({a.package: a.status for a in apps}),
+                      busy=busy, nightly=nightly, fresh=_fresh(apps, w.now()), statuses=json.dumps({a.package: a.status for a in apps}),
                       status_url="/api/android/status" + ("?public=1" if scope.public else ""), sources=SOURCES,
                       android_version=apk.android_version, apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f), prefix=p, public=scope.public, edit=edit,

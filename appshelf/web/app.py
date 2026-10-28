@@ -23,7 +23,7 @@ from . import accounts, admin, android, pwa, signin
 from .common import THEMES, WebCtx, back, back_to
 from .login import Limiter, LoginFlow
 
-PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel")
+PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p")  # /p — гость публичной полки, по PIN
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
 NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"

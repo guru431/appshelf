@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% from "android_cards.html" import card, install_hints with context %}
+{% block main %}
+{% if not configured %}
+<div class="auth">
+  <div class="brand"><img src="/pwa/icon-180.png" alt=""><h1>appshelf</h1></div>
+  <div class="card"><p>Публичная полка не настроена.</p></div>
+</div>
+{% elif not allowed %}
+<div class="auth">
+  <div class="brand"><img src="/pwa/icon-180.png" alt=""><h1>appshelf</h1></div>
+  <div class="card">
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+  {% if closed %}<p>Ввод PIN временно закрыт, попробуйте позже.</p>
+  {% else %}
+  <form method="post" action="/p">
+    <label>PIN-код полки<input class="code" name="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required autofocus></label>
+    <button>Открыть</button>
+  </form>
+  {% endif %}
+  </div>
+  <p class="hint">PIN сообщает владелец полки. После ввода полка открывается в этом браузере на 90 дней.</p>
+</div>
+{% else %}
+{% if not apps %}<p class="empty">На полке пока пусто.</p>{% endif %}
+{% for a in apps %}{{ card(a, url, False, '') }}{% endfor %}
+<div class="hint">{{ install_hints() }}</div>
+{% endif %}
+{% endblock %}

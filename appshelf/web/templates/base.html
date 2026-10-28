@@ -200,7 +200,7 @@ label input { margin-top: 6px; font-weight: 400; }
 {% macro tab(href, key, label, icon) -%}
   <a href="{{ href }}" class="{{ 'on' if nav == key }}"><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
 {%- endmacro %}
-{% if nav != 'login' %}
+{% if nav not in ('login', 'guest') %}
 {% set android = nav.startswith('a_') %}
 <header>
   <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Apple ID', 'admin': 'Участники',
@@ -251,7 +251,7 @@ label input { margin-top: 6px; font-weight: 400; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
-{% if nav != 'login' %}
+{% if nav not in ('login', 'guest') %}
 <script>
 addEventListener('pointerdown', function (e) {   // меню закрывается касанием мимо него
   Array.prototype.forEach.call(document.querySelectorAll('details.pop[open]'), function (d) {
