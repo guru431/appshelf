@@ -6,6 +6,7 @@ from starlette.testclient import TestClient
 from appshelf import jobs, removed, store
 from appshelf.config import GB, Config
 from appshelf.web.app import create_app
+from android_fakes import FakeSources
 from helpers import HOST, TOKEN, Clock, FakeTool, owner, sign_in
 
 
@@ -46,11 +47,13 @@ def acct(conn, clock):
 @pytest.fixture
 def ctx(cfg, clock):
     """Env с подменами: ipatool на каждый Apple ID (tools[id]; tool — у Apple ID №1), письма (только темы),
-    свободное место."""
-    tools, sent, free = {}, [], {"bytes": 50 * GB}
+    свободное место, источники APK (sources — FakeSources)."""
+    tools, sent, free, sources = {}, [], {"bytes": 50 * GB}, FakeSources()
     env = jobs.Env(cfg, lambda acct: tools.setdefault(acct.id, FakeTool()), now=clock.iso,
-                   send=lambda subject, body, to: sent.append(subject), disk_free=lambda path: free["bytes"])
-    return SimpleNamespace(env=env, tools=tools, sent=sent, free=free, tool=tools.setdefault(1, FakeTool()))
+                   send=lambda subject, body, to: sent.append(subject), disk_free=lambda path: free["bytes"],
+                   sources=sources)
+    return SimpleNamespace(env=env, tools=tools, sent=sent, free=free, tool=tools.setdefault(1, FakeTool()),
+                           sources=sources)
 
 
 @pytest.fixture

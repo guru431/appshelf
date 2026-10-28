@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import ipa, notify, people, removed, store
+from .android import db as android_db, fetch as android_fetch
 from .config import GB, Config
 from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, try_lock
 
@@ -103,6 +104,7 @@ class Env:
     now: Callable[[], str] = now_iso
     send: Callable[[str, str, str], None] = notify.send_mail
     disk_free: Callable[[Path], int] = free_bytes
+    sources: object = None                          # источники APK: android.sources.Sources или подмена
 
 
 def describe(e: Exception) -> str:
@@ -378,7 +380,8 @@ def merge_progress(prev: dict | None, cur: dict) -> dict:
 
 
 class Worker:
-    """Обработчик заданий publish, refresh_history, check_removed всех Apple ID — один поток в appshelf-web."""
+    """Обработчик заданий publish, refresh_history, check_removed всех Apple ID и заданий Android-полок (когда
+    Apple-заданий нет) — один поток в appshelf-web."""
 
     def __init__(self, env: Env, connect: Callable, purge: Callable[[], None] = lambda: None,
                  interval: float = 2.0, sleep: Callable[[float], None] = time.sleep):
@@ -406,10 +409,11 @@ class Worker:
         try:
             store.requeue_running(c)
             known = {str(a.id) for a in people.all_accounts(c)}
+            cfg = self.env.cfg
+            shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
+            android_fetch.recover(c, self.env.now())  # после очистки tmp/web: загрузки без файла — ошибка
         finally:
             c.close()
-        cfg = self.env.cfg
-        shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
         for home in cfg.accounts_dir.glob("*"):
             if home.name.startswith(".new-") or (home.name.isdigit() and home.name not in known):
                 shutil.rmtree(home, ignore_errors=True)
@@ -428,7 +432,11 @@ class Worker:
                         store.fail_stale_updates(c, self.env.now())
             job = store.take_job(c)
             if job is None:
-                return False
+                job = android_db.take_job(c)
+                if job is None:
+                    return False
+                android_fetch.run_job(self.env, c, job)
+                return True
             acct = people.get_account(c, job["account_id"])
             if acct is None:  # Apple ID удалили между постановкой задания и его взятием
                 store.finish_job(c, job["id"], "cancelled", self.env.now(), ACCOUNT_GONE)

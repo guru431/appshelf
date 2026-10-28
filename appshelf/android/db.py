@@ -104,6 +104,11 @@ def set_checked(c, shelf_id: int, package: str, now: str, result: str, etag: str
               "WHERE shelf_id=? AND package=?", (now, result, etag, shelf_id, package))
 
 
+def set_etag(c, shelf_id: int, package: str, etag: str) -> None:
+    """Признаки файла по ссылке после первого скачивания: первая ночь не качает его заново."""
+    c.execute("UPDATE android_apps SET source_etag=? WHERE shelf_id=? AND package=?", (etag, shelf_id, package))
+
+
 def set_source(c, shelf_id: int, package: str, source: str, source_ref: str) -> None:
     """Сменить источник карточки: версии остаются, признаки прежней ссылки — нет."""
     c.execute("UPDATE android_apps SET source=?, source_ref=?, source_etag='' WHERE shelf_id=? AND package=?",
