@@ -160,6 +160,30 @@ def test_v3_gets_v4_columns_and_fills_them(tmp_path):
     c.close()
 
 
+def test_v5_upgrades_to_v6_with_pin_attempts(tmp_path):
+    db = tmp_path / "appshelf.db"
+    c = sqlite3.connect(db)
+    c.executescript(";".join(s for s in store.SCHEMA.split(";") if "pin_attempts" not in s))
+    c.execute("INSERT INTO android_shelves (id, user_id, shelf, created_at) VALUES (1, 1, 'tok', 't0')")
+    c.execute("INSERT INTO android_apps (shelf_id, package, name, source, status, published_at) "
+              "VALUES (1, 'ru.x', 'Икс', 'rustore', 'ok', 't0')")
+    c.execute("INSERT INTO state (key, value) VALUES (?, '4')", (store.READABLE_BY_KEY,))
+    c.execute("PRAGMA user_version = 5")
+    c.commit()
+    c.close()
+    c = store.connect(db)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert c.execute("SELECT COUNT(*) FROM pin_attempts").fetchone()[0] == 0
+    assert [(r["shelf"], r["package"]) for r in c.execute(
+        "SELECT shelf, package FROM android_shelves JOIN android_apps ON shelf_id = android_shelves.id")] == \
+        [("tok", "ru.x")]
+    assert store.get_state(c, store.READABLE_BY_KEY) == "4"   # pin_attempts код версий 4–5 не читает: откат возможен
+    fresh = store.connect(tmp_path / "fresh.db")
+    assert columns(c) == columns(fresh)
+    fresh.close()
+    c.close()
+
+
 def test_oldest_v1_without_version_columns(tmp_path, clock):
     db = tmp_path / "old.db"
     old = sqlite3.connect(db)

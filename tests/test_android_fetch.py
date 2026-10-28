@@ -324,3 +324,52 @@ def test_upload_of_same_version_is_error_and_card_not_stuck(ctx, cfg, conn, cloc
     assert job["status"] == "error" and "уже на полке" in job["error"]
     app = db.get_app(conn, shelf.id, PKG)
     assert app["status"] == "ok" and "уже на полке" in app["last_error"] and versions(conn, shelf) == {"current": 1}
+
+
+def test_rotate_shelf_moves_dir_and_keeps_versions(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    before = [dict(r) for r in conn.execute("SELECT * FROM android_versions")]
+    new = fetch.rotate_shelf(cfg, conn, shelf.id)
+    assert new.shelf != shelf.shelf and new.shelf_next == "" and db.get_shelf(conn, shelf.id) == new
+    assert not (cfg.archive / shelf.shelf).exists() and on_shelf(cfg, new) == [f"{PKG}-1"]
+    assert [dict(r) for r in conn.execute("SELECT * FROM android_versions")] == before
+    assert fetch.file_url(cfg, new, f"{PKG}-1", "icon.png") == f"https://apps.example/d/{new.shelf}/{PKG}-1/icon.png"
+    empty = db.ensure_public_shelf(conn, clock.iso())               # полка без каталога — меняется только токен
+    assert fetch.rotate_shelf(cfg, conn, empty.id).shelf != empty.shelf
+
+
+def test_rotate_shelf_refuses_while_downloading(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.enqueue(conn, shelf.id, "check", clock.iso(), package=PKG)
+    db.take_job(conn)                                               # обработчик взял задание полки
+    with pytest.raises(jobs.AccountBusy):
+        fetch.rotate_shelf(cfg, conn, shelf.id)
+    assert db.get_shelf(conn, shelf.id) == shelf and on_shelf(cfg, shelf) == [f"{PKG}-1"]
+    conn.execute("UPDATE android_jobs SET status='done'")
+    cfg.archive.rename(cfg.archive.with_name("gone"))                # шара не смонтирована
+    with pytest.raises(jobs.ArchiveUnavailable):
+        fetch.rotate_shelf(cfg, conn, shelf.id)
+    assert db.get_shelf(conn, shelf.id) == shelf
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_interrupted_rotation_finished_on_start(ctx, cfg, conn, clock, tmp_path, renamed):
+    """Сбой после записи shelf_next — до переименования каталога или после: move_shelves доделывает."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    if renamed:
+        (cfg.archive / shelf.shelf).rename(cfg.archive / ("e" * 32))
+    jobs.move_shelves(cfg, conn)
+    new = db.get_shelf(conn, shelf.id)
+    assert (new.shelf, new.shelf_next) == ("e" * 32, "") and on_shelf(cfg, new) == [f"{PKG}-1"]
+    assert not (cfg.archive / shelf.shelf).exists()
+
+
+def test_check_with_stale_shelf_writes_to_new_dir(ctx, cfg, conn, clock, tmp_path):
+    """Ночная проверка взяла полку до смены токена, а замок скачивания — после: версия ложится в новый каталог."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    new = fetch.rotate_shelf(cfg, conn, shelf.id)
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "v2.apk", version_code=2)
+    ctx.sources._latest[PKG] = Latest(2, "", True)
+    assert fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "w") == "updated"
+    assert on_shelf(cfg, new) == [f"{PKG}-1", f"{PKG}-2"] and not (cfg.archive / shelf.shelf).exists()

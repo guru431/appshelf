@@ -26,8 +26,8 @@ def shelf_with_app(conn, tmp_path):
 
 
 def v4_schema() -> str:
-    """Схема версии 4: нынешняя без таблиц Android."""
-    return ";".join(s for s in store.SCHEMA.split(";") if "android_" not in s)
+    """Схема версии 4: нынешняя без таблиц Android и счётчиков PIN."""
+    return ";".join(s for s in store.SCHEMA.split(";") if "android_" not in s and "pin_attempts" not in s)
 
 
 def test_v4_database_upgrades_to_v5_keeping_apple_rows(tmp_path):
@@ -42,7 +42,7 @@ def test_v4_database_upgrades_to_v5_keeping_apple_rows(tmp_path):
     c.commit()
     c.close()
     c = store.connect(path)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert [r["email"] for r in c.execute("SELECT email FROM accounts")] == ["owner@example"]
     assert [r["name"] for r in c.execute("SELECT name FROM apps")] == ["СберБанк"]
     tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -150,6 +150,19 @@ def test_shelf_token_is_random_and_stable(conn):
     other = db.ensure_shelf(conn, 2, NOW)
     assert other.shelf != shelf.shelf
     assert db.all_shelves(conn) == [shelf, other]
+
+
+def test_single_public_shelf(conn):
+    assert db.public_shelf(conn) is None
+    mine = db.ensure_shelf(conn, 1, NOW)
+    a = db.ensure_public_shelf(conn, NOW)
+    b = db.ensure_public_shelf(conn, NOW)
+    assert a == b and a.user_id is None and db.public_shelf(conn) == a and a.shelf != mine.shelf
+    assert conn.execute("SELECT COUNT(*) FROM android_shelves WHERE user_id IS NULL").fetchone()[0] == 1
+    db.set_shelf_next(conn, a.id, "f" * 32)
+    assert db.public_shelf(conn).shelf_next == "f" * 32
+    db.finish_shelf_move(conn, a.id)
+    assert (db.public_shelf(conn).shelf, db.public_shelf(conn).shelf_next) == ("f" * 32, "")
 
 
 def test_status_and_check_marks(conn, tmp_path):

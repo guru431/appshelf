@@ -73,6 +73,30 @@ def ensure_shelf(c, user_id: int, now: str) -> Shelf:
     return shelf_for_user(c, user_id)
 
 
+def public_shelf(c) -> Shelf | None:
+    return _shelf(c.execute("SELECT * FROM android_shelves WHERE user_id IS NULL").fetchone())
+
+
+def ensure_public_shelf(c, now: str) -> Shelf:
+    """Публичная полка — одна; UNIQUE на NULL не срабатывает, поэтому поиск и вставка — в одной транзакции."""
+    with tx(c):
+        shelf = public_shelf(c)
+        if shelf is None:
+            c.execute("INSERT INTO android_shelves (user_id, shelf, created_at) VALUES (NULL, ?, ?)",
+                      (secrets.token_hex(16), now))
+            shelf = public_shelf(c)
+    return shelf
+
+
+def set_shelf_next(c, shelf_id: int, token: str) -> None:
+    c.execute("UPDATE android_shelves SET shelf_next=? WHERE id=?", (token, shelf_id))
+
+
+def finish_shelf_move(c, shelf_id: int) -> None:
+    c.execute("UPDATE android_shelves SET shelf=shelf_next, shelf_next='' WHERE id=? AND shelf_next != ''",
+              (shelf_id,))
+
+
 def get_shelf(c, shelf_id: int) -> Shelf | None:
     return _shelf(c.execute("SELECT * FROM android_shelves WHERE id=?", (shelf_id,)).fetchone())
 

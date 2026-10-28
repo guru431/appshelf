@@ -365,7 +365,7 @@ def _relink(manifest: Path, old: str, new: str) -> None:
 
 
 def move_shelves(cfg: Config, c) -> None:
-    """При старте appshelf-web и ночной проверки: доделать прерванные переносы и перенести каталоги Apple ID
+    """При старте appshelf-web и ночной проверки: доделать прерванные переносы (и Android-полок) и перенести каталоги Apple ID
     версии 2 (HMAC от PUB_TOKEN) на случайные токены. Полка владельца из версии 1 остаётся <PUB_TOKEN>. Архив
     недоступен, Apple ID занят, сбой шары — в журнал, повторит следующий запуск: служба из-за этого не встаёт."""
     for acct in people.all_accounts(c):
@@ -375,6 +375,13 @@ def move_shelves(cfg: Config, c) -> None:
             except (ArchiveUnavailable, AccountBusy, OSError) as e:
                 why = "идёт задание или скачивание" if isinstance(e, AccountBusy) else str(e)  # без адреса Apple ID
                 print(f"appshelf: каталог полки Apple ID №{acct.id} не перенесён: {why}", file=sys.stderr)
+    for shelf in android_db.all_shelves(c):
+        if shelf.shelf_next:  # смена токена Android-полки прервалась (rotate-token, смена PIN)
+            try:
+                android_fetch.rotate_shelf(cfg, c, shelf.id)
+            except (ArchiveUnavailable, AccountBusy, OSError) as e:
+                why = "идёт задание или скачивание" if isinstance(e, AccountBusy) else str(e)
+                print(f"appshelf: каталог Android-полки №{shelf.id} не перенесён: {why}", file=sys.stderr)
 
 
 def merge_progress(prev: dict | None, cur: dict) -> dict:

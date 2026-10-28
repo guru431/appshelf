@@ -7,10 +7,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 from pathlib import Path
 
 from .. import apk, ipa, jobs, notify, store
+from ..ipatool import IpatoolError
 from . import db, net
 from .net import SourceError
 
@@ -107,6 +109,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
               name_hint: str) -> tuple[str, str]:
     """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания."""
     with jobs.hold(env.cfg.download_lock):
+        shelf = db.get_shelf(c, shelf.id) or shelf  # токен каталога мог смениться (rotate_shelf), пока ждали замок
         _space(env, c)
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
@@ -220,6 +223,34 @@ def run_job(env, c, job) -> None:
         if job["kind"] == "upload":
             Path(payload["path"]).unlink(missing_ok=True)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def rotate_shelf(cfg, c, shelf_id: int) -> db.Shelf | None:
+    """Новый случайный токен каталога Android-полки: appshelf rotate-token и смена PIN публичной полки (spec §7, §8).
+    Файлы внутри не меняются — ссылки на APK строятся на странице. Как jobs.move_shelf: новый токен сначала ложится
+    в shelf_next, сбой посередине доделает jobs.move_shelves; под замком скачивания store_apk не пишет в прежний
+    каталог. Идёт задание полки или чьё-то скачивание — AccountBusy, архив недоступен — ArchiveUnavailable; полку
+    удалили, пока ждали замок, — None."""
+    jobs._archive(cfg)
+    try:
+        with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT):
+            with store.tx(c):
+                if c.execute("SELECT 1 FROM android_jobs WHERE shelf_id=? AND status='running'",
+                             (shelf_id,)).fetchone() is not None:
+                    raise jobs.AccountBusy(f"Android-полка №{shelf_id}")
+                shelf = db.get_shelf(c, shelf_id)
+                if shelf is None:
+                    return None
+                if not shelf.shelf_next:
+                    db.set_shelf_next(c, shelf_id, secrets.token_hex(16))
+            shelf = db.get_shelf(c, shelf_id)
+            src, dst = cfg.archive / shelf.shelf, cfg.archive / shelf.shelf_next
+            if src.is_dir() and not dst.exists():
+                os.replace(src, dst)
+            db.finish_shelf_move(c, shelf_id)
+            return db.get_shelf(c, shelf_id)
+    except IpatoolError as e:  # не дождались замка скачивания
+        raise jobs.AccountBusy(f"Android-полка №{shelf_id}") from e
 
 
 def recover(c, now: str) -> None:

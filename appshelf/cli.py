@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
-from .android import net
+from .android import db as android_db, fetch as android_fetch, net
 from .android.sources import Sources
 from .config import from_env
 
@@ -24,7 +24,10 @@ def main(argv=None) -> int:
     link.add_argument("--email", required=True, help="любой Apple ID человека")
     rotate = sub.add_parser("rotate-token", help="новый токен каталога полки: прежние ссылки установки перестанут "
                                                  "работать, установленные приложения — останутся")
-    rotate.add_argument("--email", required=True, help="Apple ID полки")
+    whose = rotate.add_mutually_exclusive_group(required=True)
+    whose.add_argument("--email", help="Apple ID полки")
+    whose.add_argument("--public", action="store_true", help="публичная Android-полка (ссылки гостей)")
+    rotate.add_argument("--android", action="store_true", help="с --email: Android-полка участника этого Apple ID")
     chk = sub.add_parser("check", help="проверка целостности полок, только чтение: код 0 — проблем нет, 1 — есть, "
                                        "2 — проверка не выполнена")
     chk.add_argument("--deep", action="store_true", help="ещё SHA-256 и содержимое каждого IPA (читает весь архив)")
@@ -41,6 +44,8 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "backup" and args.keep < 1:
         p.error("--keep — от 1")
+    if args.cmd == "rotate-token" and args.android and not args.email:
+        p.error("--android — только с --email")
     cfg = from_env()
     jobs.check_user(cfg)
     if args.cmd == "check":
@@ -48,7 +53,7 @@ def main(argv=None) -> int:
     if args.cmd == "backup":
         return daily(cfg, args.keep) if args.daily else backup(cfg, args.out)
     with closing(store.connect(cfg.db, cfg.owner_email)) as c:
-        if args.cmd in ("login-link", "rotate-token"):
+        if args.cmd == "login-link" or args.cmd == "rotate-token" and args.email:
             acct = people.account_by_email(c, args.email)
             if acct is None:
                 print("такого Apple ID на сервере нет", file=sys.stderr)
@@ -57,18 +62,32 @@ def main(argv=None) -> int:
             print(f"{cfg.public_base}/l/{people.create_link(c, people.LOGIN, '', acct.user_id, jobs.now_iso())}")
             return 0
         if args.cmd == "rotate-token":
-            try:
-                jobs.move_shelf(cfg, c, acct)
-            except jobs.ArchiveUnavailable as e:
-                print(e, file=sys.stderr)
-                return 1
-            except jobs.AccountBusy:
-                print("идёт скачивание или задание этого Apple ID — повторите позже", file=sys.stderr)
-                return 1
-            print("готово: каталог полки переименован, ссылки установки — новые")
-            return 0
+            return rotate_token(cfg, c, args, acct if args.email else None)
         print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a),
                                    sources=Sources(net.Http(cfg.sources_ca))), c))
+    return 0
+
+
+def rotate_token(cfg, c, args, acct) -> int:
+    """Полка Apple ID, Android-полка его участника (--android) или публичная (--public)."""
+    shelf = None
+    if args.public or args.android:
+        shelf = android_db.public_shelf(c) if args.public else android_db.shelf_for_user(c, acct.user_id)
+        if shelf is None:
+            print("такой Android-полки нет: на неё ещё ничего не добавляли", file=sys.stderr)
+            return 2
+    try:
+        if shelf is None:
+            jobs.move_shelf(cfg, c, acct)
+        else:
+            android_fetch.rotate_shelf(cfg, c, shelf.id)
+    except jobs.ArchiveUnavailable as e:
+        print(e, file=sys.stderr)
+        return 1
+    except jobs.AccountBusy:
+        print("идёт скачивание или задание этой полки — повторите позже", file=sys.stderr)
+        return 1
+    print("готово: каталог полки переименован, ссылки " + ("на файлы" if shelf else "установки") + " — новые")
     return 0
 
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 # Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
 # schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Правило для переходов с версии 4:
 # лишь добавляющий столбцы с умолчаниями или таблицы, которых прежний код не читает, пишет туда прежний
@@ -131,6 +131,8 @@ CREATE TABLE IF NOT EXISTS android_versions (id INTEGER PRIMARY KEY, shelf_id IN
 CREATE TABLE IF NOT EXISTS android_jobs (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, kind TEXT NOT NULL,
     package TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL,
     finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS pin_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at TEXT NOT NULL,
+    blocked_until TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)
 """
 # появились в версии 4: время успешной загрузки истории Apple ID; происхождение строки истории (daap — DAAP,
@@ -239,7 +241,7 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version == 4:  # таблицы Android (версия 5): код версии 4 их не читает — откат на него возможен
+        if version in (4, 5):  # таблицы Android (5) и счётчики PIN (6): код версии 4 их не читает — откат возможен
             _create(c)
             if not get_state(c, READABLE_BY_KEY):
                 set_state(c, READABLE_BY_KEY, "4")
