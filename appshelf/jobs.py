@@ -262,10 +262,11 @@ def remove_account(cfg: Config, c, acct) -> None:
     _remove(cfg, c, [acct], last_owner_id)
 
 
-def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None) -> None:
+def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, user_id: int | None = None) -> None:
     """Apple ID под замками их ipatool, строки — одной транзакцией: обработчик не возьмёт задание посередине, и
     занятость любого — AccountBusy до удаления первого. Каталоги полок — по строкам из той же транзакции:
-    rotate-token мог перенести полку, пока ждали замок."""
+    rotate-token мог перенести полку, пока ждали замок. Участник уходит, когда у него не осталось ни Apple ID, ни
+    Google-аккаунтов (spec 2026-10-28 §4); user_id — участник целиком: и его Google-аккаунты."""
     _archive(cfg)
     locks = [cfg.locks_dir / f"{a.id}.lock" for a in accts]
     with ExitStack() as held:
@@ -280,20 +281,15 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None) -> 
                 raise AccountBusy(busy.email)
             check()
             fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
-            gone = []  # Android-полки удалённых участников (spec 2026-10-28 §4: полка — у участника)
             for a in fresh:
                 store.delete_shelf(c, a.id)
                 c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
-                if not people.accounts_of(c, a.user_id):
-                    people.delete_user_row(c, a.user_id)
-                    shelf = android_db.shelf_for_user(c, a.user_id)
-                    if shelf is not None:
-                        android_db.delete_shelf(c, shelf.id)
-                        gone.append(shelf)
+            if user_id is not None:
+                c.execute("DELETE FROM google_accounts WHERE user_id=?", (user_id,))
+            uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
+            gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
         for shelf in gone:
-            store.rmtree_logged(cfg.archive / shelf.shelf)
-            if shelf.shelf_next:
-                store.rmtree_logged(cfg.archive / shelf.shelf_next)
+            _drop_android_dirs(cfg, shelf)
         for a in fresh:
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога
@@ -301,6 +297,24 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None) -> 
             store.rmtree_logged(cfg.accounts_dir / str(a.id))
     for lock in locks:
         _drop_lock(lock)
+
+
+def _drop_user_if_empty(c, uid: int):
+    """В транзакции вызывающего: у участника не осталось аккаунтов — строка участника и его Android-полки прочь (spec
+    2026-10-28 §4: полка — у участника). Ушла полка — она (каталоги — вызывающему после COMMIT), иначе None."""
+    if people.has_apple(c, uid) or people.google_of(c, uid):
+        return None
+    people.delete_user_row(c, uid)
+    shelf = android_db.shelf_for_user(c, uid)
+    if shelf is not None:
+        android_db.delete_shelf(c, shelf.id)
+    return shelf
+
+
+def _drop_android_dirs(cfg: Config, shelf) -> None:
+    store.rmtree_logged(cfg.archive / shelf.shelf)
+    if shelf.shelf_next:
+        store.rmtree_logged(cfg.archive / shelf.shelf_next)
 
 
 def _drop_lock(lock) -> None:
@@ -319,9 +333,42 @@ def drop_account_files(cfg: Config, aid: int) -> None:
 
 
 def remove_user(cfg: Config, c, uid: int) -> None:
-    """Человек со всеми Apple ID — разом (_remove): задание или вызов ipatool у любого его Apple ID — AccountBusy,
-    и не удалено ничего."""
-    _remove(cfg, c, people.accounts_of(c, uid))
+    """Человек со всеми Apple ID, Google-аккаунтами и Android-полкой — разом (_remove), и участник без Apple ID тоже:
+    задание или вызов ipatool у любого его Apple ID — AccountBusy, и не удалено ничего."""
+    _remove(cfg, c, people.accounts_of(c, uid), user_id=uid)
+
+
+def remove_google(cfg: Config, c, gid: int) -> bool:
+    """Google-аккаунт; был последним аккаунтом участника — уходят и участник, и его Android-полка (True). Полка
+    уходит — под замком скачивания, как rotate_shelf: store_apk не пишет в удаляемый каталог; не дождались или у
+    полки идёт задание — AccountBusy, архив недоступен — ArchiveUnavailable, и не удалено ничего. Уже удалён — False."""
+    g = people.get_google(c, gid)
+    if g is None:
+        return False
+    with ExitStack() as held:
+        if android_db.shelf_for_user(c, g.user_id) is not None:
+            _archive(cfg)
+            try:
+                held.enter_context(hold(cfg.download_lock, REMOVE_LOCK_WAIT))
+            except IpatoolError as e:  # не дождались замка скачивания
+                raise AccountBusy(g.email) from e
+        with store.tx(c):
+            if people.get_google(c, gid) is None:
+                return False
+            c.execute("DELETE FROM google_accounts WHERE id=?", (gid,))
+            last = not people.has_apple(c, g.user_id) and not people.google_of(c, g.user_id)
+            shelf = android_db.shelf_for_user(c, g.user_id)
+            if last and shelf is not None and _android_running(c, shelf.id):
+                raise AccountBusy(g.email)
+            gone = _drop_user_if_empty(c, g.user_id)
+        if gone is not None:
+            _drop_android_dirs(cfg, gone)
+    return last
+
+
+def _android_running(c, shelf_id: int) -> bool:
+    return c.execute("SELECT 1 FROM android_jobs WHERE shelf_id=? AND status='running'",
+                     (shelf_id,)).fetchone() is not None
 
 
 def move_shelf(cfg: Config, c, acct) -> None:

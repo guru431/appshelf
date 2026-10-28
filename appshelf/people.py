@@ -1,7 +1,8 @@
-"""Люди, их Apple ID и ссылки (spec 2026-10-08 §4–5).
+"""Люди, их Apple ID, Google-аккаунты и ссылки (spec 2026-10-08 §4–5, 2026-10-28 §4).
 
-Человек (users) владеет одним или несколькими Apple ID (accounts): вход любым из них открывает все его полки.
-С 2026-10-13 новый Apple ID всегда приходит отдельным человеком (web/signin.py) — связки остались от прежних версий.
+Человек (users) владеет одним или несколькими Apple ID (accounts) и/или Google-аккаунтами (google_accounts): вход
+любым из них открывает все его полки. С 2026-10-13 новый Apple ID всегда приходит отдельным человеком
+(web/signin.py) — связки остались от прежних версий; Google-аккаунт переходит к другому только через «Связать».
 Ссылки (links) — приглашения и запасной вход; в базе только SHA-256 токена. Транзакции открывают только
 claim_expired_mail и use_login_link: несколько записей подряд вызывающий оборачивает в store.tx."""
 from __future__ import annotations
@@ -44,6 +45,17 @@ class Account:
     shelf: str = ""      # токен каталога в архиве (config.shelf_token); '' — legacy_pub или Apple ID версии 2
     shelf_next: str = ""  # новый токен, пока каталог переезжает (jobs.move_shelf)
     history_at: str = ""  # время последней успешной загрузки истории покупок, в том числе пустой
+
+
+@dataclass(frozen=True)
+class GoogleAccount:
+    id: int
+    user_id: int
+    sub: str             # ключ аккаунта OpenID; адрес и имя — только для показа и писем
+    email: str
+    name: str
+    created_at: str
+    last_login_at: str
 
 
 def _user(r) -> User | None:
@@ -170,6 +182,40 @@ def release_expired_mail(c, aid: int) -> None:
 def is_owner_account(c, acct: Account) -> bool:
     user = get_user(c, acct.user_id)
     return user is not None and user.role == OWNER
+
+
+def has_apple(c, uid: int) -> bool:
+    return c.execute("SELECT 1 FROM accounts WHERE user_id=?", (uid,)).fetchone() is not None
+
+
+# --- Google-аккаунты ---------------------------------------------------------
+
+def _google(r) -> GoogleAccount | None:
+    return None if r is None else GoogleAccount(r["id"], r["user_id"], r["sub"], r["email"], r["name"],
+                                                r["created_at"], r["last_login_at"])
+
+
+def google_by_sub(c, sub: str) -> GoogleAccount | None:
+    return _google(c.execute("SELECT * FROM google_accounts WHERE sub=?", (sub,)).fetchone())
+
+
+def get_google(c, gid: int) -> GoogleAccount | None:
+    return _google(c.execute("SELECT * FROM google_accounts WHERE id=?", (gid,)).fetchone())
+
+
+def google_of(c, uid: int) -> list[GoogleAccount]:
+    return [_google(r) for r in c.execute("SELECT * FROM google_accounts WHERE user_id=? ORDER BY id", (uid,))]
+
+
+def create_google(c, uid: int, sub: str, email: str, name: str, now: str) -> int:
+    """Google-аккаунт после первого входа; тот же sub второй раз — sqlite3.IntegrityError."""
+    return c.execute("INSERT INTO google_accounts (user_id, sub, email, name, created_at, last_login_at) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (uid, sub, email, name, now, now)).lastrowid
+
+
+def mark_google_login(c, gid: int, email: str, name: str, now: str) -> None:
+    """Вход: адрес и имя — как сейчас у Google (их меняют), время входа."""
+    c.execute("UPDATE google_accounts SET email=?, name=?, last_login_at=? WHERE id=?", (email, name, now, gid))
 
 
 # --- ссылки ------------------------------------------------------------------

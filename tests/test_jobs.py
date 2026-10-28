@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from appshelf import ipa, ipatool, jobs, people, removed, store
+from appshelf.android import db as android_db
 from appshelf.config import GB
 from appshelf.ipatool import LicenseNotFound, SessionExpired
 from helpers import TOKEN, FakeTool, assert_shelf_gone, make_account, owner, seed_app, set_session
@@ -404,8 +405,74 @@ def test_remove_needs_archive(ctx, cfg, conn, clock):
 def test_remove_user_with_all_apple_ids(ctx, cfg, conn, clock):
     petr = member(conn, clock)
     make_account(conn, clock, email="petr2@example", legacy=False, user_id=petr.user_id)
+    people.create_google(conn, petr.user_id, "sub-p", "petr@gmail.example", "", clock.iso())
     jobs.remove_user(cfg, conn, petr.user_id)
     assert people.get_user(conn, petr.user_id) is None and people.accounts_of(conn, petr.user_id) == []
+    assert people.google_of(conn, petr.user_id) == []
+
+
+def android_shelf_of(cfg, conn, clock, uid):
+    """Android-полка участника с каталогом версии на диске."""
+    shelf = android_db.ensure_shelf(conn, uid, clock.iso())
+    (cfg.archive / shelf.shelf / "ru.x-1").mkdir(parents=True)
+    return shelf
+
+
+def google_only(conn, clock, *subs):
+    """Участник без Apple ID и его Google-аккаунты (id по порядку subs)."""
+    owner(conn, clock)
+    uid = people.create_user(conn, "Гость", people.MEMBER, None, clock.iso())
+    return uid, [people.create_google(conn, uid, s, f"{s}@gmail.example", "", clock.iso()) for s in subs]
+
+
+def test_deleting_last_apple_id_keeps_person_with_google(ctx, cfg, conn, clock):
+    petr = member(conn, clock)
+    people.create_google(conn, petr.user_id, "sub-p", "petr@gmail.example", "Пётр", clock.iso())
+    shelf = android_shelf_of(cfg, conn, clock, petr.user_id)
+    jobs.remove_account(cfg, conn, petr)
+    assert people.get_account(conn, petr.id) is None and people.get_user(conn, petr.user_id) is not None
+    assert android_db.shelf_for_user(conn, petr.user_id) == shelf and (cfg.archive / shelf.shelf / "ru.x-1").is_dir()
+    assert not people.has_apple(conn, petr.user_id)
+
+
+def test_deleting_last_google_of_google_only_person_removes_person_and_shelf(ctx, cfg, conn, clock):
+    uid, (g1, g2) = google_only(conn, clock, "sub-1", "sub-2")
+    shelf = android_shelf_of(cfg, conn, clock, uid)
+    assert jobs.remove_google(cfg, conn, g1) is False                    # остался второй Google-аккаунт
+    assert people.get_user(conn, uid) is not None and android_db.get_shelf(conn, shelf.id) == shelf
+    assert jobs.remove_google(cfg, conn, g2) is True
+    assert people.get_user(conn, uid) is None and people.google_of(conn, uid) == []
+    assert android_db.get_shelf(conn, shelf.id) is None and not (cfg.archive / shelf.shelf).exists()
+    assert jobs.remove_google(cfg, conn, g2) is False                    # уже удалён — ничего
+
+
+def test_deleting_google_of_person_with_apple_keeps_person(ctx, cfg, conn, clock):
+    petr = member(conn, clock)
+    gid = people.create_google(conn, petr.user_id, "sub-p", "petr@gmail.example", "", clock.iso())
+    assert jobs.remove_google(cfg, conn, gid) is False
+    assert people.get_user(conn, petr.user_id) is not None and people.google_of(conn, petr.user_id) == []
+
+
+def test_remove_google_refused_while_downloading(ctx, cfg, conn, clock, monkeypatch):
+    uid, (gid,) = google_only(conn, clock, "sub-1")
+    shelf = android_shelf_of(cfg, conn, clock, uid)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    with ipatool.hold(cfg.download_lock):                                # идёт скачивание
+        with pytest.raises(jobs.AccountBusy):
+            jobs.remove_google(cfg, conn, gid)
+    android_db.enqueue(conn, shelf.id, "check", clock.iso(), package="ru.x")
+    android_db.take_job(conn)                                            # задание полки — в работе
+    with pytest.raises(jobs.AccountBusy):
+        jobs.remove_google(cfg, conn, gid)
+    assert people.get_google(conn, gid) is not None and android_db.get_shelf(conn, shelf.id) == shelf
+
+
+def test_remove_user_without_apple_ids(ctx, cfg, conn, clock):
+    uid, _ = google_only(conn, clock, "sub-1", "sub-2")
+    shelf = android_shelf_of(cfg, conn, clock, uid)
+    jobs.remove_user(cfg, conn, uid)
+    assert people.get_user(conn, uid) is None and people.google_of(conn, uid) == []
+    assert android_db.get_shelf(conn, shelf.id) is None and not (cfg.archive / shelf.shelf).exists()
 
 
 def test_remove_user_deletes_nothing_while_one_apple_id_is_busy(ctx, cfg, conn, clock, monkeypatch):

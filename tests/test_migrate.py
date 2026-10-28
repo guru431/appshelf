@@ -172,12 +172,35 @@ def test_v5_upgrades_to_v6_with_pin_attempts(tmp_path):
     c.commit()
     c.close()
     c = store.connect(db)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     assert c.execute("SELECT COUNT(*) FROM pin_attempts").fetchone()[0] == 0
     assert [(r["shelf"], r["package"]) for r in c.execute(
         "SELECT shelf, package FROM android_shelves JOIN android_apps ON shelf_id = android_shelves.id")] == \
         [("tok", "ru.x")]
     assert store.get_state(c, store.READABLE_BY_KEY) == "4"   # pin_attempts код версий 4–5 не читает: откат возможен
+    fresh = store.connect(tmp_path / "fresh.db")
+    assert columns(c) == columns(fresh)
+    fresh.close()
+    c.close()
+
+
+def test_v6_upgrades_to_v7(tmp_path):
+    db = tmp_path / "appshelf.db"
+    c = sqlite3.connect(db)
+    c.executescript(";".join(s for s in store.SCHEMA.split(";") if "google_accounts" not in s))
+    c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
+    c.execute("INSERT INTO accounts (id, user_id, email, created_at) VALUES (1, 1, 'owner@example', 't0')")
+    c.execute("INSERT INTO pin_attempts (key, count, first_at) VALUES ('all', 3, 't0')")
+    c.execute("INSERT INTO state (key, value) VALUES (?, '4')", (store.READABLE_BY_KEY,))
+    c.execute("PRAGMA user_version = 6")
+    c.commit()
+    c.close()
+    c = store.connect(db)
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 7 == store.SCHEMA_VERSION
+    assert c.execute("SELECT COUNT(*) FROM google_accounts").fetchone()[0] == 0
+    assert [a.email for a in people.all_accounts(c)] == ["owner@example"]
+    assert c.execute("SELECT count FROM pin_attempts").fetchone()[0] == 3
+    assert store.get_state(c, store.READABLE_BY_KEY) == "4"   # участника без Apple ID код этапа 2 не видит вошедшим
     fresh = store.connect(tmp_path / "fresh.db")
     assert columns(c) == columns(fresh)
     fresh.close()
