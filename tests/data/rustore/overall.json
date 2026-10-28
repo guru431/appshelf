@@ -1,0 +1,86 @@
+{
+ "code": "OK",
+ "message": null,
+ "body": {
+  "appId": 462271,
+  "packageName": "ru.sberbankmobile",
+  "appName": "СберБанк Онлайн",
+  "categories": [
+   "finance"
+  ],
+  "companyName": "ПАО Сбербанк",
+  "shortDescription": "Больше чем банк",
+  "fullDescription": "Описание сокращено при записи.",
+  "fileSize": 126327301,
+  "versionName": "17.14.0",
+  "appType": "MAIN",
+  "downloads": 90000000,
+  "price": 0,
+  "appVerUpdatedAt": "2026-10-23T13:09:08.089+00:00",
+  "aggregatorInfo": null,
+  "video": null,
+  "backgroundVideo": null,
+  "publicCompanyId": "a65961e0",
+  "labelIds": [
+   7
+  ],
+  "ageRestriction": {
+   "category": "0+",
+   "name": "Возраст 0+",
+   "description": "Без насилия, непристойного контента (оскорблений, ругательств). Обратите внимание, что не все приложения с этим возрастным ограничением разработаны специально для детей",
+   "imageUrl": "https://static-m.rustore.ru/icon/Age0Limit48.svg"
+  },
+  "markings": [],
+  "versionCode": 2026062416,
+  "minSdkVersion": 26,
+  "targetSdkVersion": 36,
+  "maxSdkVersion": 0,
+  "whatsNew": "Сокращено при записи.",
+  "iconUrl": "https://static-m.rustore.ru/apk/462271/content/ICON/f1b3c68a-b734-48ce-b62f-490208d3fa0e.png",
+  "fileUrls": [
+   {
+    "fileUrl": "https://static-m.rustore.ru/2026/10/23/6a/apk/462271/content/SCREENSHOT/fb828bd8-a920-4dac-8126-f1e4c7bfc83d.jpg",
+    "ordinal": 0,
+    "type": "SCREENSHOT",
+    "orientation": "PORTRAIT",
+    "blurhash": ""
+   }
+  ],
+  "signatures": [
+   "fea43ebfc12201c7d860b1de28a0f8a330ecc4c30863dae7ce6cf4c98b99a2ea"
+  ],
+  "signature": "fea43ebfc12201c7d860b1de28a0f8a330ecc4c30863dae7ce6cf4c98b99a2ea",
+  "privacyDataCategories": [],
+  "adaptedToTablets": false,
+  "purchased": false,
+  "inAppUpdatePriority": 0,
+  "banner": "",
+  "migrationGuideLink": null,
+  "versionId": 2064904048,
+  "rating": {
+   "average": 4.82,
+   "votes": 4461162
+  },
+  "ageLegal": "0+",
+  "versionType": "REGULAR",
+  "firstPublishedAt": "2023-01-11T15:30:11.883+00:00",
+  "deviceTypes": [
+   "MOBILE"
+  ],
+  "seoTags": [],
+  "preordered": false,
+  "roundedDownloadsText": "90 млн +",
+  "testingChannel": null,
+  "availableTestingChannels": [],
+  "inWishlist": false,
+  "eventIds": [],
+  "minAndroidVersion": "8",
+  "developerContacts": {
+   "email": null,
+   "website": null,
+   "vkCommunity": null,
+   "maxMessenger": null
+  }
+ },
+ "timestamp": "2026-10-28T17:26:09.347Z"
+}

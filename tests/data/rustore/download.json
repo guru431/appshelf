@@ -1,0 +1,22 @@
+{
+ "code": "OK",
+ "message": null,
+ "body": {
+  "appId": 462271,
+  "versionCode": 2026062416,
+  "versionId": 2064904048,
+  "downloadUrls": [
+   {
+    "url": "https://static-m.rustore.ru/2026/10/23/b5/f97e67a2-9827-4da7-9eb6-5185e0764de7.zip",
+    "size": 168695693,
+    "hash": "23091372d89e407b"
+   }
+  ],
+  "preApproveInfo": {
+   "label": "СберБанк",
+   "locale": "ru-RU"
+  },
+  "signature": "fea43ebfc12201c7d860b1de28a0f8a330ecc4c30863dae7ce6cf4c98b99a2ea"
+ },
+ "timestamp": "2026-10-28T17:26:09.752Z"
+}

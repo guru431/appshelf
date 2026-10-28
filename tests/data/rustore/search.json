@@ -1,0 +1,109 @@
+{
+ "code": "OK",
+ "message": null,
+ "body": {
+  "content": [
+   {
+    "appId": 462271,
+    "packageName": "ru.sberbankmobile",
+    "minSdkVersion": 26,
+    "appName": "СберБанк Онлайн",
+    "shortDescription": "Больше чем банк",
+    "iconUrl": "https://static-m.rustore.ru/apk/462271/content/ICON/f1b3c68a-b734-48ce-b62f-490208d3fa0e.png",
+    "appType": "MAIN",
+    "versionCode": 2026062416,
+    "price": 0,
+    "averageUserRating": 4.82,
+    "totalRatings": 4461162,
+    "labelIds": [
+     7
+    ],
+    "isNavSuggest": false,
+    "roundedDownloadsText": "90 млн +"
+   },
+   {
+    "appId": 672703,
+    "packageName": "ru.sberbank.sberkids",
+    "minSdkVersion": 26,
+    "appName": "СберKids",
+    "shortDescription": "Безопасное и удобное приложение, которое научит детей управлять своими финансами",
+    "iconUrl": "https://static-m.rustore.ru/apk/672703/content/ICON/17e53bab-d1c2-4bb7-9855-97937c66ac02.png",
+    "appType": "MAIN",
+    "versionCode": 2026082604,
+    "price": 0,
+    "averageUserRating": 4.77,
+    "totalRatings": 85507,
+    "labelIds": [
+     7
+    ],
+    "isNavSuggest": false,
+    "roundedDownloadsText": "6 млн +"
+   },
+   {
+    "appId": 2063721753,
+    "packageName": "by.bpssberbank.sbol",
+    "minSdkVersion": 26,
+    "appName": "СберБанк Онлайн Беларусь",
+    "shortDescription": "Это ваш личный помощник в финансовых и повседневных делах.",
+    "iconUrl": "https://static-m.rustore.ru/2026/7/13/c1/apk/2063721753/content/ICON/16ad3b3c-a481-4f73-8535-3067ae45a21c.png",
+    "appType": "MAIN",
+    "versionCode": 285,
+    "price": 0,
+    "averageUserRating": 4.6,
+    "totalRatings": 79,
+    "labelIds": [],
+    "isNavSuggest": false,
+    "roundedDownloadsText": "200 тыс +"
+   },
+   {
+    "appId": 404415,
+    "packageName": "ru.vtb24.mobilebanking.android",
+    "minSdkVersion": 26,
+    "appName": "ВТБ Онлайн",
+    "shortDescription": "ВТБ Онлайн – в лидерах среди онлайн-банков по версии Markswebb",
+    "iconUrl": "https://static-m.rustore.ru/2026/3/28/37/apk/404415/content/ICON/577a3521-f7ef-4322-ab3c-c96b9262c562.png",
+    "appType": "MAIN",
+    "versionCode": 2090141590,
+    "price": 0,
+    "averageUserRating": 4.71,
+    "totalRatings": 3664592,
+    "labelIds": [
+     7
+    ],
+    "isNavSuggest": false,
+    "roundedDownloadsText": "40 млн +"
+   },
+   {
+    "appId": 466879,
+    "packageName": "ru.sberbank.investor",
+    "minSdkVersion": 26,
+    "appName": "СберИнвестиции",
+    "shortDescription": "Ваш онлайн брокер ",
+    "iconUrl": "https://static-m.rustore.ru/2026/1/13/86/apk/466879/content/ICON/e341dc76-fe4a-4ed6-a38d-672137899a64.png",
+    "appType": "MAIN",
+    "versionCode": 2026102100,
+    "price": 0,
+    "averageUserRating": 4.75,
+    "totalRatings": 145104,
+    "labelIds": [],
+    "isNavSuggest": false,
+    "roundedDownloadsText": "7 млн +"
+   }
+  ],
+  "advertAppInfo": null,
+  "pageNumber": 0,
+  "pageSize": 5,
+  "totalElements": 273,
+  "totalPages": 55,
+  "searchQueryId": "211d71c627ca4b4f",
+  "showcaseQId": "211d71c627ca4b4f",
+  "spellchecker": {
+   "originQuery": "сбер",
+   "modifiedQuery": "сбер"
+  },
+  "navigSuggestsAppsIds": [],
+  "paymentTypeFilterEnabled": false,
+  "searchAnimationUrl": null
+ },
+ "timestamp": "2026-10-28T17:26:09.690Z"
+}

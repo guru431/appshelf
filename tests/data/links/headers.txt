@@ -1,0 +1,45 @@
+# Заголовки ответов (curl -sIL), 2026-10-28, с сервера appshelf (российский адрес).
+# Корни: системные + Russian Trusted Root CA (без него — curl 60 у хостов с сертификатом НУЦ).
+
+### https://cdnweb.sberbank.ru/appdistr/SberbankOnline.apk  (сертификат — Russian Trusted Sub CA)
+HTTP/2 200
+content-type: application/octet-stream
+content-length: 176172934
+last-modified: Wed, 28 Oct 2026 10:54:49 GMT
+etag: "6ae1d479-a802f86"
+
+### https://vtb.com/apk/vtbonline.apk  (сертификат — Russian Trusted Sub CA)
+# User-Agent curl → 403; браузерный User-Agent, GET с Range: bytes=0-0:
+HTTP/1.1 301 Moved Permanently
+location: https://www.vtb.com/apk/vtbonline.apk
+HTTP/1.1 302 Found
+location: https://apk1.vtbgroup.com/vtbonline.apk
+HTTP/2 206
+etag: "6ad0caf9-b203b1a"
+content-range: bytes 0-0/186661658
+
+### https://acdn.t-bank-app.ru/download_apk/tbank_app.apk  (сертификат — общепризнанный)
+HTTP/2 200
+content-type: binary/octet-stream
+content-length: 267597541
+last-modified: Fri, 02 Oct 2026 14:04:00 GMT
+etag: "a163ccc4c74e143912980f684aabb0a4-32"
+
+### https://mob.cdn.gpb.ru/media/mobile/apk/new_version/android_inapp/android_inapp.apk
+# curl 60: сервер отдаёт только свой сертификат (без промежуточного LiteSSL RSA CA 2025) —
+# «unable to verify the first certificate»; промежуточный нужно положить в APPSHELF_SOURCES_CA.
+
+### RuStore: ссылка из v2/download-link (.zip — обёртка: UNIVERSAL_APK_*.apk + assets/dexopt/*)
+### и тот же путь с .apk — сам универсальный APK (сертификат CDN — Russian Trusted Sub CA)
+# .zip
+HTTP/2 200
+content-type: application/octet-stream
+content-length: 168695693
+etag: "f2cc27f5d43ebf4d31d6f36800d9ee64-32"
+last-modified: Fri, 23 Oct 2026 11:55:47 GMT
+# .apk
+HTTP/2 200
+content-type: application/octet-stream
+content-length: 176172933
+etag: "25751ebc12c2fcc1436029544a0f76d9-33"
+last-modified: Fri, 23 Oct 2026 11:55:47 GMT
