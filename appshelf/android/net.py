@@ -32,6 +32,11 @@ class BlockedAddress(FetchError):
     pass
 
 
+class SourceError(Exception):
+    """Источник ответил, но не то: неизвестный формат, платное, набор файлов. Здесь, а не в sources: его поднимает и
+    rustore, которого sources импортирует."""
+
+
 @dataclass(frozen=True)
 class Meta:
     url: str              # после редиректов
