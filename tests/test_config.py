@@ -68,3 +68,9 @@ def test_owner_and_shelves():
 
 def test_owner_is_optional():
     assert from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}).owner_email == ""
+
+
+def test_sources_ca_is_optional():
+    assert from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}).sources_ca is None
+    cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE, "APPSHELF_SOURCES_CA": "/etc/appshelf/ca.pem"})
+    assert cfg.sources_ca == Path("/etc/appshelf/ca.pem")

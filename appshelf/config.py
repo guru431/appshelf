@@ -24,6 +24,7 @@ class Config:
     pub_dir: Path | None = None  # архив IPA; может быть сетевой шарой (APPSHELF_PUB), база и tmp — локально
     owner_email: str = ""        # APPSHELF_OWNER: Apple ID владельца, в нижнем регистре
     backup_dir: Path | None = None  # APPSHELF_BACKUP_DIR: ночные снимки базы (appshelf backup --daily)
+    sources_ca: Path | None = None  # APPSHELF_SOURCES_CA: PEM доп. корней (НУЦ) — только для загрузчика источников APK
 
     @property
     def db(self) -> Path:
@@ -97,4 +98,5 @@ def from_env(env=None) -> Config:
         pub_dir=Path(env["APPSHELF_PUB"]) if env.get("APPSHELF_PUB") else None,
         owner_email=env.get("APPSHELF_OWNER", "").strip().lower(),
         backup_dir=Path(env["APPSHELF_BACKUP_DIR"]) if env.get("APPSHELF_BACKUP_DIR") else None,
+        sources_ca=Path(env["APPSHELF_SOURCES_CA"]) if env.get("APPSHELF_SOURCES_CA") else None,
     )
