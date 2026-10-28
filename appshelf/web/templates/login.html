@@ -34,6 +34,9 @@
     <input type="hidden" name="next" value="{{ next }}">
     <button>Продолжить</button>
   </form>
+  {% if cfg.google_enabled and not add %}
+  <p><a class="btn secondary" style="width: 100%; min-height: 50px; margin-top: 10px" href="/google/start?{{ {'next': next} | urlencode }}">Войти через Google</a></p>
+  {% endif %}
   {% endif %}
   </div>
   {% if link %}
@@ -43,6 +46,7 @@
   <p class="hint">Вход — вашим Apple ID и паролем от него. Пароль на сервере не сохраняется: он нужен только для входа
     и живёт в памяти не дольше 10 минут. Вход запоминается на год на этом устройстве; в приложении на экране «Домой»
     войти нужно отдельно.</p>
+  {% if cfg.google_enabled and not add %}<p class="hint">Пароль Google вводится на странице Google — сервер его не видит.</p>{% endif %}
   {% if add %}<p class="hint">Apple ID, который уже есть на сервере, подключится к этому устройству вместе со своей полкой.
     Новый станет отдельным участником со своей полкой: это устройство войдёт и как он, а на других устройствах им
     входят отдельно.</p>{% endif %}

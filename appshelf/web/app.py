@@ -19,11 +19,12 @@ from ..android import net
 from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
-from . import accounts, admin, android, pwa, signin
+from . import accounts, admin, android, google_signin, pwa, signin
 from .common import THEMES, WebCtx, back, back_to
 from .login import Limiter, LoginFlow
 
-PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p")  # /p — гость публичной полки, по PIN
+PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p",  # /p — гость публичной полки, по PIN
+          "/google/start", "/google/callback")
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
 # страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
 APPLE_PATHS = ("/history", "/blocked", "/api/status")
@@ -67,9 +68,10 @@ def parse_app_id(ref: str) -> int | None:
 
 
 def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=time.monotonic, send=notify.send_mail,
-               disk_free=jobs.free_bytes, start_worker: bool = True, sources=None) -> FastAPI:
+               disk_free=jobs.free_bytes, start_worker: bool = True, sources=None, google_http=None) -> FastAPI:
     """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID;
-    sources — источники APK (по умолчанию RuStore и ссылки, с доп. корнями APPSHELF_SOURCES_CA)."""
+    sources — источники APK (по умолчанию RuStore и ссылки, с доп. корнями APPSHELF_SOURCES_CA);
+    google_http — HTTP к token endpoint Google (по умолчанию android.net.Http: только https и глобальные адреса)."""
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
                    sources=sources or Sources(net.Http(cfg.sources_ca)))
     flow = LoginFlow(clock=clock)
@@ -355,6 +357,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return JSONResponse(status)
 
     signin.register_routes(app, w)
+    google_signin.register_routes(app, w, google_http or net.Http())
     accounts.register_routes(app, w)
     admin.register_routes(app, w)
     android.register_routes(app, w)
