@@ -64,6 +64,7 @@ else
 fi
 # spec 2026-10-08 §6: HOME ipatool на каждый Apple ID
 install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /var/lib/appshelf/locks
+install -d -o appshelf -g appshelf -m 0700 /var/lib/appshelf/tmp    # TMPDIR appshelf-web: загрузки APK
 if [ -d /etc/appshelf/.ipatool ] && [ ! -e /etc/appshelf/accounts/1 ]; then
   systemctl stop appshelf-web       # учётка ipatool переезжает — служба её в это время не трогает
   install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts/1

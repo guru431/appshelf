@@ -75,3 +75,15 @@ def test_ipatool_built_from_deployed_sources_and_checked_on_server_before_swap()
     assert '"tar -C $R -cf - ipatool"' in build
     swap = build.index('mv -f "$T/ipatool" "$R/bin/ipatool"')
     assert build.index('sudo ldd "$T/bin/ipatool"') < swap and build.index('"$T/bin/ipatool" help') < swap
+
+
+def test_web_unit_sets_tmpdir():
+    # загрузка APK до 1 ГБ: multipart-разбор кладёт файл во временный каталог — не в /tmp (tmpfs, PrivateTmp)
+    assert "Environment=TMPDIR=/var/lib/appshelf/tmp" in (DEPLOY / "appshelf-web.service").read_text(encoding="utf-8")
+
+
+def test_vhost_serves_apk_as_attachment_and_limits_upload():
+    text = (DEPLOY / "apache-appshelf.conf").read_text(encoding="utf-8")
+    assert "AddType application/vnd.android.package-archive .apk" in text
+    assert 'Header set Content-Disposition "attachment"' in text
+    assert "LimitRequestBody 1100000000" in text

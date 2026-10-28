@@ -28,6 +28,9 @@ The web UI is in Russian.
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
 - PWA: the shelf on the Home Screen.
+- Android: a section with each person's Android shelf — APKs from RuStore, from a direct link on a bank's site or an
+  uploaded file; install and update from the phone's browser, nightly check for new versions, a signing rule (see
+  "Android").
 
 ## How it works
 
@@ -39,6 +42,7 @@ The web UI is in Russian.
                          └─ /d/      → <archive>/ no password (manifests, IPAs, icons; path holds a secret token)
     appshelf-web (job worker) ─┐
     appshelf-nightly (04:30)   ┴─► bin/ipatool (HOME=/etc/appshelf/accounts/<id>, flock locks/<id>.lock) ─► Apple
+                               └─► android/net.py (https and global addresses only) ─► RuStore, websites (APK)
 
 IPAs are fetched by `bin/ipatool`, a fork of [ipatool-cpp](https://github.com/Sorvigolova/ipatool) with our
 patches (`ipatool/`): the password is never stored and is passed only via stdin, a `list-purchases`
@@ -201,6 +205,45 @@ sign-in it waits for one. If Apple refuses, the current version stays and instal
 last check (by the button or at night): "checked DD.MM HH:MM UTC — no newer version / new version downloaded /
 failed: …"; this is about the shelf, not the version on the phone.
 
+## Android
+
+The same server also keeps Android shelves: the **Android** section of the panel, with an Apple/Android switch in
+the header. From an Android phone the panel opens right in it, from an iPhone in Apple, from a computer in the
+section opened last. An Android shelf belongs to a person, not to an Apple ID: an APK is not tied to any account.
+Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/superpowers/specs/2026-10-28-android-design.md)
+(stage 1 is done: RuStore, direct link, uploaded file).
+
+- **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
+  paid apps are unavailable), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own
+  file" — an upload of up to 1 GB. The server never follows a link into an internal network: the name is resolved
+  before every request and after every redirect, and any non-global address (private, loopback, link-local,
+  multicast) is refused before connecting.
+- **Installing.** "Download APK" in Chrome on the phone; the first time Android asks to allow installs from the
+  browser. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
+  whole APK: bundles (split APK, XAPK, APKS) are refused when added.
+- **Signature.** The first version sets the app's signature on the shelf. A new version signed with another
+  certificate does not become current: the card shows "signature changed" and "Accept the new signature" — such a
+  version will not install over the installed one, the app would have to be removed with its data. If the app came
+  from Google Play with another signature, remove it first.
+- **Versions** — as with IPAs: current, previous, pinned; "⋯" — check for update, pin, change source, upload a new
+  version as a file, remove from the shelf. Layout:
+  `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
+- **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore by `versionCode`, a link by
+  `ETag`, `Last-Modified`, `Content-Length`; uploaded files are not checked. The night's result ends with
+  "Android: обновлено N, без изменений M, ошибок K".
+- **Russian CA certificates.** The RuStore CDN and the Sber and VTB sites use certificates of the Russian Ministry of
+  Digital Development CA, which system roots do not trust. The APK downloader (and only it) takes extra certificates
+  from the `APPSHELF_SOURCES_CA` file; certificate checks are never disabled: Russian Trusted Root CA (`gu-st.ru`)
+  and, for Gazprombank, whose server sends no chain, the LiteSSL RSA CA 2025 intermediate. Without the file RuStore
+  downloads fail.
+- **Apache.** In the archive's `<Directory>` — `AddType application/vnd.android.package-archive .apk` and
+  `Content-Disposition: attachment` for `.apk` (with `application/zip` Chrome saves `.apk.zip`); for the upload
+  URLs — `LimitRequestBody 1100000000`. Uploads go to `TMPDIR=/var/lib/appshelf/tmp` (set in the `appshelf-web`
+  unit), not to `/tmp`.
+
+Hints for the phone are in the section's catalog: Samsung Auto Blocker, Huawei Pure Mode, Play Protect; from 2027
+Google requires developer verification for installs outside stores too.
+
 ## New shelf token
 
 Each Apple ID has its own random archive directory token, which is also part of install links and manifests. If a
@@ -222,7 +265,9 @@ the database it checks the directory, `app.ipa` of the recorded size, `icon.png`
 its links point at this shelf; `--deep` also compares the IPA's SHA-256 (saved on download) and the itemId, external
 version id and bundle id inside the IPA — it reads the whole archive. Separately: directories without database rows,
 `.partial` (normal during a download), an unfinished shelf move, archive directories that belong to no Apple ID.
-Apple IDs are reported by number, shelf tokens as `<токен>` or their first four characters. `--json` gives a
+Android shelves likewise: the version directory, an APK of the recorded size, `icon.png`, and with `--deep` the APK's
+SHA-256. Apple IDs and Android shelves are reported by number, shelf tokens as `<токен>` or their first four
+characters. `--json` gives a
 machine-readable report. Exit code: 0 — no problems, 1 — problems found, 2 — the check did not run (archive not
 mounted, no database).
 

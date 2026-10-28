@@ -52,7 +52,7 @@ class Server:
         return Conn()
 
 
-@pytest.mark.parametrize("addr", ["127.0.0.1", "10.1.2.3", "192.168.0.1", "169.254.1.1", "100.64.0.1", "::1",
+@pytest.mark.parametrize("addr", ["127.0.0.1", "10.1.2.3", "172.16.5.4", "169.254.1.1", "100.64.0.1", "::1",
                                   "fe80::1", "fc00::1", "0.0.0.0", "224.0.0.1", "::ffff:10.0.0.1"])
 def test_private_address_blocked_before_connect(addr):
     calls = []

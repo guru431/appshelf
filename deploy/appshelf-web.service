@@ -28,6 +28,9 @@ UMask=0077
 ProtectSystem=full
 ReadWritePaths=/etc/appshelf/accounts
 PrivateTmp=yes
+# Загрузка своего APK (до 1 ГБ): multipart-разбор кладёт файл во временный каталог — на диск данных, не в /tmp
+# (tmpfs в Debian 13); каталог создаёт deploy/install.sh
+Environment=TMPDIR=/var/lib/appshelf/tmp
 # Один процесс обязателен: пароль между шагами входа и обработчик заданий живут в его памяти
 ExecStart=/var/_sh/appshelf/.venv/bin/uvicorn --factory appshelf.web.app:main --uds /run/appshelf/web.sock --workers 1 --log-level warning
 Restart=on-failure

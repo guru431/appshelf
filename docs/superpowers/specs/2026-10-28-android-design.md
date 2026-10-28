@@ -1,6 +1,7 @@
 # Android: полки APK, вход через Google, публичная полка — дизайн
 
-**Дата:** 2026-10-28 · **Статус:** проект · **Основа:** [2026-10-05-appshelf-design.md](2026-10-05-appshelf-design.md),
+**Дата:** 2026-10-28 · **Статус:** этап 1 реализован (2026-10-28: схема 5, разбор APK, RuStore, прямая ссылка,
+свой файл, раздел Android, ночная проверка); этапы 2–6 — впереди · **Основа:** [2026-10-05-appshelf-design.md](2026-10-05-appshelf-design.md),
 [2026-10-08-multi-apple-id-design.md](2026-10-08-multi-apple-id-design.md),
 [2026-10-12-multi-signin-design.md](2026-10-12-multi-signin-design.md) (что здесь не сказано — как там)
 
