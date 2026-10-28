@@ -118,12 +118,12 @@ def test_foreign_apple_id_cannot_be_deleted(web, conn, clock):
 
 def test_apple_ids_grouped_by_person(web, conn, cfg, clock):
     page = web.client.get("/apple").text                   # один человек — как раньше: без групп и без «Убрать»
-    assert "Мои Apple ID" in page and 'action="/logout-all/1"' in page and "Удалить полку" in page
+    assert "Мои аккаунты" in page and 'action="/logout-all/1"' in page and "Удалить полку" in page
     assert "Убрать с этого устройства" not in page and '<span class="tag">' not in page
     shared = make_account(conn, clock, email="shared@example", role="member", legacy=False, name="Общий")
     sign_in(web.client, cfg, conn, clock, shared.user_id)
     main = web.client.get("/apple").text.split("<main>")[1]            # в шапке адреса тоже есть
-    assert "Apple ID на этом устройстве" in main
+    assert "Аккаунты на этом устройстве" in main
     assert main.index("Иван Петров") < main.index("owner@example") < main.index("Общий") < main.index("shared@example")
     assert '<span class="tag">владелец</span>' in main and '<span class="tag">участник</span>' in main
     for uid in (1, shared.user_id):

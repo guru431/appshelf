@@ -50,6 +50,11 @@ class LastOwnerAccount(Exception):
     """Последний Apple ID владельца: с ним удалился бы и владелец — сервер остался бы без него."""
 
 
+class LinkRefused(Exception):
+    """«Связать» не по правилам: у уходящего есть Apple ID (к другому участнику он не переходит никогда) или одного
+    из участников уже нет."""
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -364,6 +369,80 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
         if gone is not None:
             _drop_android_dirs(cfg, gone)
     return last
+
+
+def link_users(cfg: Config, c, keep_uid: int, gone_uid: int) -> None:
+    """«Связать» (spec 2026-10-28 §5): Google-аккаунты и Android-полка уходящего — остающемуся; уходящий удаляется
+    вместе со своими запасными ссылками входа. Под замком скачивания — store_apk не пишет в полки посреди переноса
+    (не дождались — AccountBusy); строки — одной транзакцией. Сбой переноса каталога — перенесённые каталоги
+    возвращаются назад, транзакция откатывается, исключение уходит наверх. Каталоги уходящей полки — после COMMIT.
+    У уходящего Apple ID — LinkRefused; у его полки идёт задание или не доделана смена токена — AccountBusy; архив
+    недоступен — ArchiveUnavailable."""
+    _archive(cfg)
+    try:
+        with hold(cfg.download_lock, REMOVE_LOCK_WAIT):
+            moved: list[tuple[Path, Path]] = []  # (откуда, куда) — для возврата при сбое
+            try:
+                with store.tx(c):
+                    drop = _link(cfg, c, keep_uid, gone_uid, moved)
+            except BaseException:
+                for src, dst in reversed(moved):
+                    try:
+                        os.replace(dst, src)
+                    except OSError as e:  # шара отвалилась совсем: каталог остался сиротой у остающегося
+                        print(f"appshelf: каталог {dst.name} не возвращён после сбоя связки: {e}", file=sys.stderr)
+                raise
+    except IpatoolError as e:  # не дождались замка скачивания
+        raise AccountBusy(f"участник №{gone_uid}") from e
+    if drop is not None:
+        _drop_android_dirs(cfg, drop)
+
+
+def _link(cfg: Config, c, keep_uid: int, gone_uid: int, moved: list) -> android_db.Shelf | None:
+    """Строки связки — в транзакции link_users. → полка уходящего, если её каталоги надо удалить после COMMIT."""
+    if people.get_user(c, keep_uid) is None or people.get_user(c, gone_uid) is None:
+        raise LinkRefused("участника уже нет")
+    if people.has_apple(c, gone_uid):
+        raise LinkRefused("у уходящего есть Apple ID")
+    src, dst = android_db.shelf_for_user(c, gone_uid), android_db.shelf_for_user(c, keep_uid)
+    if src is not None and (_android_running(c, src.id) or src.shelf_next or (dst is not None and dst.shelf_next)):
+        raise AccountBusy(f"Android-полка №{src.id}")
+    c.execute("UPDATE google_accounts SET user_id=? WHERE user_id=?", (keep_uid, gone_uid))
+    c.execute("DELETE FROM links WHERE user_id=? AND kind=?", (gone_uid, people.LOGIN))
+    drop = None
+    if src is not None and dst is None:  # у остающегося полки нет — полка переходит целиком, каталог на месте
+        c.execute("UPDATE android_shelves SET user_id=? WHERE id=?", (keep_uid, src.id))
+    elif src is not None:
+        _merge_shelves(cfg, c, src, dst, moved)
+        android_db.delete_shelf(c, src.id)  # остались совпавшие пакеты и задания — их строки прочь
+        drop = src
+    people.delete_user_row(c, gone_uid)
+    return drop
+
+
+def _merge_shelves(cfg: Config, c, src, dst, moved: list) -> None:
+    """Пакеты src, которых нет на dst: карточка, версии и ждущие задания — на dst, каталоги — в корень dst (занятое
+    строкой или на диске имя — android_db.version_dir). Совпавшие остаются у dst как были."""
+    src_root, dst_root = cfg.archive / src.shelf, cfg.archive / dst.shelf
+    theirs = {r["package"] for r in c.execute("SELECT package FROM android_apps WHERE shelf_id=?", (dst.id,))}
+    for (pkg,) in c.execute("SELECT package FROM android_apps WHERE shelf_id=?", (src.id,)).fetchall():
+        if pkg in theirs:
+            continue
+        c.execute("UPDATE android_apps SET shelf_id=? WHERE shelf_id=? AND package=?", (dst.id, src.id, pkg))
+        for v in c.execute("SELECT id, dir, version_code FROM android_versions WHERE shelf_id=? AND package=?",
+                           (src.id, pkg)).fetchall():
+            name = v["dir"]
+            if (dst_root / name).exists() or c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND dir=?",
+                                                       (dst.id, name)).fetchone() is not None:
+                name = android_db.version_dir(c, dst.id, dst_root, pkg, v["version_code"])
+            if android_db.ANDROID_DIR_RE.match(v["dir"]) and (src_root / v["dir"]).is_dir():
+                dst_root.mkdir(exist_ok=True)
+                dst_root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
+                os.replace(src_root / v["dir"], dst_root / name)
+                moved.append((src_root / v["dir"], dst_root / name))
+            c.execute("UPDATE android_versions SET shelf_id=?, dir=? WHERE id=?", (dst.id, name, v["id"]))
+    c.execute(f"UPDATE android_jobs SET shelf_id=? WHERE shelf_id=? AND status='queued' "
+              f"AND package NOT IN ({','.join('?' * len(theirs))})", (dst.id, src.id, *theirs))
 
 
 def _android_running(c, shelf_id: int) -> bool:

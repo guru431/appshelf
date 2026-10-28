@@ -5,6 +5,7 @@
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
 {% if refused %}<div class="bar"><a class="btn secondary" href="{{ cancel }}">Назад</a></div>
 {% else %}<form method="post" action="{{ action }}">
+  {% for name, value in (hidden or {}).items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
   {% if option %}<p><label class="check"><input type="checkbox" name="{{ option.name }}" value="1"
     {%- if option.checked %} checked{% endif %}>{{ option.text }}</label></p>{% endif %}
   <div class="bar"><button class="danger">{{ button }}</button><a class="btn secondary" href="{{ cancel }}">Отмена</a></div></form>{% endif %}

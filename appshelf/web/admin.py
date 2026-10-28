@@ -29,7 +29,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         with w.conn() as c:
             invites = people.list_invites(c)
             persons = [{"user": u, "accounts": [{"a": a, "size": store.shelf_size(c, a.id)}
-                                                for a in people.accounts_of(c, u.id)]}
+                                                for a in people.accounts_of(c, u.id)],
+                        "google": people.google_of(c, u.id)}
                        for u in people.list_users(c)]
         return w.page(request, "admin.html", "admin", invites=invites, persons=persons, created_link=created_link)
 
@@ -38,7 +39,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         удалённый зарегистрируется по той же ссылке снова. Пришёл им один — галочка «отключить» стоит сразу."""
         with w.conn() as c:
             user = people.get_user(c, uid)
-            emails = ", ".join(a.email for a in people.accounts_of(c, uid))
+            emails = ", ".join([a.email for a in people.accounts_of(c, uid)] +
+                               [f"Google {g.email}" for g in people.google_of(c, uid)])
             invite = people.invite_of(c, uid)
         option = None
         if invite is not None and not invite["disabled_at"]:
@@ -47,7 +49,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                       "text": f"Отключить приглашение «{invite['label']}» — по нему можно зарегистрироваться снова"
                               + (f" (им пришли ещё {others}: для новых участников создайте другое)" if others else "")}
         return w.page(request, "confirm.html", "admin", status_code,
-                      question=f"Удалить участника «{user.name}» ({emails})? Полки, история, вход этих Apple ID "
+                      question=f"Удалить участника «{user.name}» ({emails})? Полки, история, вход этих аккаунтов "
                                "на сервере и доступ к панели удалятся.",
                       action=f"/admin/users/{uid}/delete", button="Удалить", cancel="/admin", error=error,
                       refused=refused, option=option)

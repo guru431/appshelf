@@ -218,6 +218,23 @@ def mark_google_login(c, gid: int, email: str, name: str, now: str) -> None:
     c.execute("UPDATE google_accounts SET email=?, name=?, last_login_at=? WHERE id=?", (email, name, now, gid))
 
 
+def link_roles(c, a_uid: int, b_uid: int, order: list[int]) -> tuple[int, int] | None:
+    """«Связать» (spec 2026-10-28 §5): (остаётся, уходит) — решает сервер, не человек. Остаётся участник с Apple ID
+    (Apple ID никогда не переходит к другому), без Apple ID у обоих — владелец, иначе тот, чья запись в cookie
+    раньше (order). Apple ID у обоих или участник один — None: их не связать (решение 2026-10-13)."""
+    if a_uid == b_uid:
+        return None
+    a_apple, b_apple = has_apple(c, a_uid), has_apple(c, b_uid)
+    if a_apple and b_apple:
+        return None
+    if a_apple != b_apple:
+        return (a_uid, b_uid) if a_apple else (b_uid, a_uid)
+    roles = {uid: get_user(c, uid).role for uid in (a_uid, b_uid)}
+    if (roles[a_uid] == OWNER) != (roles[b_uid] == OWNER):
+        return (a_uid, b_uid) if roles[a_uid] == OWNER else (b_uid, a_uid)
+    return (a_uid, b_uid) if order.index(a_uid) < order.index(b_uid) else (b_uid, a_uid)
+
+
 # --- ссылки ------------------------------------------------------------------
 
 def hash_token(token: str) -> str:

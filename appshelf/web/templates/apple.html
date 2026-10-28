@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block main %}
-<h2>{{ 'Apple ID на этом устройстве' if groups | length > 1 else 'Мои Apple ID' }}</h2>
+<h2>{{ 'Аккаунты на этом устройстве' if groups | length > 1 else 'Мои аккаунты' }}</h2>
 {% for g in groups %}
 {% if groups | length > 1 %}<p class="sub">{{ g.user.name }} <span class="tag">{{ 'владелец' if g.user.role == 'owner' else 'участник' }}</span></p>{% endif %}
 <div class="card list">
 {% for r in g.rows %}
 <div class="row">
-  <div class="body"><div class="title">{{ r.a.email }}</div><div class="meta">{{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
+  <div class="body"><div class="title">{{ r.a.email }}</div><div class="meta">Apple ID · {{ r.a.name }}{% if r.a.storefront %} · {{ r.a.storefront }}{% endif %} ·
     {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}<span class="err">вход истёк</span>{% else %}нет входа{% endif %}
     {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ r.size | gb }} ГБ</div></div>
   <div class="act"><a class="btn sm tint" href="/login?{{ r.relogin }}">Войти заново</a><a class="btn sm danger" href="/apple/{{ r.a.id }}/delete">Удалить полку</a></div>
@@ -14,13 +14,35 @@
 {% else %}
 <div class="row hint">Apple ID нет: Apple-раздел пуст, пока его не добавить.</div>
 {% endfor %}
+{% for x in g.google %}
+<div class="row">
+  <div class="body"><div class="title">{{ x.email }}</div><div class="meta">Google{% if x.name %} · {{ x.name }}{% endif %} · последний вход {{ x.last_login_at[:10] or '—' }}</div></div>
+  <div class="act"><a class="btn sm danger" href="/google/{{ x.id }}/delete">Удалить</a></div>
+</div>
+{% endfor %}
 </div>
 <div class="bar">
   {% if groups | length > 1 %}<form method="post" action="/logout/{{ g.user.id }}"><button class="secondary">Убрать с этого устройства</button></form>{% endif %}
   <form method="post" action="/logout-all/{{ g.user.id }}"><button class="secondary">Выйти на всех устройствах</button></form>
 </div>
 {% endfor %}
-<p><a class="btn" href="/apple/add">Добавить Apple ID</a></p>
-<p class="hint">Вход Apple ID открывает полки его участника; остальные подключаются на этом устройстве отдельно —
-  «Добавить Apple ID». Пароль на сервере не сохраняется.</p>
+<div class="bar"><a class="btn" href="/apple/add">Добавить Apple ID</a>
+  {%- if cfg.google_enabled %}<a class="btn secondary" href="/google/start?{{ {'add': 1, 'next': '/apple'} | urlencode }}">Добавить Google</a>{% endif %}</div>
+<p class="hint">Вход любым аккаунтом открывает полки его участника; остальные подключаются на этом устройстве отдельно —
+  «Добавить Apple ID»{% if cfg.google_enabled %} или «Добавить Google»{% endif %}: новый аккаунт станет отдельным участником.
+  Пароли на сервере не сохраняются{% if cfg.google_enabled %}, пароль Google сервер не видит вовсе{% endif %}.</p>
+{% if links %}
+<h2>Связать</h2>
+<div class="card list">
+{% for l in links %}
+<div class="row">
+  <div class="body"><div class="title">«{{ l.gone.name }}» → «{{ l.keep.name }}»</div><div class="meta">Google-аккаунты и Android-полка перейдут к «{{ l.keep.name }}»</div></div>
+  <div class="act"><a class="btn sm tint" href="/apple/link?a={{ l.keep.id }}&amp;b={{ l.gone.id }}">Связать</a></div>
+</div>
+{% endfor %}
+</div>
+<p class="hint">Связка — для своих аккаунтов: вход любым из них откроет все полки участника. Её не отменить; Apple ID к
+  другому участнику не переходит, двух участников с Apple ID не связать. Аккаунт, которым пользуются несколько человек,
+  не связывайте.</p>
+{% endif %}
 {% endblock %}
