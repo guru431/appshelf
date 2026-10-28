@@ -5,7 +5,7 @@ import hashlib
 import hmac
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 GB = 1024 ** 3
@@ -25,6 +25,13 @@ class Config:
     owner_email: str = ""        # APPSHELF_OWNER: Apple ID владельца, в нижнем регистре
     backup_dir: Path | None = None  # APPSHELF_BACKUP_DIR: ночные снимки базы (appshelf backup --daily)
     sources_ca: Path | None = None  # APPSHELF_SOURCES_CA: PEM доп. корней (НУЦ) — только для загрузчика источников APK
+    google_client_id: str = ""      # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET: клиент OAuth входа через Google; секрет —
+    google_client_secret: str = field(default="", repr=False)  # только в appshelf.env и запросе к token endpoint
+
+    @property
+    def google_enabled(self) -> bool:
+        """Нет обоих — кнопок Google нет, /google/* — 404."""
+        return bool(self.google_client_id and self.google_client_secret)
 
     @property
     def db(self) -> Path:
@@ -99,4 +106,6 @@ def from_env(env=None) -> Config:
         owner_email=env.get("APPSHELF_OWNER", "").strip().lower(),
         backup_dir=Path(env["APPSHELF_BACKUP_DIR"]) if env.get("APPSHELF_BACKUP_DIR") else None,
         sources_ca=Path(env["APPSHELF_SOURCES_CA"]) if env.get("APPSHELF_SOURCES_CA") else None,
+        google_client_id=env.get("GOOGLE_CLIENT_ID", "").strip(),
+        google_client_secret=env.get("GOOGLE_CLIENT_SECRET", "").strip(),
     )

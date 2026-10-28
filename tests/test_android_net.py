@@ -174,6 +174,19 @@ def test_json_get_and_post():
     assert (m2, json.loads(b2), h2["Content-Type"]) == ("POST", {"appId": 5}, "application/json")
 
 
+def test_form_posts_urlencoded_and_reads_400():
+    server = Server(Resp(200, {}, b'{"id_token": "x"}'), Resp(400, {}, b'{"error": "invalid_grant"}'))
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=server)
+    assert http.form("https://oauth.example/token", {"code": "a b&c", "grant_type": "x"}) == {"id_token": "x"}
+    assert http.form("https://oauth.example/token", {"code": "z"}) == {"error": "invalid_grant"}
+    _, _, method, target, body, headers = server.requests[0]
+    assert (method, target, body) == ("POST", "/token", b"code=a+b%26c&grant_type=x")
+    assert headers["Content-Type"] == "application/x-www-form-urlencoded"
+    for resp in (Resp(500, {}, b'{"error": "x"}'), Resp(200, {}, b"not json")):
+        with pytest.raises(net.FetchError):
+            net.Http(resolve=fake_resolve("8.8.8.8"), connect=Server(resp)).form("https://oauth.example/t", {})
+
+
 def test_json_errors():
     for resp in (Resp(400, {}, b'{"code": "BAD"}'), Resp(200, {}, b"not json"),
                  Resp(200, {}, b"[" * (net.MAX_JSON + 1))):

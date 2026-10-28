@@ -123,13 +123,19 @@ class Http:
         try:
             if resp.status != 200:
                 raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
-            raw = _read(resp, MAX_JSON + 1)
-            if len(raw) > MAX_JSON:
-                raise FetchError("ответ источника слишком большой")
-            try:
-                return jsonlib.loads(raw)
-            except ValueError:
-                raise FetchError("источник ответил не JSON") from None
+            return _json_body(resp)
+        finally:
+            _close(resp, conn)
+
+    def form(self, url: str, data: dict, *, headers: dict | None = None) -> object:
+        """POST application/x-www-form-urlencoded, ответ — JSON; у статуса 400 тело тоже читается: OAuth кладёт в
+        него error (вход через Google)."""
+        hdrs = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
+        resp, conn, final = self._request("POST", url, hdrs, urllib.parse.urlencode(data).encode())
+        try:
+            if resp.status not in (200, 400):
+                raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
+            return _json_body(resp)
         finally:
             _close(resp, conn)
 
@@ -201,6 +207,16 @@ def _read(resp, n: int) -> bytes:
         return resp.read(n)
     except (OSError, http.client.HTTPException) as e:
         raise FetchError(f"обрыв при скачивании: {e.__class__.__name__}") from None
+
+
+def _json_body(resp) -> object:
+    raw = _read(resp, MAX_JSON + 1)
+    if len(raw) > MAX_JSON:
+        raise FetchError("ответ источника слишком большой")
+    try:
+        return jsonlib.loads(raw)
+    except ValueError:
+        raise FetchError("источник ответил не JSON") from None
 
 
 def _close(resp, conn) -> None:
