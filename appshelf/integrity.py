@@ -4,7 +4,8 @@
 IDEAS-archive.md). По каждой строке versions — каталог, файлы, размер, ссылки manifest; deep — ещё SHA-256 и
 содержимое IPA. Сироты — каталоги без строк, .partial, незавершённые переносы, чужие каталоги архива.
 В отчёте Apple ID — по номеру (accounts.id), не по почте; токенов полок нет: каталог полки — «<токен>»,
-неизвестный каталог архива — маской."""
+неизвестный каталог архива — маской. Android-полки (spec 2026-10-28 §7) — по номеру полки: строки android_versions
+против каталогов <пакет>-<versionCode>, deep — ещё SHA-256 APK."""
 from __future__ import annotations
 
 import os
@@ -18,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import ipa, jobs, people, store
+from .android import db as android_db, fetch as android_fetch
 from .config import TOKEN_RE, Config
 
 DAILY_RE = re.compile(r"^appshelf-\d{4}-\d{2}-\d{2}\.db$")
@@ -38,6 +40,9 @@ KINDS = {  # вид проблемы → подпись в кратком ито
     "ipa_item_id": "itemId в IPA не совпадает с базой",
     "ipa_external_id": "external version id в IPA не совпадает с базой",
     "ipa_bundle_id": "bundle id в IPA не совпадает с manifest.plist",
+    "no_apk": "нет файла APK",
+    "apk_size": "размер APK не совпадает с базой",
+    "apk_sha256": "SHA-256 APK не совпадает с базой",
     "orphan": "в полке, но нет строки в базе",
     "partial": "незавершённое скачивание (.partial)",
     "shelf_next": "незавершённый перенос каталога полки (доделает старт appshelf-web)",
@@ -57,9 +62,10 @@ class BackupError(Exception):
 @dataclass(frozen=True)
 class Problem:
     kind: str
-    account: int | None  # accounts.id; None — архив целиком
+    account: int | None  # accounts.id; None — архив целиком или Android-полка
     path: str = ""       # от каталога полки: <dir>/app.ipa; у unknown — маска имени
     detail: str = ""
+    shelf: int | None = None  # android_shelves.id — проблема Android-полки
 
 
 @dataclass
@@ -68,23 +74,29 @@ class Report:
     versions: int = 0
     accounts: int = 0
     no_sha256: int = 0   # deep: версии без сохранённой SHA-256 (скачаны до версии 4 схемы)
+    apks: int = 0
+    android_shelves: int = 0
     problems: list[Problem] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.problems
 
-    def add(self, kind: str, account: int | None, path: str = "", detail: str = "") -> None:
+    def add(self, kind: str, account: int | None, path: str = "", detail: str = "", shelf: int | None = None) -> None:
         # страховка: ни одного токена полки в отчёте, что бы ни лежало в именах и manifest
-        self.problems.append(Problem(kind, account, TOKEN_RE.sub("<токен>", path), TOKEN_RE.sub("<токен>", detail)))
+        self.problems.append(Problem(kind, account, TOKEN_RE.sub("<токен>", path), TOKEN_RE.sub("<токен>", detail),
+                                     shelf))
 
     def as_dict(self) -> dict:
         return {"ok": self.ok, "deep": self.deep, "versions": self.versions, "accounts": self.accounts,
-                "no_sha256": self.no_sha256, "counts": dict(Counter(p.kind for p in self.problems)),
+                "no_sha256": self.no_sha256, "apks": self.apks, "android_shelves": self.android_shelves,
+                "counts": dict(Counter(p.kind for p in self.problems)),
                 "problems": [asdict(p) for p in self.problems]}
 
     def text(self) -> str:
         head = f"проверено версий: {self.versions}, Apple ID: {self.accounts}"
+        if self.android_shelves:
+            head += f"; APK: {self.apks}, Android-полок: {self.android_shelves}"
         head += f"; без сохранённой SHA-256: {self.no_sha256}" if self.deep else \
             "; SHA-256 и содержимое IPA не проверялись (--deep)"
         if self.ok:
@@ -98,7 +110,7 @@ class Report:
                 continue
             lines.append(f"{KINDS[kind]} — {len(by_kind[kind])}:")
             for p in by_kind[kind]:
-                who = f"Apple ID №{p.account}: " if p.account is not None else ""
+                who = f"Apple ID №{p.account}: " if p.account is not None else                     f"Android-полка №{p.shelf}: " if p.shelf is not None else ""
                 lines.append(f"  {who}{p.path}{' — ' + p.detail if p.detail else ''}")
         return "\n".join(lines)
 
@@ -140,6 +152,16 @@ def check(cfg: Config, c, deep: bool = False) -> Report:
         _shelf(cfg, acct, rows.pop(acct.id, []), deep, rep)
     for aid, vs in rows.items():
         rep.add("no_account", aid, detail=f"строк: {len(vs)}")
+    apks = defaultdict(list)
+    for r in c.execute("SELECT * FROM android_versions ORDER BY shelf_id, package, id"):
+        apks[r["shelf_id"]].append(r)
+        rep.apks += 1
+    for shelf in android_db.all_shelves(c):
+        rep.android_shelves += 1
+        owned.add(shelf.shelf)
+        if shelf.shelf_next:
+            owned.add(shelf.shelf_next)
+        _android_shelf(cfg, shelf, apks.pop(shelf.id, []), deep, rep)
     for p in sorted(cfg.archive.iterdir()):
         if p.name not in owned:
             rep.add("unknown", None, p.name[:4] + "…")
@@ -222,6 +244,42 @@ def _deep(app: Path, v, bundle: str | None, aid: int, path: str, rep: Report) ->
         rep.add("ipa_external_id", aid, path, f"в IPA {info.external_version_id}, в базе {v['external_version_id']}")
     if bundle is not None and info.bundle_id != bundle:
         rep.add("ipa_bundle_id", aid, path, f"в IPA {info.bundle_id}, в manifest {bundle}")
+
+
+def _android_shelf(cfg: Config, shelf, versions: list, deep: bool, rep: Report) -> None:
+    root = cfg.archive / shelf.shelf
+    if not root.is_dir():
+        if versions:
+            rep.add("no_shelf", None, detail=f"версий в базе: {len(versions)}", shelf=shelf.id)
+        return
+    for v in versions:
+        _apk(root, shelf.id, v, deep, rep)
+    known = {v["dir"] for v in versions}
+    for p in sorted(root.iterdir()):
+        if p.name not in known:
+            rep.add("partial" if p.name.startswith(".") and p.name.endswith(".partial") else "orphan", None, p.name,
+                    shelf=shelf.id)
+
+
+def _apk(root: Path, sid: int, v, deep: bool, rep: Report) -> None:
+    d = v["dir"]
+    if not android_db.ANDROID_DIR_RE.match(d):  # имя из базы — к пути не приклеиваем без проверки формы
+        rep.add("bad_dir", None, d, shelf=sid)
+        return
+    vd = root / d
+    if not vd.is_dir():
+        rep.add("no_dir", None, d, shelf=sid)
+        return
+    name = android_fetch.apk_name(v["package"], v["version_name"])
+    f = vd / name
+    if not f.is_file():
+        rep.add("no_apk", None, f"{d}/{name}", shelf=sid)
+    elif (size := f.stat().st_size) != v["size"]:
+        rep.add("apk_size", None, f"{d}/{name}", f"на диске {size}, в базе {v['size']}", shelf=sid)
+    elif deep and ipa.sha256(f) != v["sha256"]:
+        rep.add("apk_sha256", None, f"{d}/{name}", shelf=sid)
+    if not (vd / "icon.png").is_file():
+        rep.add("no_icon", None, f"{d}/icon.png", shelf=sid)
 
 
 def backup(db: Path, out: Path) -> Path:

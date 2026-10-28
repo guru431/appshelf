@@ -276,3 +276,68 @@ def test_cli_check_reports_unavailable_archive(monkeypatch, tmp_path, clock, cap
     cfg.archive.rename(tmp_path / "gone")
     assert cli.main(["check"]) == 2
     assert "недоступен" in capsys.readouterr().err
+
+
+# --- Android-полки -------------------------------------------------------------
+
+def android_shelf(ctx, cfg, conn, clock, tmp_path):
+    """Android-полка владельца с одной версией — настоящий конвейер (fetch.run_job), как на сервере."""
+    from apk_factory import make_apk
+    from appshelf.android import db, fetch
+    owner(conn, clock)
+    shelf = db.ensure_shelf(conn, 1, clock.iso())
+    ctx.sources.apks["https://a.example/x.apk"] = make_apk(tmp_path / "x.apk")
+    db.enqueue(conn, shelf.id, "add", clock.iso(), payload={"source": "link", "ref": "https://a.example/x.apk",
+                                                            "name": ""})
+    fetch.run_job(ctx.env, conn, db.take_job(conn))
+    return shelf, cfg.archive / shelf.shelf
+
+
+def test_android_shelf_is_not_unknown(ctx, cfg, conn, clock, tmp_path):
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    for deep in (False, True):
+        rep = integrity.check(cfg, conn, deep=deep)
+        assert rep.ok, rep.text()
+        assert (rep.apks, rep.android_shelves) == (1, 1)
+    assert "APK: 1, Android-полок: 1" in rep.text()
+    assert_private(rep, shelf.shelf)
+
+
+def test_android_orphan_and_partial(ctx, cfg, conn, clock, tmp_path):
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    (root / "ru.zzz-1").mkdir()
+    (root / ".ru.example.app-2.partial").mkdir()
+    conn.execute("UPDATE android_shelves SET shelf_next='fedcba9876543210fedcba9876543210'")
+    (cfg.archive / "fedcba9876543210fedcba9876543210").mkdir()
+    rep = integrity.check(cfg, conn)
+    assert kinds(rep) == ["orphan", "partial"]
+    assert {p.path for p in rep.problems} == {"ru.zzz-1", ".ru.example.app-2.partial"}
+    assert all(p.shelf == shelf.id and p.account is None for p in rep.problems)
+    assert f"Android-полка №{shelf.id}: ru.zzz-1" in rep.text()
+
+
+def test_android_missing_apk(ctx, cfg, conn, clock, tmp_path):
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    (root / "ru.example.app-1" / "ru.example.app-1.0.apk").unlink()
+    (root / "ru.example.app-1" / "icon.png").unlink()
+    assert kinds(integrity.check(cfg, conn)) == ["no_apk", "no_icon"]
+    shutil.rmtree(root / "ru.example.app-1")
+    assert kinds(integrity.check(cfg, conn)) == ["no_dir"]
+    conn.execute("UPDATE android_versions SET dir='../x'")
+    assert kinds(integrity.check(cfg, conn)) == ["bad_dir"]
+    shutil.rmtree(root)
+    rep = integrity.check(cfg, conn)
+    assert kinds(rep) == ["no_shelf"] and rep.problems[0].shelf == shelf.id
+
+
+def test_android_deep_sha_mismatch(ctx, cfg, conn, clock, tmp_path):
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    f = root / "ru.example.app-1" / "ru.example.app-1.0.apk"
+    data = bytearray(f.read_bytes())
+    data[-1] ^= 0xFF                                   # тот же размер, другое содержимое
+    f.write_bytes(bytes(data))
+    assert integrity.check(cfg, conn).ok
+    assert kinds(integrity.check(cfg, conn, deep=True)) == ["apk_sha256"]
+    with open(f, "ab") as out:
+        out.write(b"x")
+    assert kinds(integrity.check(cfg, conn)) == ["apk_size"]
