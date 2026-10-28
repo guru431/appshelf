@@ -313,3 +313,14 @@ def test_store_apk_on_deleted_shelf_is_app_gone(ctx, cfg, conn, clock, tmp_path)
         fetch.store_apk(ctx.env, conn, shelf, make_apk(tmp_path / "x.apk"), source="link", source_ref="u",
                         expected_package=None, expected_signer="", name_hint="", icon=None)
     assert db.get_app(conn, shelf.id, PKG) is None
+
+
+def test_upload_of_same_version_is_error_and_card_not_stuck(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    up = cfg.tmp_dir / "web" / "up-same.apk"
+    up.parent.mkdir(parents=True, exist_ok=True)
+    make_apk(up)
+    job = run(ctx, conn, shelf, "upload", clock, path=str(up), name="", package=PKG)
+    assert job["status"] == "error" and "уже на полке" in job["error"]
+    app = db.get_app(conn, shelf.id, PKG)
+    assert app["status"] == "ok" and "уже на полке" in app["last_error"] and versions(conn, shelf) == {"current": 1}

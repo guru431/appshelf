@@ -197,9 +197,11 @@ def run_job(env, c, job) -> None:
         elif job["kind"] == "upload":
             with jobs.hold(env.cfg.download_lock):
                 _space(env, c)
-                store_apk(env, c, shelf, Path(payload["path"]), source="upload", source_ref="",
-                          expected_package=package or None, expected_signer="", name_hint=payload.get("name", ""),
-                          icon=None)
+                _, result = store_apk(env, c, shelf, Path(payload["path"]), source="upload", source_ref="",
+                                      expected_package=package or None, expected_signer="",
+                                      name_hint=payload.get("name", ""), icon=None)
+            if result == "same":  # файл не лёг на полку — человек должен это увидеть, а карточка — не «скачивается»
+                raise apk.ApkError("эта или более новая версия уже на полке — загрузите версию новее")
         else:
             app = db.get_app(c, shelf.id, package)
             if app is None:
