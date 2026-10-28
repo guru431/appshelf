@@ -8,6 +8,7 @@
 - Дизайн `docs/superpowers/specs/2026-10-05-appshelf-design.md`
 - Вход и несколько Apple ID: docs/superpowers/specs/2026-10-08-multi-apple-id-design.md
 - Несколько участников в одном браузере: docs/superpowers/specs/2026-10-12-multi-signin-design.md
+- Android-полки, вход Google, публичная полка: docs/superpowers/specs/2026-10-28-android-design.md
 - Пакет `appshelf/` (FastAPI `web/app.py:main`, ночная проверка `python -m appshelf nightly`)
 - Форк ipatool-cpp: `ipatool/UPSTREAM`, `ipatool/patches/`, сборка `deploy/build-ipatool.sh`
 - Боевые значения (хост, домен, архив, мониторинг) — `.env` (не в git) и вики проекта
@@ -16,7 +17,7 @@
 - Репозиторий публичный (GitHub): внутренних имён, адресов, путей и учётных данных в git нет.
 - Пароль Apple ID не сохраняется нигде: в ipatool — только stdin, в appshelf-web — память ≤ 10 минут.
 - ipatool — только от пользователя `appshelf` с `HOME=/etc/appshelf/accounts/<id>` (и `IPATOOL_DEVICE_MAC` из `accounts.device_mac`, если не пуст): HOME выбирает учётку, шифрование привязано к machine-id, у root — ещё к product_uuid.
-- Вход в панель — Apple ID; новые Apple ID — по приглашению владельца или из «Добавить» вошедшего участника, всегда отдельным участником; у каждого Apple ID своя полка и свой HOME ipatool.
+- Вход в панель — Apple ID или Google-аккаунт; новые — по приглашению владельца или из «Добавить» вошедшего участника, всегда отдельным участником; у каждого Apple ID своя полка и свой HOME ipatool. Google-аккаунт к другому участнику — только «Связать»; Apple ID не переходит никогда. `GOOGLE_CLIENT_SECRET` — только в `/etc/appshelf/appshelf.env`.
 - appshelf-web — один процесс uvicorn; второй потеряет пароль между шагами входа.
 - PUB_TOKEN не печатать и не коммитить.
 - Тесты — на Windows (`.venv/Scripts/python -m pytest -q`), `integration` ходит на сервер по SSH (`.env`).

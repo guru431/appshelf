@@ -129,12 +129,13 @@ installs the binary on the server only if the server has all its libraries.
 
 You sign in to the panel with an Apple ID and its password, then a 2FA code. The password is not stored: ipatool
 gets it via stdin, appshelf-web keeps it in memory for at most 10 minutes. The sign-in is remembered for a year;
-"Sign out on all devices" (the "Apple ID" page) revokes all of the person's cookies.
+"Sign out on all devices" (the "Аккаунты" (Accounts) page) revokes all of the person's cookies. You can also sign in
+with a Google account — see "Sign in with Google" below.
 
 A new Apple ID gets onto the server only through an invite link: "Участники" (People) → "Create link". The link
 works until it is disabled or deleted — one for everyone or one per person; it is asked for once, on the first
 sign-in. A disabled link stays in the list, a deleted one disappears from it.
-A signed-in person adds another Apple ID themselves, without an invite: "Apple ID" → "Add Apple ID". The new Apple
+A signed-in person adds another Apple ID themselves, without an invite: "Accounts" → "Add Apple ID". The new Apple
 ID is not attached to anyone — it becomes a separate person: its shelf is connected in this browser right away, on
 other devices you sign in with it separately, and the owner gets an email about the new person. Each Apple ID has
 its own shelf: history, catalog, IPAs (an IPA carries the buyer's data and installs on an iPhone signed in to the
@@ -143,7 +144,7 @@ App Store with the same Apple ID).
 One browser can be signed in as several people at once: every further sign-in — the sign-in form, "Add Apple ID"
 with another person's Apple ID, an invite, a fallback link — adds that person to those already signed in, and the
 Apple ID menu in the header switches between everyone's shelves. This is how a shared Apple ID is used: it stays a
-separate person, and signing in with it alone opens only its shelf. "Remove from this device" (the "Apple ID" page)
+separate person, and signing in with it alone opens only its shelf. "Remove from this device" (the "Accounts" page)
 removes one person from the browser, "Sign out" (the same menu) removes all; "Sign out on all devices" revokes one
 person everywhere.
 
@@ -171,6 +172,43 @@ The ipatool account is the file `$HOME/.ipatool/account`, and each launch requir
   decrypted by the service, and one saved by the service cannot be decrypted by root. On another machine
   (different `machine-id`) none of them decrypt.
 - The account files belong to `appshelf` with `0700`/`0600`: no other user except root can read them.
+
+### Sign in with Google
+
+"Войти через Google" (Sign in with Google) on the sign-in page uses OpenID Connect (Authorization Code + PKCE). The
+Google password is typed on Google's page: the server gets only the account's identity (`sub`, address, name) — no
+password and no access to Google. The button appears when `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set in
+`appshelf.env`; without them `/google/*` answers 404.
+
+The owner creates the OAuth client once (free; `openid email profile` needs no Google app verification):
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → a new project.
+2. "APIs & Services" → "OAuth consent screen": user type External, publishing status In production; scopes — only
+   `openid`, `email`, `profile` (none sensitive).
+3. "Credentials" → "Create credentials" → "OAuth client ID": type Web application, Authorized redirect URI — exactly
+   `<site address>/google/callback` (`APPSHELF_PUBLIC_BASE` + `/google/callback`).
+4. Client ID and Client secret go to `/etc/appshelf/appshelf.env` (`GOOGLE_CLIENT_ID=`, `GOOGLE_CLIENT_SECRET=`; the
+   secret lives only there), then `sudo systemctl restart appshelf-web`.
+
+As with Apple IDs, a new Google account gets onto the server only through an invite link or from "Accounts" →
+"Добавить Google" (Add Google) of a signed-in person — and always as a separate person; the owner gets an email.
+Signing in adds the person to those already signed in to the browser. A person with only a Google account has an
+empty Apple section — "Add Apple ID" on the "Accounts" page. The Android section shows the shelf of one of the
+signed-in people; the choice is in the section's header menu, next to "Публичная" (Public).
+
+**"Связать" (Link).** When two people are signed in to a browser and at least one of them has no Apple ID, the
+"Accounts" page offers "Link": the second person's Google accounts and Android shelf move to the first, the second
+person is deleted, and signing in with any of their accounts opens all of the first person's shelves. The server
+decides who stays: the person with an Apple ID; if neither has one — the owner, otherwise whoever signed in to this
+browser first. An app present on both Android shelves stays with the one who stays. A link cannot be undone. Two
+people who each have an Apple ID cannot be linked, and an Apple ID never moves to another person: a shared Apple ID
+would open someone else's personal shelves. Do not link an account several people use.
+
+To delete a Google account — "Accounts" → "Удалить" (Delete); if it was the person's last account, the person is
+deleted together with their Android shelf. A deleted Google account can be added again — as a separate person.
+
+An iPhone Home Screen web app keeps its cookies apart from Safari, and the return from Google may land in Safari
+instead of the web app; then sign in there with an Apple ID or open the page in Safari.
 
 ## Removed apps
 
@@ -213,7 +251,7 @@ The same server also keeps Android shelves: the **Android** section of the panel
 the header. From an Android phone the panel opens right in it, from an iPhone in Apple, from a computer in the
 section opened last. An Android shelf belongs to a person, not to an Apple ID: an APK is not tied to any account.
 Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/superpowers/specs/2026-10-28-android-design.md)
-(stages 1–2 are done: RuStore, direct link, uploaded file, public shelf by PIN).
+(stages 1–3 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking).
 
 - **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
   paid apps are unavailable), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own

@@ -4,13 +4,16 @@ IPA из истории покупок основного Apple ID владел�
 Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026-10-05-appshelf-design.md`.
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
 Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
-Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–2 реализованы).
+Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–3 реализованы;
+этап 3 — вход Google и «Связать» — `docs/superpowers/plans/2026-10-28-android-stage3.md`).
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
   `people.py` (люди, Apple ID, ссылки), `jobs.py` (задания, обработчик, общий путь скачивания), `nightly.py`,
   `removed.py` (справочник удалённых из App Store), `integrity.py` (проверка целостности полок, снимки базы),
-  `notify.py`, `webauth.py` (cookie вошедших людей), `web/` (вход — `signin.py`, раздел Android — `android.py`), `cli.py`.
+  `notify.py`, `webauth.py` (cookie вошедших людей), `google.py` (OpenID Connect входа через Google), `web/` (вход —
+  `signin.py`, вход Google — `google_signin.py`, «Аккаунты» и «Связать» — `accounts.py`, раздел Android — `android.py`),
+  `cli.py`.
 - `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
   (HTTP источников: только https и глобальные адреса), `rustore.py`, `sources.py`, `fetch.py` (конвейер и задания),
   `pin.py` (PIN публичной полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
@@ -47,7 +50,12 @@ Android-полки, вход Google, публичная полка — `docs/sup
   вошедшего участника. `APPSHELF_OWNER` и адреса участников — только в `/etc/appshelf/appshelf.env` и базе, не в git.
 - Вход добавляет участника к вошедшим в браузере, а не заменяет их (cookie — список записей, по одной на
   участника). Каждый Apple ID — отдельный участник: общий — тоже, новый из «Добавить» — тоже (решение 2026-10-13).
-  К чужому участнику Apple ID не привязывать и не переносить, иначе вход им откроет и личные полки.
+  К чужому участнику Apple ID не привязывать и не переносить, иначе вход им откроет и личные полки. Новый
+  Google-аккаунт — тоже всегда новый участник; к другому участнику он переходит только через «Связать»: оба вошли в
+  этом браузере, хотя бы у одного нет Apple ID, остаётся участник с Apple ID (`people.link_roles`) — Apple ID не
+  переходит никогда (`jobs.link_users` → `LinkRefused`).
+- `GOOGLE_CLIENT_SECRET` — только в `/etc/appshelf/appshelf.env`: не в git, журнале, ответах, cookie, тексте ошибок.
+  Ключ Google-аккаунта — `sub`; адрес и имя — только для показа и писем.
 - Каталог кода на сервере получает групповые права по расписанию — данные и секреты там не держать. Код, `.venv`
   и `bin/` — root (`deploy/install.sh`): appshelf только читает и исполняет, иначе его код стал бы root при выкладке.
 - Патчи форка — LF (`*.patch -text`); правка — в `.work/ipatool-src` и перегенерация (`ipatool/README.md`).
