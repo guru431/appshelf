@@ -148,7 +148,7 @@ def test_login_goes_before_background_calls(tmp_path):
         while not stop.is_set():
             with ipatool.hold(lock):
                 time.sleep(0.05)
-            rounds.append(1)
+                rounds.append(1)          # под замком: после выхода из hold вход мог уже взять замок
 
     t = threading.Thread(target=background)
     t.start()

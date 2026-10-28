@@ -116,6 +116,19 @@ def test_invite_creates_member_and_mails_owner(gw, conn, cfg, clock):
     assert "приглашение «друзья»" in body
 
 
+def test_orphan_google_row_treated_as_new(gw, conn, cfg, clock):
+    # откат на этап 2 удалил участника вместе с последним Apple ID, а его строку google_accounts оставил
+    people.create_google(conn, 99, "g-1", "maria@gmail.example", "", clock.iso())
+    r = google_login(gw)
+    assert r.status_code == 403 and "нужна ссылка-приглашение" in r.text and people.google_by_sub(conn, "g-1")
+    invite(gw, conn, clock)
+    r = google_login(gw)
+    assert r.status_code == 303
+    g = people.google_by_sub(conn, "g-1")
+    assert g.user_id != 99 and people.get_user(conn, g.user_id).name == "Мария"
+    assert signed_uids(gw.client, cfg, conn, clock) == [g.user_id]
+
+
 def test_add_google_from_panel_creates_separate_person(gw, conn, cfg, clock):
     sign_in(gw.client, cfg, conn, clock, 1)
     r = google_login(gw, add=1, next_="/apple")

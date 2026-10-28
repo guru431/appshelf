@@ -54,6 +54,10 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
     def decide(c, request: Request, flow: google.Flow, cl: google.Claims, now: str) -> tuple[int, str]:
         """В транзакции: (участник, откуда новый — для письма; "" — известный аккаунт). Отказ — Refused."""
         g = people.google_by_sub(c, cl.sub)
+        if g is not None and people.get_user(c, g.user_id) is None:
+            # участника удалил код этапа 2 после отката (его строки google_accounts он не знает) — аккаунт новый
+            c.execute("DELETE FROM google_accounts WHERE id=?", (g.id,))
+            g = None
         if g is not None:
             people.mark_google_login(c, g.id, cl.email, cl.name, now)
             return g.user_id, ""
