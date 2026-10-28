@@ -1,5 +1,5 @@
-"""Ночная проверка (spec 2026-10-05 §7.4, 2026-10-08 §8): по каждому Apple ID с входом — история, справочник
-удалённых, новые версии опубликованного; отметка для Zabbix.
+"""Ночная проверка (spec 2026-10-05 §7.4, 2026-10-08 §8, 2026-10-28 §9): по каждому Apple ID с входом — история,
+справочник удалённых, новые версии опубликованного; затем Android-полки; отметка для Zabbix.
 
 Apple ID без входа пропускаются: о входе пишет письмо (владельцу), а Zabbix срабатывает, лишь если сама
 проверка не отработала (нет nightly.stamp > 26 ч)."""
@@ -9,6 +9,7 @@ import shutil
 from datetime import datetime
 
 from . import people, removed, store
+from .android import fetch as android_fetch
 from .ipatool import SessionExpired
 from .jobs import (ACCOUNT_GONE, Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired,
                    move_shelves, nightly_lock, refresh_history)
@@ -36,11 +37,14 @@ def _run(env: Env, c) -> str:
     move_shelves(env.cfg, c)  # не перенёс старт appshelf-web (архив не был смонтирован) — пробуем каждую ночь
     accounts = [a for a in people.all_accounts(c) if a.session == "ok"]
     if not accounts:
-        return _finish(env, c, NO_LOGIN)
-    # справочник удалённых целиком (~480 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
-    weekday = datetime.fromisoformat(env.now()).weekday()
-    return _finish(env, c, SEP.join(
-        f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts))
+        apple = NO_LOGIN
+    else:
+        # справочник удалённых целиком (~480 запросов к Apple) — раз в неделю на Apple ID, в «свой» день недели
+        weekday = datetime.fromisoformat(env.now()).weekday()
+        apple = SEP.join(f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts)
+    # Android-полкам вход в Apple ID не нужен — их проверяем и без него (spec 2026-10-28 §9)
+    android = android_fetch.check_all(env, c, work / "android")
+    return _finish(env, c, apple + (SEP + android if android else ""))
 
 
 def _run_account(env: Env, c, acct, work, full: bool) -> str:

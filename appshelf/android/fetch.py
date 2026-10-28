@@ -140,6 +140,32 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
     return result
 
 
+def check_all(env, c, work: Path) -> str:
+    """Ночная проверка всех Android-полок (spec §9): "" — проверять нечего; ошибка одного приложения не
+    останавливает остальные. pending считается обновлением."""
+    apps = db.apps_to_check(c)
+    if not apps:
+        return ""
+    updated = same = errors = 0
+    for app in apps:
+        shelf = db.get_shelf(c, app["shelf_id"])
+        if shelf is None:
+            continue
+        try:
+            if check_app(env, c, shelf, app, work / f"{shelf.id}-{app['package']}") == "same":
+                same += 1
+            else:
+                updated += 1
+        except store.AppGone:  # сняли с полки посреди проверки
+            continue
+        except Exception as e:
+            if isinstance(e, jobs.LowSpace):
+                jobs.low_space(env, c, e)
+            errors += 1
+            app_failed(c, shelf.id, app["package"], e, env.now())
+    return f"Android: обновлено {updated}, без изменений {same}, ошибок {errors}"
+
+
 def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
     """Ошибка — у карточки. Есть текущая версия — приложение остаётся «ok» со строкой ошибки и итогом проверки error:
     ставить можно, повторит ночь или «Проверить обновление»."""

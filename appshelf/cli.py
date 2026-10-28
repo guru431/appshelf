@@ -11,6 +11,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
+from .android import net
+from .android.sources import Sources
 from .config import from_env
 
 
@@ -65,7 +67,8 @@ def main(argv=None) -> int:
                 return 1
             print("готово: каталог полки переименован, ссылки установки — новые")
             return 0
-        print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a)), c))
+        print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a),
+                                   sources=Sources(net.Http(cfg.sources_ca))), c))
     return 0
 
 

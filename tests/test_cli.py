@@ -20,6 +20,16 @@ def test_nightly_without_login_only_stamps(monkeypatch, tmp_path, capsys):
     assert "пропущена" in capsys.readouterr().out
 
 
+def test_nightly_gets_android_sources_with_extra_ca(monkeypatch, tmp_path):
+    env(monkeypatch, tmp_path)
+    monkeypatch.setenv("APPSHELF_SOURCES_CA", str(tmp_path / "ca.pem"))
+    seen = []
+    monkeypatch.setattr(cli.net, "Http", lambda ca: seen.append(ca) or "http")
+    monkeypatch.setattr(cli.nightly, "run", lambda e, c: seen.append(e.sources) or "ok")
+    assert cli.main(["nightly"]) == 0
+    assert seen[0] == tmp_path / "ca.pem" and seen[1].http == "http"
+
+
 def test_login_link_prints_one_time_url(monkeypatch, tmp_path, capsys):
     env(monkeypatch, tmp_path)
     monkeypatch.setattr(jobs, "now_iso", lambda: "2026-10-08T00:00:00+00:00")
