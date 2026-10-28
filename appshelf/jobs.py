@@ -280,11 +280,20 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None) -> 
                 raise AccountBusy(busy.email)
             check()
             fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
+            gone = []  # Android-полки удалённых участников (spec 2026-10-28 §4: полка — у участника)
             for a in fresh:
                 store.delete_shelf(c, a.id)
                 c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
                 if not people.accounts_of(c, a.user_id):
                     people.delete_user_row(c, a.user_id)
+                    shelf = android_db.shelf_for_user(c, a.user_id)
+                    if shelf is not None:
+                        android_db.delete_shelf(c, shelf.id)
+                        gone.append(shelf)
+        for shelf in gone:
+            store.rmtree_logged(cfg.archive / shelf.shelf)
+            if shelf.shelf_next:
+                store.rmtree_logged(cfg.archive / shelf.shelf_next)
         for a in fresh:
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога

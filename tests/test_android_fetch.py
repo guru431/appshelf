@@ -288,3 +288,28 @@ def test_recover_marks_lost_upload_as_error(ctx, cfg, conn, clock, tmp_path):
 def test_apk_name_is_safe():
     assert fetch.apk_name("ru.x", "1.0 beta/2") == "ru.x-1.0_beta_2.apk"
     assert fetch.apk_name("ru.x", "") == "ru.x-v.apk"
+
+
+def test_removing_user_drops_android_shelf(ctx, cfg, conn, clock, tmp_path):
+    from helpers import make_account, owner
+    owner(conn, clock)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    shelf = shelf_of(conn, clock, uid=petr.user_id)
+    ctx.sources.apks["https://a.example/x.apk"] = make_apk(tmp_path / "x.apk")
+    run(ctx, conn, shelf, "add", clock, source="link", ref="https://a.example/x.apk", name="")
+    db.enqueue(conn, shelf.id, "check", clock.iso(), package=PKG)
+    mine = shelf_of(conn, clock)                                   # полка владельца не тронута
+    jobs.remove_account(cfg, conn, petr)
+    assert db.get_shelf(conn, shelf.id) is None and db.get_shelf(conn, mine.id) == mine
+    for table in ("android_apps", "android_versions", "android_jobs"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE shelf_id=?", (shelf.id,)).fetchone()[0] == 0, table
+    assert not (cfg.archive / shelf.shelf).exists()
+
+
+def test_store_apk_on_deleted_shelf_is_app_gone(ctx, cfg, conn, clock, tmp_path):
+    shelf = shelf_of(conn, clock)
+    conn.execute("DELETE FROM android_shelves WHERE id=?", (shelf.id,))
+    with pytest.raises(store.AppGone):
+        fetch.store_apk(ctx.env, conn, shelf, make_apk(tmp_path / "x.apk"), source="link", source_ref="u",
+                        expected_package=None, expected_signer="", name_hint="", icon=None)
+    assert db.get_app(conn, shelf.id, PKG) is None

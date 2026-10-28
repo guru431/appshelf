@@ -72,6 +72,8 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         raise jobs.LowSpace(f"мало места в архиве: свободно {free / jobs.GB:.1f} ГБ, APK — {size / jobs.GB:.1f} ГБ, "
                             f"запас — {jobs.RESERVE // jobs.GB} ГБ")
     if app is None:
+        if db.get_shelf(c, shelf.id) is None:  # участника удалили, пока качали: карточку в ничью полку не ставим
+            raise store.AppGone(info.package)
         db.put_app(c, shelf.id, info.package, info.label or name_hint.strip() or info.package, source, source_ref, now)
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)

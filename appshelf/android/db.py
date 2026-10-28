@@ -81,6 +81,13 @@ def all_shelves(c) -> list[Shelf]:
     return [_shelf(r) for r in c.execute("SELECT * FROM android_shelves ORDER BY id")]
 
 
+def delete_shelf(c, shelf_id: int) -> None:
+    """Строки полки целиком. Без транзакции: вызывающий удаляет их вместе с участником, каталог — после COMMIT."""
+    for table in ("android_versions", "android_apps", "android_jobs"):
+        c.execute(f"DELETE FROM {table} WHERE shelf_id=?", (shelf_id,))
+    c.execute("DELETE FROM android_shelves WHERE id=?", (shelf_id,))
+
+
 # --- приложения --------------------------------------------------------------
 
 def get_app(c, shelf_id: int, package: str):
