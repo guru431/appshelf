@@ -204,7 +204,7 @@ label input { margin-top: 6px; font-weight: 400; }
 {% set android = nav.startswith('a_') %}
 <header>
   <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Apple ID', 'admin': 'Участники',
-         'a_catalog': 'Каталог', 'a_add': 'Добавить'}[nav] }}</h1>
+         'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная'}[nav] }}</h1>
   <nav class="os" aria-label="Раздел"><a href="/?os=apple"{% if not android %} class="on"{% endif %}>Apple</a><a href="/android"{% if android %} class="on"{% endif %}>Android</a></nav>
   <details class="pop acct">
     <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else 'Меню' }}</span></span></summary>
@@ -235,6 +235,7 @@ label input { margin-top: 6px; font-weight: 400; }
   {%- if android %}
   {{ tab('/android', 'a_catalog', 'Каталог', grid) }}
   {{ tab('/android/add', 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}
+  {{ tab('/android/public', 'a_public', 'Публичная', '<circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2.2 2.3 3.3 5 3.3 8.2s-1.1 5.9-3.3 8.2c-2.2-2.3-3.3-5-3.3-8.2s1.1-5.9 3.3-8.2z"/>') }}
   {%- else %}
   {# ?os=apple: на телефоне Android «/» открыл бы Android-раздел #}
   {{ tab('/?os=apple', 'catalog', 'Каталог', grid) }}
