@@ -11,6 +11,8 @@
     {%- if r.a.session_since %} с {{ r.a.session_since[:16] | replace('T', ' ') }} UTC{% endif %} · {{ r.size | gb }} ГБ</div></div>
   <div class="act"><a class="btn sm tint" href="/login?{{ r.relogin }}">Войти заново</a><a class="btn sm danger" href="/apple/{{ r.a.id }}/delete">Удалить полку</a></div>
 </div>
+{% else %}
+<div class="row hint">Apple ID нет: Apple-раздел пуст, пока его не добавить.</div>
 {% endfor %}
 </div>
 <div class="bar">

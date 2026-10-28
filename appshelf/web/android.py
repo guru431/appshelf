@@ -1,6 +1,6 @@
 """Раздел Android панели (spec 2026-10-28 §5 «Раздел по умолчанию», §6, §8, §10): каталог Android-полки, «Добавить»
-(RuStore, ссылка, свой файл), действия карточки. Две области с одними обработчиками (Scope): своя полка — участника
-активной полки (request.state.user), публичная — одна на сервер: читают все вошедшие, меняет и задаёт PIN только
+(RuStore, ссылка, свой файл), действия карточки. Две области с одними обработчиками (Scope): своя полка — активного
+участника раздела (request.state.who, выбор — /who/<id>), публичная — одна на сервер: читают все вошедшие, меняет и задаёт PIN только
 владелец. Пакет ищется только на полке области, чужой — 404. Скачивает обработчик заданий (android.fetch.run_job),
 страница только ставит задания."""
 from __future__ import annotations
@@ -164,7 +164,7 @@ def register_routes(app, w) -> None:
     @app.get("/api/android/status")
     def api_status(request: Request, public: int = 0):
         with w.conn() as c:
-            shelf = db.public_shelf(c) if public else db.shelf_for_user(c, request.state.user.id)
+            shelf = db.public_shelf(c) if public else db.shelf_for_user(c, request.state.who.id)
             if shelf is None:
                 return JSONResponse({"busy": False, "apps": {}})
             return JSONResponse({"busy": db.has_active(c, shelf.id),
@@ -180,13 +180,13 @@ def _register_scope(app, w, scope: Scope):
         return PlainTextResponse("not found", status_code=404)
 
     def shelf_of(c, request: Request):
-        return db.public_shelf(c) if scope.public else db.shelf_for_user(c, request.state.user.id)
+        return db.public_shelf(c) if scope.public else db.shelf_for_user(c, request.state.who.id)
 
     def ensure(c, request: Request):
         """Полка появляется при первом добавлении."""
         if scope.public:
             return db.ensure_public_shelf(c, w.now())
-        return db.ensure_shelf(c, request.state.user.id, w.now())
+        return db.ensure_shelf(c, request.state.who.id, w.now())
 
     def own(c, request: Request, package: str):
         """(полка области, карточка пакета на ней); полки или карточки нет — None на их месте."""

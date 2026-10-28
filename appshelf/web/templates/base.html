@@ -203,18 +203,28 @@ label input { margin-top: 6px; font-weight: 400; }
 {% if nav not in ('login', 'guest') %}
 {% set android = nav.startswith('a_') %}
 <header>
-  <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Apple ID', 'admin': 'Участники',
+  <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Аккаунты', 'admin': 'Участники',
          'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная'}[nav] }}</h1>
   <nav class="os" aria-label="Раздел"><a href="/?os=apple"{% if not android %} class="on"{% endif %}>Apple</a><a href="/android"{% if android %} class="on"{% endif %}>Android</a></nav>
   <details class="pop acct">
-    <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else 'Меню' }}</span></span></summary>
+    {%- if android %}
+    {# Android-раздел: полка одного из вошедших (/who/<id>) или публичная #}
+    <summary><span class="chip"><span class="who">{{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
+    <div class="sheet">
+      <div class="shelves">
+        {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
+        {%- if nav == 'a_public' %}<span class="on">Публичная</span>{% else %}<a href="/android/public">Публичная</a>{% endif -%}
+      </div>
+    {%- else %}
+    <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
       {%- if accounts %}
       <div class="shelves">
         {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
       </div>
       {%- endif %}
-      {%- if acct %}
+    {%- endif %}
+      {%- if acct and not android %}
       <div class="meta">
         {%- if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
         {%- elif acct.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк</a>
@@ -236,12 +246,13 @@ label input { margin-top: 6px; font-weight: 400; }
   {{ tab('/android', 'a_catalog', 'Каталог', grid) }}
   {{ tab('/android/add', 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}
   {{ tab('/android/public', 'a_public', 'Публичная', '<circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2.2 2.3 3.3 5 3.3 8.2s-1.1 5.9-3.3 8.2c-2.2-2.3-3.3-5-3.3-8.2s1.1-5.9 3.3-8.2z"/>') }}
+  {{ tab('/apple', 'apple', 'Аккаунты', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
   {%- else %}
   {# ?os=apple: на телефоне Android «/» открыл бы Android-раздел #}
   {{ tab('/?os=apple', 'catalog', 'Каталог', grid) }}
   {{ tab('/history', 'history', 'История', '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l2.9 1.8"/>') }}
   {{ tab('/blocked', 'blocked', 'Удалённые', '<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>') }}
-  {{ tab('/apple', 'apple', 'Apple ID', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
+  {{ tab('/apple', 'apple', 'Аккаунты', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
   {%- endif %}
   {% if users and users | selectattr('role', 'equalto', 'owner') | first %}{{ tab('/admin', 'admin', 'Участники', '<circle cx="9" cy="9" r="3.1"/><path d="M3 19c.7-3 3-4.7 6-4.7s5.3 1.7 6 4.7"/><circle cx="17.2" cy="9.6" r="2.4"/><path d="M17 14.4c2.2.2 3.6 1.5 4.2 3.8"/>') }}{% endif %}
 </nav>

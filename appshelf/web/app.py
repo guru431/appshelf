@@ -25,6 +25,10 @@ from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p")  # /p — гость публичной полки, по PIN
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
+# страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
+APPLE_PATHS = ("/history", "/blocked", "/api/status")
+APPLE_PREFIXES = ("/apps/", "/history/", "/blocked/", "/acct/")
+NO_APPLE_ID = "409: Нет Apple ID — добавьте его на странице «Аккаунты» (/apple)"
 NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
@@ -110,7 +114,11 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 return RedirectResponse("/login?" + urlencode({"next": target}), status_code=303)
             # без WWW-Authenticate: окно Basic Auth в браузере не нужно, вход — формой
             return PlainTextResponse("401: нужен вход — /login", status_code=401)
-        request.state.users, request.state.user, request.state.accounts, request.state.acct = found
+        request.state.users, request.state.user, request.state.accounts, request.state.acct, request.state.who = found
+        if request.state.acct is None and (path in APPLE_PATHS or path.startswith(APPLE_PREFIXES)):
+            if request.method == "GET" and not path.startswith("/api/"):
+                return RedirectResponse("/apple", status_code=303)
+            return PlainTextResponse(NO_APPLE_ID, status_code=409)
         return await call_next(request)
 
     def not_found():
@@ -156,10 +164,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     @app.get("/", response_class=HTMLResponse)
     def catalog(request: Request, explicit: str = Query("", alias="os")):
-        """Раздел по умолчанию (spec 2026-10-28 §5): телефон Android — Android-раздел; ?os=apple — Apple и на нём."""
+        """Раздел по умолчанию (spec 2026-10-28 §5): телефон Android — Android-раздел; ?os=apple — Apple и на нём.
+        Apple ID у вошедших нет — Apple-раздел пуст: «Аккаунты» с «Добавить Apple ID»."""
         if android.default_section(request.headers.get("user-agent", ""), request.cookies.get(android.OS_COOKIE),
                                    explicit or None) == "android":
             return back("/android")
+        if request.state.acct is None:
+            return back("/apple")
         resp = catalog_page(request)
         if explicit == "apple":
             android.set_section(w, resp, "apple")

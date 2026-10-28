@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, notify, people, store, webauth
 from ..ipatool import IpatoolError
-from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WebCtx, back, back_to, safe_next
+from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WHO_COOKIE, WebCtx, back, back_to, safe_next
 from .login import TTL, Intent, LoginBusy, LoginExpired, LoginInProgress, LoginJoined, drop_home
 
 LOGIN_ERRORS = {
@@ -63,20 +63,29 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
     if not hasattr(request.state, "user"):  # middleware сюда не заходил — вошедших ищем сами
         found = w.person(request)
         if found is not None:
-            request.state.users, request.state.user, request.state.accounts, request.state.acct = found
+            (request.state.users, request.state.user, request.state.accounts, request.state.acct,
+             request.state.who) = found
     return w.page(request, "login.html", "apple" if add else "login", status_code, step=step, email=email,
                   next=safe_next(next_), error=error, action=action, add=add, link=link,
                   invited=bool(request.cookies.get(INVITE_COOKIE)))
 
 
-def signed_in(w: WebCtx, request: Request, resp, user, aid: int):
+def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None):
     """Человек добавлен к вошедшим в этом браузере (spec 2026-10-12 §4): его запись — на год, записи остальных —
-    как были; активная полка — aid."""
+    как были; активная полка — aid (None — у человека нет Apple ID, выбор полки не меняется)."""
     with w.conn() as c:
         value = webauth.with_user(w.key, w.signed(c, request), user, w.epoch())
     w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
-    w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
+    if aid is not None:
+        w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
     return resp
+
+
+def label(c, user) -> str:
+    """Человек в письмах: имя и первый Apple ID, без него — первый Google-адрес (тёзок различает адрес)."""
+    accounts, googles = people.accounts_of(c, user.id), people.google_of(c, user.id)
+    email = accounts[0].email if accounts else googles[0].email if googles else ""
+    return f"«{user.name}»" + (f" ({email})" if email else "")
 
 
 def new_intent(w: WebCtx, email: str, **kw) -> Intent:
@@ -123,8 +132,8 @@ def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: st
                 # пока человек добавлял Apple ID, его удалили или погасили его вход («Выйти на всех устройствах»,
                 # «Выйти»): иначе верный код завёл бы участника и вход тому, у кого осталась прежняя cookie
                 raise Refused(SIGNED_OUT)
-            if adder is not None:  # тёзок различает Apple ID
-                how = f"добавлен из панели участника «{adder.name}» ({people.accounts_of(c, adder.id)[0].email})"
+            if adder is not None:
+                how = f"добавлен из панели участника {label(c, adder)}"
             role = people.OWNER if intent.owner else people.MEMBER
             uid = people.create_user(c, name, role, intent.invite_id, now)
             aid = people.create_account(c, uid, intent.email, info, intent.device_mac, now, session="none")
@@ -324,9 +333,9 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             uid = people.use_login_link(c, token, w.now())
             user = people.get_user(c, uid) if uid is not None else None
             accounts = people.accounts_of(c, uid) if user is not None else []
-        if not accounts:
+        if user is None:
             return login_page(w, request, error=LINK_GONE, status_code=400)
-        return signed_in(w, request, back("/"), user, accounts[0].id)
+        return signed_in(w, request, back("/"), user, accounts[0].id if accounts else None)
 
     def logged_out():
         resp = back("/login")
@@ -374,4 +383,12 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         # GET с cookie приходит и по ссылке с чужого сайта — такая полку не переключает (Sec-Fetch-Site ставит браузер)
         if request.headers.get("sec-fetch-site") != "cross-site" and any(a.id == aid for a in request.state.accounts):
             w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
+        return resp
+
+    @app.get("/who/{uid}")
+    def switch_who(request: Request, uid: int, back_url: str = Query("", alias="back")):
+        """Участник Android-раздела — как /acct/{aid}: только среди вошедших и не по ссылке с чужого сайта."""
+        resp = back(back_to(request, back_url))
+        if request.headers.get("sec-fetch-site") != "cross-site" and signed_here(request, uid):
+            w.set_cookie(resp, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
         return resp

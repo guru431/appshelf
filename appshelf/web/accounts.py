@@ -1,5 +1,5 @@
-"""«Мои Apple ID» (spec 2026-10-08 §10.4, 2026-10-12 §6): Apple ID людей, вошедших в этом браузере, — по человеку:
-состояние, место, вход заново, добавить, удалить полку, убрать человека с устройства."""
+"""«Аккаунты» (spec 2026-10-08 §10.4, 2026-10-12 §6, 2026-10-28 §10): Apple ID людей, вошедших в этом браузере, — по
+человеку: состояние, место, вход заново, добавить, удалить полку, убрать человека с устройства."""
 from __future__ import annotations
 
 from fastapi import FastAPI, Form, Request
@@ -75,9 +75,11 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             return confirm(request, a, ACCOUNT_BUSY, 409)
         except jobs.LastOwnerAccount:  # другую полку владельца удалили, пока шёл этот запрос
             return confirm(request, a, LAST_OWNER_ID, 400, refused=True)
-        if len(request.state.accounts) > 1:
+        with w.conn() as c:
+            left = w.signed(c, request)  # человек ушёл, только если у него не осталось и Google-аккаунтов
+        if left:
             return back("/apple")
-        resp = back("/login")  # был последний Apple ID — человека больше нет
+        resp = back("/login")  # в браузере не осталось вошедших
         resp.delete_cookie(webauth.COOKIE, path="/")
         resp.delete_cookie(ACCT_COOKIE, path="/")
         return resp
