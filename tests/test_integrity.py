@@ -310,10 +310,20 @@ def test_android_orphan_and_partial(ctx, cfg, conn, clock, tmp_path):
     conn.execute("UPDATE android_shelves SET shelf_next='fedcba9876543210fedcba9876543210'")
     (cfg.archive / "fedcba9876543210fedcba9876543210").mkdir()
     rep = integrity.check(cfg, conn)
-    assert kinds(rep) == ["orphan", "partial"]
-    assert {p.path for p in rep.problems} == {"ru.zzz-1", ".ru.example.app-2.partial"}
+    assert kinds(rep) == ["orphan", "partial", "shelf_next"]             # каталог нового токена — не unknown
+    assert {p.path for p in rep.problems} == {"ru.zzz-1", ".ru.example.app-2.partial", ""}
     assert all(p.shelf == shelf.id and p.account is None for p in rep.problems)
     assert f"Android-полка №{shelf.id}: ru.zzz-1" in rep.text()
+
+
+def test_android_shelf_next_reported(ctx, cfg, conn, clock, tmp_path):
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    conn.execute("UPDATE android_shelves SET shelf_next='fedcba9876543210fedcba9876543210'")  # смена токена прервалась
+    rep = integrity.check(cfg, conn)
+    assert kinds(rep) == ["shelf_next"]
+    assert (rep.problems[0].shelf, rep.problems[0].account) == (shelf.id, None)
+    assert f"Android-полка №{shelf.id}" in rep.text()
+    assert_private(rep, shelf.shelf, "fedcba9876543210fedcba9876543210")
 
 
 def test_android_missing_apk(ctx, cfg, conn, clock, tmp_path):

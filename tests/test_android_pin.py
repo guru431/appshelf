@@ -101,6 +101,17 @@ def test_window_restarts_after_hour(conn):
     assert a == pin.Attempt("wrong", pin.IP_LIMIT - 15, "", False)
 
 
+def test_old_address_rows_purged(conn):
+    pin.set_pin(conn, PIN, T0)
+    for _ in range(pin.IP_LIMIT):                                             # K закрыт на час
+        pin.try_pin(conn, K, WRONG, T0)
+    pin.try_pin(conn, OTHER, WRONG, at(1800))                                 # окно OTHER ещё идёт
+    pin.try_pin(conn, "ip:192.0.2.1", PIN, at(3600))                          # любая новая попытка
+    assert {r["key"] for r in conn.execute("SELECT key FROM pin_attempts")} == {pin.ALL, OTHER}
+    pin.try_pin(conn, "ip:192.0.2.1", "12", at(3 * 3600))                     # и не по форме — тоже
+    assert {r["key"] for r in conn.execute("SELECT key FROM pin_attempts")} == {pin.ALL}  # общий счёт не трогается
+
+
 def test_without_pin_nothing_opens_and_nothing_counts(conn):
     assert pin.try_pin(conn, K, PIN, T0).result == "closed"
     assert conn.execute("SELECT COUNT(*) FROM pin_attempts").fetchone()[0] == 0

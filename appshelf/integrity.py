@@ -161,6 +161,7 @@ def check(cfg: Config, c, deep: bool = False) -> Report:
         owned.add(shelf.shelf)
         if shelf.shelf_next:
             owned.add(shelf.shelf_next)
+            rep.add("shelf_next", None, shelf=shelf.id)
         _android_shelf(cfg, shelf, apks.pop(shelf.id, []), deep, rep)
     for p in sorted(cfg.archive.iterdir()):
         if p.name not in owned:

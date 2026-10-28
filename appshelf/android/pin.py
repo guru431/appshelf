@@ -107,9 +107,12 @@ def _fail(c, key: str, row, t: datetime, limit: int, window: int) -> tuple[int, 
 
 def try_pin(c, key: str, pin: str, now: str) -> Attempt:
     """Попытка гостя — одной транзакцией: параллельные запросы не проскочат предел вместе. Закрыто всем, закрыт адрес,
-    PIN не задан — хэш не считается; не 6 цифр — не попытка."""
+    PIN не задан — хэш не считается; не 6 цифр — не попытка. Строки адресов, у которых и окно, и блокировка
+    истекли, — прочь: иначе таблица копилась бы годами."""
     t = datetime.fromisoformat(now)
     with tx(c):
+        c.execute("DELETE FROM pin_attempts WHERE key != ? AND blocked_until <= ? AND first_at <= ?",
+                  (ALL, t.isoformat(), (t - timedelta(seconds=IP_WINDOW)).isoformat()))
         rows = {r["key"]: r for r in c.execute("SELECT * FROM pin_attempts WHERE key IN (?, ?)", (ALL, key))}
         if closed := _until(rows.get(ALL), t):
             return Attempt("closed", 0, closed, False)
