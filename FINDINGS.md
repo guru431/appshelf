@@ -2,6 +2,12 @@
 Побочные находки, только `open`. Ревизия: MonthlyStratReview 1-го числа. Stale >90 дней → alert.
 Новые записи сверху. Выполненные — удаляются (след в `git log`), отклонённые — переносятся в [FINDINGS-archive.md](FINDINGS-archive.md).
 
+## 2026-10-29 · Этап 4 выложен, но Google Play в панели недоступен: вход через Google на сервере не настроен [P3]
+**Context:** выкладка этапа 4 2026-10-29 (коммит `9bbaf8b`), проверка `/etc/appshelf/appshelf.env`: `GOOGLE_CLIENT_ID` и `GOOGLE_CLIENT_SECRET` пусты, строк `google_accounts` нет.
+**What:** подключение к Play висит на Google-аккаунте в «Аккаунтах», а без клиента OAuth Google-аккаунт не добавить; шаг 6 Task 7 (подключить аккаунт, проверить отсутствие токенов в базе и журнале, K-9 Mail на телефон, ночь) не сделан.
+**Proposal:** владелец заводит клиент OAuth (README, «Вход через Google»), кладёт ID и секрет в `appshelf.env`, перезапуск `appshelf-web`; затем «Добавить Google» → «Подключить к Google Play»; после — `grep -rE "aas_et/|oauth2_4/"` по `/var/lib/appshelf` и `journalctl -u appshelf-web`, K-9 Mail на телефон, `APPSHELF_PLAY_TEST_GID` в `.env` и `pytest -m integration tests/test_android_play_live.py`.
+**Status:** open
+
 ## 2026-10-29 · Этап 4: покупки Google Play (G3) и «Мои покупки» не сделаны [P3]
 **Context:** план Android этапа 4 (локальный, `docs/superpowers/plans/2026-10-28-android-stage4.md`), Task 0 шаг 3 и Task 6; решение владельца 2026-10-29 «G3 — позже».
 **What:** не проверено, отдаёт ли Play купленное зарубежному аккаунту через прокси его страны и без него; `purchaseHistory` разбирается по форме Aurora без записанного ответа (`test_purchases_fixture` — синтетический); страницы «Мои покупки» нет. Без прокси с российского адреса Play показывает цены в RUB, некупленное платное — delivery status 2.
