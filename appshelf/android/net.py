@@ -226,6 +226,19 @@ class Http:
         finally:
             _close(resp, conn)
 
+    def request(self, method: str, url: str, *, headers: dict | None = None, body: bytes | None = None,
+                max_bytes: int = MAX_JSON) -> tuple[int, dict[str, str], bytes]:
+        """Ответ как есть — статус (любой), заголовки (имена в нижнем регистре), тело не больше max_bytes: для
+        протоколов не на JSON (Google Play)."""
+        resp, conn, _ = self._request(method, url, headers or {}, body)
+        try:
+            data = _read(resp, max_bytes + 1)
+            if len(data) > max_bytes:
+                raise FetchError("ответ источника слишком большой")
+            return resp.status, {k.lower(): v for k, v in resp.getheaders()}, data
+        finally:
+            _close(resp, conn)
+
     def download(self, url: str, dest: Path, *, max_bytes: int = MAX_APK, headers: dict | None = None) -> Meta:
         """Файл в dest кусками; ошибка или больше max_bytes — dest удалён, FetchError."""
         try:

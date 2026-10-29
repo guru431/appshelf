@@ -23,6 +23,9 @@ class Resp:
     def getheader(self, name, default=None):
         return self.headers.get(name.lower(), default)
 
+    def getheaders(self):
+        return list(self.headers.items())
+
     def read(self, n=-1):
         n = len(self.body) if n < 0 else n
         chunk, self.body = self.body[:n], self.body[n:]
@@ -186,6 +189,16 @@ def test_form_posts_urlencoded_and_reads_400():
     for resp in (Resp(500, {}, b'{"error": "x"}'), Resp(200, {}, b"not json")):
         with pytest.raises(net.FetchError):
             net.Http(resolve=fake_resolve("8.8.8.8"), connect=Server(resp)).form("https://oauth.example/t", {})
+
+
+def test_request_returns_status_headers_body():
+    server = Server(Resp(401, {"WWW-Authenticate": "Bearer"}, b"\x12\x00"), Resp(200, {}, b"x" * 11))
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=server)
+    status, headers, body = http.request("POST", "https://a.example/fdfe/x?doc=1", headers={"X-A": "1"}, body=b"pb")
+    assert (status, headers["www-authenticate"], body) == (401, "Bearer", b"\x12\x00")   # любой статус — как есть
+    assert server.requests[0][2:5] == ("POST", "/fdfe/x?doc=1", b"pb") and server.requests[0][5]["X-A"] == "1"
+    with pytest.raises(net.FetchError, match="слишком большой"):
+        http.request("GET", "https://a.example/big", max_bytes=10)
 
 
 def test_json_errors():
