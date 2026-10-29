@@ -19,7 +19,7 @@ from .sources import ACCOUNT_GONE, SplitOnly
 
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
-                "appgallery": "AppGallery"}
+                "appgallery": "AppGallery", "fdroid": "F-Droid"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
 PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"

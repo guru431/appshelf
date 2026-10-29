@@ -10,7 +10,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import appgallery, links, rustore
+from .. import apk
+from . import appgallery, fdroid, links, rustore
 from .net import FetchError, Http, Meta, SourceError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
@@ -47,6 +48,11 @@ def _etag(meta: Meta) -> str:
     return f"{meta.etag}|{meta.last_modified}|{'' if meta.length is None else meta.length}"
 
 
+def _fdroid_mark(pkg: fdroid.FdPackage) -> str:
+    """Метка F-Droid в source_etag: сменилась рекомендуемая версия — качать."""
+    return f"fd:{pkg.suggested}"
+
+
 class Sources:
     def __init__(self, http: Http, *, play=None, sleep=time.sleep, pause: float = 2.0, clock=time.monotonic,
                  appgallery_host: str = ""):
@@ -74,6 +80,11 @@ class Sources:
             return Latest(client.details(ref).version_code, "", True)
         if source == "appgallery":
             return Latest(self._appgallery(ref).version_code, "", True)
+        if source == "fdroid":
+            # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
+            self._wait()
+            mark = _fdroid_mark(fdroid.info(self.http, ref))
+            return Latest(None, mark, mark != stored_etag)
         raise SourceError(f"источник «{source}» не проверяется")
 
     def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False) -> Got:
@@ -102,7 +113,38 @@ class Sources:
             self._wait()
             appgallery.download(self.http, app, dest)
             return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
+        if source == "fdroid":
+            return self._fetch_fdroid(ref, dest)
         raise SourceError(f"источник «{source}» не скачивается")
+
+    def _fetch_fdroid(self, package: str, dest: Path) -> Got:
+        """Сборки рекомендуемой версии по очереди, пока не найдётся универсальная или arm64-v8a; нет ни одной —
+        первая armeabi-v7a; нет и её — отказ. Скачанные мимо — удаляются."""
+        self._wait()
+        pkg = fdroid.info(self.http, package)
+        fallback = None
+        try:
+            for code in fdroid.candidates(pkg):
+                part = dest.with_name(f"{dest.name}.{code}")
+                self._wait()
+                self.http.download(fdroid.apk_url(package, code), part)
+                abis = apk.read_apk(part).abis
+                if not abis or "arm64-v8a" in abis:
+                    part.replace(dest)
+                    break
+                if "armeabi-v7a" in abis and fallback is None:
+                    fallback = part
+                else:
+                    part.unlink()
+            else:
+                if fallback is None:
+                    raise SourceError("в F-Droid нет сборки для ARM")
+                fallback.replace(dest)
+                fallback = None
+        finally:
+            if fallback is not None:
+                fallback.unlink(missing_ok=True)
+        return Got("", "", None, _fdroid_mark(pkg))
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""
