@@ -1,0 +1,70 @@
+{
+ "rtnCode": 0,
+ "count": 1,
+ "list": [
+  {
+   "name": "Банк ВТБ",
+   "id": "C102312137",
+   "releaseDate": "2026-10-13",
+   "versionCode": 2090141590,
+   "icon": "https://appimg-dra.dbankcdn.com/application/icon144/10169/d5add246e75049b4b0144c30a175fcf2.webp",
+   "size": 189014452,
+   "diffSize": 0,
+   "hash": "AA97212CA24ED5F2B25842252A607E63",
+   "version": "20.19.0.6",
+   "sameS": 0,
+   "newFeatures": "",
+   "releaseDateDesc": "Released 16 days ago",
+   "detailId": "app|C102312137__renew__null__null__1__%3BDETAILAPPOID%3Ad5add246e75049b4b0144c30a175fcf2__null__null__1023__65?maple=0&distOpEntity=HKS&appoid=d5add246e75049b4b0144c30a175fcf2&phase=0&scene=updateSdk",
+   "oldVersionName": "1.0",
+   "oldVersionCode": 1,
+   "isAutoUpdate": 0,
+   "isCompulsoryUpdate": 0,
+   "fullDownUrl": "https://appdlc-drru.hispace.dbankcloud.ru/dl/appdl/application/apk/d5/d5add246e75049b4b0144c30a175fcf2/ru.vtb24.mobilebanking.android.2610110422.apk?source=renew&extendStr=%3B&hcrId=00000000000000000000000000000000&maple=0&trackId=0&distOpEntity=HKS",
+   "isGame": 0,
+   "isKeyApp": 0,
+   "sha256": "aefbcd22d2514d586fe0cbb35896d410974bc92b7009ca65e0a8b836977e1764",
+   "urgentUpdate": 0,
+   "maple": 0,
+   "ctype": 0,
+   "packingType": 0,
+   "bundleSize": 0,
+   "fullSize": 139208250,
+   "btnDisable": 0,
+   "nonAdaptType": 0,
+   "appShelfTime": 1791887282000,
+   "isDiff": 0,
+   "isGradeAdapt": 1,
+   "updateSDKZone": "1023",
+   "updateSDKLan": "65",
+   "submitType": 0,
+   "jumpToGpOnGMSDevice": 0,
+   "gplinkPkgName": "",
+   "webApp": 0,
+   "genShortcutForWebApp": 0,
+   "devType": 2,
+   "installConfig": 0,
+   "clearPkgChannelId": 0,
+   "jointOperation": 0,
+   "hmsSdkVersion": {
+    "hmsSdkVersion": "6.13.0.303"
+   },
+   "relatedFAInfo": {},
+   "relatedApps": [],
+   "cnCrossRegionalUpdateShowFlag": 0,
+   "appoid": "d5add246e75049b4b0144c30a175fcf2",
+   "useHttps": true,
+   "gradeLevel": 5,
+   "installationFree": 0,
+   "package": "ru.vtb24.mobilebanking.android",
+   "downurl": "https://appdlc-drru.hispace.dbankcloud.ru/dl/appdl/application/apk/d5/d5add246e75049b4b0144c30a175fcf2/ru.vtb24.mobilebanking.android.2610110422.apk?source=renew&extendStr=%3B&hcrId=00000000000000000000000000000000&maple=0&trackId=0&distOpEntity=HKS",
+   "sSha2": [
+    "f0c64a3ee8d479557a707961a1fda418ba1022a350ed4e3cb40c1a906d2b3c51"
+   ]
+  }
+ ],
+ "notRcmList": [],
+ "checkPoint": {
+  "deviceType": "0"
+ }
+}
