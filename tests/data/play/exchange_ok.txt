@@ -1,0 +1,14 @@
+HTTP 200
+Token=aas_et/TEST-MASTER-TOKEN
+Auth=x
+SID=x
+LSID=x
+accountId=x
+GooglePlusUpdate=x
+firstName=x
+lastName=x
+capabilities.canHaveUsername=x
+capabilities.canHavePassword=x
+capabilities=x
+services=x
+Email=user@example.com
