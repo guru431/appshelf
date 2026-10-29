@@ -1,9 +1,11 @@
+import json
 from dataclasses import replace
 
 import pytest
 from starlette.testclient import TestClient
 
 from apk_factory import cert_sha, make_apk
+from appshelf import people
 from appshelf.android import db, fetch, net, rustore
 from appshelf.android.sources import Latest
 from appshelf.web.app import create_app
@@ -104,6 +106,52 @@ def test_add_link_names_card_after_download(web, conn, tmp_path):
     add_link(web, conn, tmp_path, label="Банк по ссылке")
     page = web.client.get("/android").text
     assert "Банк по ссылке" in page and "сайт" in page
+
+
+def test_add_link_routes_store_pages(web, conn):
+    def post(url, name=""):
+        return web.client.post("/android/add/link", data={"url": url, "name": name}, follow_redirects=False)
+
+    assert post("https://f-droid.org/en/packages/org.videolan.vlc/").status_code == 303
+    app = db.get_app(conn, shelf(conn).id, "org.videolan.vlc")
+    assert (app["source"], app["source_ref"], app["status"]) == ("fdroid", "org.videolan.vlc", "queued")
+    assert post("https://appgallery.huawei.com/app/C102312137", "ВТБ").status_code == 303   # пакет узнает обработчик
+    assert post("https://www.rustore.ru/catalog/app/ru.sberbankmobile").status_code == 303
+    jobs = [(j["kind"], j["package"], json.loads(j["payload"])) for j in conn.execute(
+        "SELECT kind, package, payload FROM android_jobs ORDER BY id")]
+    assert [(k, p, d["source"], d["ref"]) for k, p, d in jobs] == [
+        ("add", "org.videolan.vlc", "fdroid", "org.videolan.vlc"), ("add", "", "appgallery", "C102312137"),
+        ("add", "ru.sberbankmobile", "rustore", "ru.sberbankmobile")]
+    assert jobs[1][2]["name"] == "ВТБ"
+    post("https://f-droid.org/packages/org.videolan.vlc/")                               # уже на полке
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 3
+    r = post("https://f-droid.org/packages/nodots/")
+    assert r.status_code == 400 and "не похоже на страницу приложения" in r.text
+
+
+def test_add_link_play_page_needs_connected_account(web, conn, clock, acct):
+    r = web.client.post("/android/add/link", data={"url": "https://play.google.com/store/apps/details?id=com.fsck.k9"})
+    assert r.status_code == 400 and "подключите Google-аккаунт к Google Play" in r.text
+    gid = people.create_google(conn, acct.user_id, "sub-1", "owner@gmail.example", "Владелец", clock.iso())
+    people.set_play(conn, gid, "ok", clock.iso())
+    web.client.post("/android/add/link", data={"url": "https://play.google.com/store/apps/details?id=com.fsck.k9"})
+    job = conn.execute("SELECT package, payload FROM android_jobs").fetchone()
+    assert job["package"] == "com.fsck.k9" and json.loads(job["payload"]) == {
+        "source": "play", "ref": "com.fsck.k9", "account": gid}
+
+
+def test_change_source_to_store_page(web, conn, tmp_path):
+    add_link(web, conn, tmp_path)
+    r = web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": f"https://apkpure.com/x/{PKG}"},
+                        follow_redirects=False)
+    assert r.status_code == 303
+    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
+    r = web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": "https://f-droid.org/packages/ru.other/"})
+    assert r.status_code == 400 and "ru.other" in r.text
+    r = web.client.post(f"/android/apps/{PKG}/source",
+                        data={"source": "link", "ref": f"https://play.google.com/store/apps/details?id={PKG}"})
+    assert r.status_code == 400
+    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
 
 
 def test_upload_of_garbage_shows_error(web, conn, cfg):

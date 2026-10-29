@@ -40,11 +40,14 @@
 {% endif %}
 <h2>По ссылке</h2>
 <form method="post" action="{{ prefix }}/add/link" class="card">
-  <label>Ссылка на APK<input name="url" type="url" value="{{ link_url }}" placeholder="https://…/app.apk" required></label>
+  <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://f-droid.org/packages/… или https://…/app.apk" required></label>
   <label>Название (необязательно)<input name="name"></label>
+  <label><input type="checkbox" name="ack" value="1"> Для APKPure: APKPure распространял подменённые APK; если пакета
+    нет в RuStore, подпись не с чем сверить — понимаю</label>
   <button>Добавить</button></form>
-<p class="hint">Ссылка — на сам файл .apk на сайте банка или разработчика, только https. Ночью полка проверяет, не сменился
-  ли файл. Адреса локальной сети не принимаются.</p>
+<p class="hint">Понимает страницы приложений Google Play, AppGallery (или ID вида C102312137), F-Droid, APKPure и RuStore —
+  источник и пакет берутся из адреса. Иначе ссылка — на сам файл .apk на сайте банка или разработчика, только https:
+  ночью полка проверяет, не сменился ли файл. Адреса локальной сети не принимаются.</p>
 <h2>Свой файл</h2>
 <form method="post" action="{{ prefix }}/add/upload" enctype="multipart/form-data" class="card">
   <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label>

@@ -16,14 +16,15 @@ from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import apk, jobs, notify, people, store
-from ..android import db, fetch, net, pin
+from ..android import db, fetch, links, net, pin
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
 from .common import back
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
-SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play"}
+SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
+           "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure"}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
@@ -32,6 +33,7 @@ PIN_FORMAT = "PIN — 6 цифр, только цифры 0–9"
 PIN_BUSY = "Идёт скачивание — попробуйте через минуту: PIN не изменён"
 NEED_PLAY = "Сначала подключите Google-аккаунт к Google Play на странице «Аккаунты»"
 PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя пакета"
+NO_PLAY_SOURCE = "Источником карточки Google Play не ставится — снимите её и добавьте приложение из Google Play"
 
 
 @dataclass(frozen=True)
@@ -308,19 +310,24 @@ def _register_scope(app, w, scope: Scope):
     def android_add(request: Request, q: str = ""):
         return add_page(request, q)
 
+    def add_package(request: Request, source: str, package: str, name: str, payload: dict,
+                    account: int | None = None):
+        """Карточка пакета и задание add (payload — к source и ref); пакет уже на полке — второго не ставим."""
+        with w.conn() as c:
+            shelf = ensure(c, request)
+            with store.tx(c):
+                if db.get_app(c, shelf.id, package) is None:
+                    db.put_app(c, shelf.id, package, name or package, source, package, w.now(), google_account_id=account)
+                    db.enqueue(c, shelf.id, "add", w.now(), package=package,
+                               payload={"source": source, "ref": package, **payload})
+        return back(p)
+
     @app.post(f"{p}/add/rustore", response_class=HTMLResponse, dependencies=deps)
     def add_rustore(request: Request, package: str = Form(""), name: str = Form("")):
         if not apk.PACKAGE_RE.match(package):
             return add_page(request, status_code=400, error="Не похоже на имя пакета Android")
         name = name.strip()[:200]
-        with w.conn() as c:
-            shelf = ensure(c, request)
-            with store.tx(c):
-                if db.get_app(c, shelf.id, package) is None:  # уже на полке — второго не ставим
-                    db.put_app(c, shelf.id, package, name or package, "rustore", package, w.now())
-                    db.enqueue(c, shelf.id, "add", w.now(), package=package,
-                               payload={"source": "rustore", "ref": package, "name": name})
-        return back(p)
+        return add_package(request, "rustore", package, name, {"name": name})
 
     @app.post(f"{p}/add/play", response_class=HTMLResponse, dependencies=deps)
     def add_play(request: Request, package: str = Form(""), account: int = Form(0)):
@@ -330,28 +337,32 @@ def _register_scope(app, w, scope: Scope):
             return add_page(request, status_code=400, error=PLAY_PACKAGE)
         with w.conn() as c:
             acct = next((g for g in google_accounts(c, request) if g.id == account and g.play == "ok"), None)
-            if acct is None:
-                return add_page(request, status_code=400, error=NEED_PLAY)
-            shelf = ensure(c, request)
-            with store.tx(c):
-                if db.get_app(c, shelf.id, package) is None:  # уже на полке — второго не ставим
-                    db.put_app(c, shelf.id, package, package, "play", package, w.now(), google_account_id=acct.id)
-                    db.enqueue(c, shelf.id, "add", w.now(), package=package,
-                               payload={"source": "play", "ref": package, "account": acct.id})
-        return back(p)
+        if acct is None:
+            return add_page(request, status_code=400, error=NEED_PLAY)
+        return add_package(request, "play", package, "", {"account": acct.id}, acct.id)
 
     @app.post(f"{p}/add/link", response_class=HTMLResponse, dependencies=deps)
     def add_link(request: Request, url: str = Form(""), name: str = Form("")):
-        url = url.strip()
+        """Страница приложения в магазине (links.parse) или прямая ссылка на APK. Google Play — первым подключённым
+        аккаунтом области; ссылка и ID AppGallery — без карточки, пока обработчик не узнает пакет."""
+        url, name = url.strip(), name.strip()[:200]
         try:
             if len(url) > MAX_URL:
                 raise net.FetchError("ссылка слишком длинная")
-            net.check_url(url)
+            source, ref = links.parse(url)
         except net.FetchError as e:
             return add_page(request, status_code=400, error=f"{url[:200]}: {e}", link_url=url[:MAX_URL])
+        if source == "play":
+            with w.conn() as c:
+                acct = next((g for g in google_accounts(c, request) if g.play == "ok"), None)
+            if acct is None:
+                return add_page(request, status_code=400, error=NEED_PLAY, link_url=url)
+            return add_package(request, "play", ref, "", {"account": acct.id}, acct.id)
+        if source not in ("link", "appgallery"):
+            return add_package(request, source, ref, name, {"name": name})
         with w.conn() as c:
             shelf = ensure(c, request)
-            db.enqueue(c, shelf.id, "add", w.now(), payload={"source": "link", "ref": url, "name": name.strip()[:200]})
+            db.enqueue(c, shelf.id, "add", w.now(), payload={"source": source, "ref": ref, "name": name})
         return back(p)
 
     @app.post(f"{p}/add/upload", response_class=HTMLResponse, dependencies=deps)
@@ -424,7 +435,8 @@ def _register_scope(app, w, scope: Scope):
 
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form("")):
-        """Сменить источник: версии и закрепления остаются, первая версия из нового источника — по правилу подписи."""
+        """Сменить источник: версии и закрепления остаются, первая версия из нового источника — по правилу подписи.
+        Ссылка — страница магазина (links.parse) или прямая на APK; страница другого пакета — отказ."""
         with w.conn() as c:
             shelf, app_row = own(c, request, package)
         if app_row is None:
@@ -436,11 +448,15 @@ def _register_scope(app, w, scope: Scope):
             try:
                 if len(ref) > MAX_URL:
                     raise net.FetchError("ссылка слишком длинная")
-                net.check_url(ref)
+                source, ref = links.parse(ref)
             except net.FetchError as e:
                 return catalog_page(request, 400, f"{ref[:200]}: {e}")
+            if source == "play":
+                return catalog_page(request, 400, NO_PLAY_SOURCE)
+            if source not in ("link", "appgallery") and ref != package:
+                return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
-            return catalog_page(request, 400, "Источник — RuStore или ссылка на APK")
+            return catalog_page(request, 400, "Источник — RuStore, страница магазина или ссылка на APK")
         with w.conn() as c:
             db.set_source(c, shelf.id, package, source, ref)
             requeue(c, shelf, db.get_app(c, shelf.id, package))
