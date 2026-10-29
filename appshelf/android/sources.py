@@ -22,6 +22,10 @@ PAID_ELSEWHERE = "купленное в Google Play — только на лич
 ACCOUNT_GONE = "Google-аккаунт удалён — смените источник"
 
 
+class SplitOnly(SourceError):
+    """Google Play отдаёт приложение только набором файлов (splits, OBB): браузер его не поставит."""
+
+
 @dataclass(frozen=True)
 class Latest:
     version_code: int | None   # RuStore — из сведений; у ссылки версия известна только из самого APK
@@ -106,7 +110,7 @@ class Sources:
         self._wait()
         delivery = client.delivery(app)
         if delivery.splits or delivery.extra_files:
-            raise SourceError(SPLIT_TEXT + (RUSTORE_HINT if self._free_in_rustore(package) else ""))
+            raise SplitOnly(SPLIT_TEXT + (RUSTORE_HINT if self._free_in_rustore(package) else ""))
         self._wait()
         client.download(delivery, dest)
         return Got(app.name, "", self._icon(app.icon_url, dest), paid=app.paid)

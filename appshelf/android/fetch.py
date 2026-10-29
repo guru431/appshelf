@@ -15,11 +15,13 @@ from .. import apk, ipa, jobs, notify, people, store
 from ..ipatool import IpatoolError
 from . import db, net, play
 from .net import SourceError
-from .sources import ACCOUNT_GONE
+from .sources import ACCOUNT_GONE, SplitOnly
 
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
+SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
+PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"
 
 
 def shelf_root(cfg, shelf: db.Shelf) -> Path:
@@ -124,8 +126,18 @@ def _own_shelf(shelf: db.Shelf, account) -> bool:
 
 
 def play_expired(env, c, gid: int) -> None:
-    """Google Play не принял токен аккаунта: подключение истекло, его задания ждут нового."""
-    people.set_play(c, gid, "expired", env.now())
+    """Google Play не принял токен аккаунта: подключение истекло, его задания ждут нового. Письмо — только о
+    Google-аккаунте владельца, одно на эпизод (как jobs.mark_expired); участники видят баннер."""
+    now = env.now()
+    people.set_play(c, gid, "expired", now)
+    g = people.get_google(c, gid)
+    user = people.get_user(c, g.user_id) if g is not None else None
+    if user is not None and user.role == people.OWNER:
+        notify.once_for(lambda: people.claim_play_mail(c, gid, now), lambda: people.release_play_mail(c, gid),
+                        PLAY_EXPIRED_SUBJECT,
+                        f"Google Play не принял ключ {g.email} (сменили пароль или отозвали доступ): скачивание и "
+                        f"ночная проверка из Play этим аккаунтом стоят, задания ждут.\n"
+                        f"Подключить заново: {env.cfg.public_base}/apple\n", env.send, env.cfg.mail_to)
 
 
 def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, expected_package: str | None,
@@ -157,26 +169,37 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
 def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
     """Проверка обновления карточки rustore / link / play: "updated" | "pending" | "same". RuStore и Google Play:
     versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка: ETag/Last-Modified/
-    Length те же — тоже. Иначе — скачать и сравнить versionCode самого APK."""
+    Length те же — тоже. Иначе — скачать и сравнить versionCode самого APK. Новая версия из Play только набором
+    файлов — "same" и отметка у карточки (текущая остаётся); эту версию следующие ночи уже не запрашивают."""
     pkg = app["package"]
     account = _account(c, app["source"], app["google_account_id"])
     latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
     known = c.execute("SELECT MAX(version_code) AS v FROM android_versions WHERE shelf_id=? AND package=? "
                       "AND role IN ('current', 'pending')", (shelf.id, pkg)).fetchone()["v"]
+    split_mark = f"split:{latest.version_code}" if app["source"] == "play" else ""
+    note = ""
     if known is not None and (latest.version_code is not None and latest.version_code <= known
                               or latest.version_code is None and not latest.changed):
         result = "same"
+    elif known is not None and split_mark and app["source_etag"] == split_mark:
+        result, note = "same", SPLIT_UPDATE
     else:
-        _, result = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
-                              name_hint=app["name"], account=account)
-    db.set_status(c, shelf.id, pkg, "ok")
-    db.set_checked(c, shelf.id, pkg, env.now(), result, latest.etag or None)
+        try:
+            _, result = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
+                                  name_hint=app["name"], account=account)
+        except SplitOnly:
+            if known is None:  # первой версии нет — это ошибка добавления, а не отметка
+                raise
+            result, note = "same", SPLIT_UPDATE
+    db.set_status(c, shelf.id, pkg, "ok", note)
+    db.set_checked(c, shelf.id, pkg, env.now(), result, split_mark if note else latest.etag or None)
     return result
 
 
 def check_all(env, c, work: Path) -> str:
     """Ночная проверка всех Android-полок (spec §9): "" — проверять нечего; ошибка одного приложения не
-    останавливает остальные. pending считается обновлением."""
+    останавливает остальные. pending считается обновлением. Google Play не принял токен аккаунта — подключение
+    истекло: его приложения этой ночью пропускаются и в итог не идут, остальные аккаунты и источники — дальше."""
     apps = db.apps_to_check(c)
     if not apps:
         return ""
@@ -185,12 +208,19 @@ def check_all(env, c, work: Path) -> str:
         shelf = db.get_shelf(c, app["shelf_id"])
         if shelf is None:
             continue
+        if app["source"] == "play":
+            acct = people.get_google(c, app["google_account_id"])
+            if acct is not None and acct.play != "ok":  # истекло раньше этой ночью
+                continue
         try:
             if check_app(env, c, shelf, app, work / f"{shelf.id}-{app['package']}") == "same":
                 same += 1
             else:
                 updated += 1
         except store.AppGone:  # сняли с полки посреди проверки
+            continue
+        except play.PlayAuthError:
+            play_expired(env, c, app["google_account_id"])
             continue
         except Exception as e:
             if isinstance(e, jobs.LowSpace):
