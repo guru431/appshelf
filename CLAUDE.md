@@ -4,8 +4,9 @@ IPA из истории покупок основного Apple ID владел�
 Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026-10-05-appshelf-design.md`.
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
 Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
-Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–4 реализованы;
-этап 4 — Google Play — `docs/superpowers/plans/2026-10-28-android-stage4.md`, протокол — вики проекта, google-play-protocol).
+Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–5 реализованы;
+этап 4 — Google Play — `docs/superpowers/plans/2026-10-28-android-stage4.md`, протокол — вики проекта, google-play-protocol;
+этап 5 — AppGallery, F-Droid, APKPure — `docs/superpowers/plans/2026-10-28-android-stage5.md`, форматы — `tests/data/*/README.md`).
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
@@ -16,8 +17,10 @@ Android-полки, вход Google, публичная полка — `docs/sup
   `cli.py`.
 - `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
   (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
-  Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `sources.py`, `fetch.py` (конвейер и
-  задания), `pin.py` (PIN публичной полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
+  Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `appgallery.py` (updateCheck по пакету),
+  `fdroid.py` (пакетный API, сборки по ABI), `apkpure.py` (app_version, protobuf), `links.py` (страница магазина →
+  источник и пакет), `sources.py`, `fetch.py` (конвейер, задания, сверка подписи с RuStore), `pin.py` (PIN публичной
+  полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
   `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker

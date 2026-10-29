@@ -28,9 +28,9 @@ The web UI is in Russian.
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
 - PWA: the shelf on the Home Screen.
-- Android: a section with each person's Android shelf — APKs from RuStore, Google Play, from a direct link on a
-  bank's site or an uploaded file; install and update from the phone's browser, nightly check for new versions, a signing rule (see
-  "Android").
+- Android: a section with each person's Android shelf — APKs from RuStore, Google Play, AppGallery, F-Droid, APKPure,
+  from a direct link on a bank's site or an uploaded file; install and update from the phone's browser, nightly check
+  for new versions, a signing rule (see "Android").
 - A public Android shelf: the owner fills it, a guest opens it with a 6-digit PIN and can only install; brute-force
   protection.
 
@@ -44,7 +44,8 @@ The web UI is in Russian.
                          └─ /d/      → <archive>/ no password (manifests, IPAs, icons; path holds a secret token)
     appshelf-web (job worker) ─┐
     appshelf-nightly (04:30)   ┴─► bin/ipatool (HOME=/etc/appshelf/accounts/<id>, flock locks/<id>.lock) ─► Apple
-                               └─► android/net.py (https and global addresses only) ─► RuStore, websites (APK)
+                               └─► android/net.py (https and global addresses only) ─► RuStore, Google Play,
+                                   AppGallery, F-Droid, APKPure, websites (APK)
 
 IPAs are fetched by `bin/ipatool`, a fork of [ipatool-cpp](https://github.com/Sorvigolova/ipatool) with our
 patches (`ipatool/`): the password is never stored and is passed only via stdin, a `list-purchases`
@@ -251,14 +252,19 @@ The same server also keeps Android shelves: the **Android** section of the panel
 the header. From an Android phone the panel opens right in it, from an iPhone in Apple, from a computer in the
 section opened last. An Android shelf belongs to a person, not to an Apple ID: an APK is not tied to any account.
 Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/superpowers/specs/2026-10-28-android-design.md)
-(stages 1–4 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking, Google
-Play — free apps that come as one APK).
+(stages 1–5 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking, Google
+Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
 
 - **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
-  paid apps are unavailable), Google Play — with a connected Google account (below), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own
-  file" — an upload of up to 1 GB. The server never follows a link into an internal network: the name is resolved
-  before every request and after every redirect, and any non-global address (private, loopback, link-local,
-  multicast) is refused before connecting.
+  paid apps are unavailable), Google Play — with a connected Google account (below), "By link" — an app page on
+  Google Play, AppGallery (or its ID like `C102312137`), F-Droid, APKPure, RuStore (the source and package are taken
+  from the address) or a direct `https` link to an APK on a bank's or developer's site, "Own file" — an upload of up
+  to 1 GB. The server never follows a link into an internal network: the name is resolved before every request and
+  after every redirect, and any non-global address (private, loopback, link-local, multicast) is refused before
+  connecting.
+- **Source limits.** One whole APK only, nothing paid except apps bought in Google Play. The terms of RuStore,
+  AppGallery, APKPure and Google Play forbid automated downloads: requests go one at a time with a pause, the nightly
+  check runs once a day; the server owner accepts the risk of losing access.
 - **Installing.** "Download APK" in Chrome on the phone; the first time Android asks to allow installs from the
   browser. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
   whole APK: bundles (split APK, XAPK, APKS) are refused when added.
@@ -269,8 +275,9 @@ Play — free apps that come as one APK).
 - **Versions** — as with IPAs: current, previous, pinned; "⋯" — check for update, pin, change source, upload a new
   version as a file, remove from the shelf. Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
-- **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore and Google Play by `versionCode`, a link by
-  `ETag`, `Last-Modified`, `Content-Length`; uploaded files are not checked. The night's result ends with
+- **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore, Google Play, AppGallery and
+  APKPure by `versionCode`, F-Droid by the suggested version, a link by `ETag`, `Last-Modified`, `Content-Length`;
+  uploaded files are not checked. The night's result ends with
   "Android: обновлено N, без изменений M, ошибок K".
 - **Russian CA certificates.** The RuStore CDN and the Sber and VTB sites use certificates of the Russian Ministry of
   Digital Development CA, which system roots do not trust. The APK downloader (and only it) takes extra certificates
@@ -283,7 +290,8 @@ Play — free apps that come as one APK).
   (set in the `appshelf-web` unit), not to `/tmp`.
 
 Hints for the phone are in the section's catalog: Samsung Auto Blocker, Huawei Pure Mode, Play Protect; from 2027
-Google requires developer verification for installs outside stores too.
+Google requires developer verification for installs outside stores too — apps of unverified developers (probably
+including sanctioned banks) install only through the one-time "advanced flow" (developer mode, a day's wait).
 
 ### Google Play
 
@@ -301,8 +309,9 @@ through a Google account connected to Play on the accounts page; there is no sha
   via `ReadWritePaths`), the Play token stays in process memory. Never in the database, logs or argv. "Отключить Google
   Play" and deleting the Google account delete the directory.
 - **One APK only.** Only what Play delivers as a single file goes on a shelf. Almost everything in Play is an App
-  Bundle (split APKs): a browser cannot install that, the card says so and, if the package is free in RuStore,
-  suggests switching the source. A new version that arrives as a bundle leaves the previous one on the shelf, marked.
+  Bundle (split APKs): a browser cannot install that, the card says so and, if the package comes as one APK in
+  RuStore (free), AppGallery or F-Droid, names them and suggests switching the source. A new version that arrives as a
+  bundle leaves the previous one on the shelf, marked.
 - **Purchased apps** go only to the personal shelf of the person whose account bought them (checked on the server):
   not to the public shelf, not to anyone else's. "My purchases" will come after a live check of purchases through a
   proxy in the account's country.
@@ -316,10 +325,32 @@ through a Google account connected to Play on the accounts page; there is no sha
 - **Live test** — `pytest -m integration tests/test_android_play_live.py` with `APPSHELF_PLAY_TEST_GID=<id of a
   connected Google account>` in `.env`: `details` of a free package as `appshelf` on the server.
 
+### AppGallery, F-Droid, APKPure
+
+Added "By link" with the app's page (search is RuStore only); "⋯ → Change source" switches a card to any of them by
+its package. The signature of every downloaded version is compared with RuStore.
+
+- **AppGallery** — Huawei's client API without sign-in (`client.updateCheck` by package name: version, file size and
+  SHA-256, APK link); an ID from a page (`appgallery.huawei.com/app/C…`) is turned into the package. The API host
+  defaults to the Russian `store-drru.hispace.dbankcloud.ru`, another one goes to `APPSHELF_APPGALLERY_HOST` in
+  `appshelf.env`. From a foreign address AppGallery answers for another zone with no banks — "AppGallery не нашёл
+  приложение (зона …)". Huawei may re-sign an app with its own key: a signature other than RuStore's gives the card
+  the mark "подписан не так, как в RuStore: не встанет поверх версии оттуда" (the app is still added).
+- **F-Droid** — the official `f-droid.org` repository: the package API and APKs over HTTPS. The F-Droid index
+  signature is **not verified** (the index is tens of MB of JSON): the first version on the shelf sets the app's
+  signature, as with a link. One version may have several builds per ABI, and the suggested one is not always ARM
+  (VLC's is x86_64): the shelf takes a universal or `arm64-v8a` build, otherwise `armeabi-v7a`, otherwise "в F-Droid
+  нет сборки для ARM". There are no banks in F-Droid.
+- **APKPure** — the APKPure client API without sign-in, single APKs only: an XAPK is refused as a bundle with a hint
+  where the package comes as one APK. APKPure has distributed tampered APKs (2021 — a trojan in its client, 2025 —
+  Telegram X with a backdoor), so: if the package is in RuStore the signature **must** match, otherwise "подпись не
+  совпала с RuStore"; if not, it is added only with the "I understand" checkbox and the mark "подпись не сверена",
+  then the general signature rule applies.
+
 ### Public shelf
 
 One Android shelf per server for people without a panel sign-in. The owner fills it (Android → **Публичная** →
-"Добавить в публичную": the same RuStore, link and own file), people see it on the same tab without a PIN and without
+"Добавить в публичную": the same sources), people see it on the same tab without a PIN and without
 actions, a guest opens `<site address>/p` and enters the PIN — and sees only the list with "Download APK" and the
 hints, no menu and no panel.
 

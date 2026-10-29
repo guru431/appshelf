@@ -1,6 +1,7 @@
 # Своя полка приложений iPhone (`appshelf`) — дизайн
 
-**Дата:** 2026-10-05 · **Статус:** реализован; вход и несколько Apple ID — [2026-10-08-multi-apple-id-design.md](2026-10-08-multi-apple-id-design.md)
+**Дата:** 2026-10-05 · **Статус:** реализован; вход и несколько Apple ID — [2026-10-08-multi-apple-id-design.md](2026-10-08-multi-apple-id-design.md);
+Android-полки, вход через Google, публичная полка — [2026-10-28-android-design.md](2026-10-28-android-design.md)
 
 ## 1. Зачем
 
