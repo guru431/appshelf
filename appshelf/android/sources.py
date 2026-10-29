@@ -1,6 +1,6 @@
 """Источники APK (spec 2026-10-28 §6.1–6.2, §6.4–6.5): RuStore, прямая ссылка, Google Play (подключённым
-Google-аккаунтом, android/play.py), AppGallery; свой файл приходит из браузера и источника не имеет. Запросы — последовательно, с паузой между ними
-(правила источников запрещают выкачку, §11)."""
+Google-аккаунтом, android/play.py), AppGallery, F-Droid, APKPure; свой файл приходит из браузера и источника не имеет.
+Запросы — последовательно, с паузой между ними (правила источников запрещают выкачку, §11)."""
 from __future__ import annotations
 
 import io
@@ -11,13 +11,12 @@ from pathlib import Path
 from PIL import Image
 
 from .. import apk
-from . import appgallery, fdroid, links, rustore
+from . import apkpure, appgallery, fdroid, links, rustore
 from .net import FetchError, Http, Meta, SourceError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
 ICON_MAX = 1 << 20
 SPLIT_TEXT = "набором файлов — из браузера не ставится"
-RUSTORE_HINT = "; есть в RuStore — смените источник"
 NOT_OWNED = "платное — не куплено этим аккаунтом"
 PAID_ELSEWHERE = "купленное в Google Play — только на личную полку того, чей аккаунт его купил"
 ACCOUNT_GONE = "Google-аккаунт удалён — смените источник"
@@ -85,6 +84,9 @@ class Sources:
             self._wait()
             mark = _fdroid_mark(fdroid.info(self.http, ref))
             return Latest(None, mark, mark != stored_etag)
+        if source == "apkpure":
+            self._wait()
+            return Latest(apkpure.info(self.http, ref).version_code, "", True)
         raise SourceError(f"источник «{source}» не проверяется")
 
     def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False) -> Got:
@@ -115,7 +117,42 @@ class Sources:
             return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
         if source == "fdroid":
             return self._fetch_fdroid(ref, dest)
+        if source == "apkpure":
+            self._wait()
+            app = apkpure.info(self.http, ref)
+            if app.kind != "apk":
+                raise SplitOnly(SPLIT_TEXT + self._hint(ref))
+            self._wait()
+            apkpure.download(self.http, app, dest)
+            return Got(app.name, "", self._icon(app.icon_url, dest))
         raise SourceError(f"источник «{source}» не скачивается")
+
+    def rustore_signature(self, package: str) -> str | None:
+        """Подпись пакета в RuStore — образец для AppGallery, F-Droid и APKPure; нет пакета или сбой — None."""
+        try:
+            self._wait()
+            return rustore.info(self.http, package).signature or None
+        except (FetchError, SourceError):
+            return None
+
+    def elsewhere(self, package: str) -> list[str]:
+        """Где ещё пакет есть одним бесплатным APK — для подсказки к набору файлов (spec §6.4): RuStore (не платное),
+        AppGallery, F-Droid. Сбой источника — «нет»."""
+        found = []
+        for name, check in (("RuStore", lambda: rustore.info(self.http, package).price == 0),
+                            ("AppGallery", lambda: bool(appgallery.info(self.http, self.appgallery_host, package))),
+                            ("F-Droid", lambda: bool(fdroid.info(self.http, package)))):
+            try:
+                self._wait()
+                if check():
+                    found.append(name)
+            except (FetchError, SourceError):
+                pass
+        return found
+
+    def _hint(self, package: str) -> str:
+        found = self.elsewhere(package)
+        return f"; есть в {', '.join(found)} — смените источник" if found else ""
 
     def _fetch_fdroid(self, package: str, dest: Path) -> Got:
         """Сборки рекомендуемой версии по очереди, пока не найдётся универсальная или arm64-v8a; нет ни одной —
@@ -172,17 +209,10 @@ class Sources:
         self._wait()
         delivery = client.delivery(app)
         if delivery.splits or delivery.extra_files:
-            raise SplitOnly(SPLIT_TEXT + (RUSTORE_HINT if self._free_in_rustore(package) else ""))
+            raise SplitOnly(SPLIT_TEXT + self._hint(package))
         self._wait()
         client.download(delivery, dest)
         return Got(app.name, "", self._icon(app.icon_url, dest), paid=app.paid)
-
-    def _free_in_rustore(self, package: str) -> bool:
-        try:
-            self._wait()
-            return rustore.info(self.http, package).price == 0
-        except (FetchError, SourceError):
-            return False
 
     def _icon(self, url: str, dest: Path) -> bytes | None:
         """Иконка источника как PNG; не скачалась или не картинка — None (будет из APK или заглушка)."""

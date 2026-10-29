@@ -1,6 +1,6 @@
-"""Поле «Ссылка на приложение или APK» (план этапа 5, Task 1): страница приложения в магазине → (источник, ref), иначе —
-прямая ссылка на APK. Страницы не скачиваются — пакет или ID берётся из самого адреса. ref: пакет (play, fdroid, apkpure,
-rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link)."""
+"""Поле «Ссылка на приложение или APK» (план этапа 5, Task 1): страница приложения в магазине → (источник, ref),
+иначе — прямая ссылка на APK. Страницы не скачиваются — пакет или ID берётся из самого адреса. ref: пакет (play,
+fdroid, apkpure, rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link)."""
 from __future__ import annotations
 
 import re

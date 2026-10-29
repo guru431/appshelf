@@ -19,9 +19,13 @@ from .sources import ACCOUNT_GONE, SplitOnly
 
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
-                "appgallery": "AppGallery", "fdroid": "F-Droid"}
+                "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
+SIGNER_DIFFERS = "подписан не так, как в RuStore: не встанет поверх версии оттуда"
+NOT_VERIFIED = "подпись не сверена: пакета нет в RuStore"
+NEED_ACK = ("нужно подтверждение для APKPure: пакета нет в RuStore, подпись не с чем сверить — добавьте ещё раз "
+            "с галочкой")
 PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"
 
 
@@ -52,16 +56,17 @@ def _space(env, c) -> None:
 
 def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: str, expected_package: str | None,
               expected_signer: str, name_hint: str, icon: bytes | None, google_account_id: int | None = None,
-              paid: bool = False) -> tuple[str, str]:
+              paid: bool = False, signer_from: str = "") -> tuple[str, str]:
     """APK из path — на полку: (пакет, "updated" | "pending" | "same"). path переносится на полку или остаётся
     вызывающему. expected_package — карточка уже есть (RuStore, проверка, новая версия файлом): нет её — AppGone;
-    без него карточка появляется, когда пакет стал известен (ссылка, свой файл)."""
+    без него карточка появляется, когда пакет стал известен (ссылка, свой файл). signer_from — чья подпись
+    expected_signer, если не самого источника (APKPure сверяется с RuStore)."""
     cfg, now = env.cfg, env.now()
     info = apk.read_apk(path)
     if expected_package and info.package != expected_package:
         raise apk.ApkError(f"в файле приложение {info.package}, а на карточке — {expected_package}")
     if expected_signer and info.signer != expected_signer:
-        raise apk.ApkError(f"подпись не совпала с {SOURCE_NAMES.get(source, source)}")
+        raise apk.ApkError(f"подпись не совпала с {SOURCE_NAMES.get(signer_from or source, source)}")
     app = db.get_app(c, shelf.id, info.package)
     if app is None and expected_package:
         raise store.AppGone(info.package)
@@ -142,21 +147,36 @@ def play_expired(env, c, gid: int) -> None:
 
 
 def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, expected_package: str | None,
-              name_hint: str, account=None) -> tuple[str, str]:
-    """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания. account — Google-аккаунт
-    источника play."""
+              name_hint: str, account=None, ack: bool = False) -> tuple[str, str, str]:
+    """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания: (пакет, итог, метка
+    карточки). account — Google-аккаунт источника play. Сверка с RuStore (план этапа 5): APKPure — подпись обязана
+    совпасть, нет пакета в RuStore — нужна галочка ack (у приложения на полке подпись уже задана) и метка «не
+    сверена»; AppGallery и F-Droid — другая подпись не отказ, а метка."""
     with jobs.hold(env.cfg.download_lock):
         shelf = db.get_shelf(c, shelf.id) or shelf  # токен каталога мог смениться (rotate_shelf), пока ждали замок
         _space(env, c)
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         try:
+            reference = env.sources.rustore_signature(ref) if source == "apkpure" else None
+            if source == "apkpure" and reference is None and not ack and not db.has_current(c, shelf.id, ref):
+                raise SourceError(NEED_ACK)
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
                                     allow_paid=_own_shelf(shelf, account))
+            expected, signer_from, notice = got.expected_signer, "", ""
+            if source == "apkpure":
+                expected, signer_from, notice = (reference, "rustore", "") if reference else ("", "", NOT_VERIFIED)
+            elif source in ("appgallery", "fdroid"):
+                reference = env.sources.rustore_signature(got.ref or ref)
+                if reference and apk.read_apk(work / "app.apk").signer != reference:
+                    notice = SIGNER_DIFFERS
             package, result = store_apk(env, c, shelf, work / "app.apk", source=source, source_ref=got.ref or ref,
-                                        expected_package=expected_package, expected_signer=got.expected_signer,
+                                        expected_package=expected_package, expected_signer=expected,
                                         name_hint=name_hint or got.name, icon=got.icon,
-                                        google_account_id=account.id if account is not None else None, paid=got.paid)
+                                        google_account_id=account.id if account is not None else None, paid=got.paid,
+                                        signer_from=signer_from)
+            if notice and result != "same":
+                db.set_status(c, shelf.id, package, "ok", notice)
             app = db.get_app(c, shelf.id, package)
             if got.ref and got.ref != ref and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_source(c, shelf.id, package, source, got.ref)  # AppGallery: ID со страницы → пакет
@@ -166,7 +186,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                 db.set_paid(c, shelf.id, package, got.paid)
                 if got.name and app["name"] == package:  # панель знала только пакет — название из Play
                     db.set_name(c, shelf.id, package, got.name)
-            return package, result
+            return package, result, notice
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -190,14 +210,14 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
         result, note = "same", SPLIT_UPDATE
     else:
         try:
-            _, result = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
-                                  name_hint=app["name"], account=account)
+            _, result, note = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
+                                        name_hint=app["name"], account=account)
         except SplitOnly:
             if known is None:  # первой версии нет — это ошибка добавления, а не отметка
                 raise
             result, note = "same", SPLIT_UPDATE
     db.set_status(c, shelf.id, pkg, "ok", note)
-    db.set_checked(c, shelf.id, pkg, env.now(), result, split_mark if note else latest.etag or None)
+    db.set_checked(c, shelf.id, pkg, env.now(), result, split_mark if note == SPLIT_UPDATE else latest.etag or None)
     return result
 
 
@@ -248,8 +268,8 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
 
 
 def run_job(env, c, job) -> None:
-    """Задание обработчика: add (payload source, ref, name; play — и account), upload (path, name, package?),
-    check (package). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
+    """Задание обработчика: add (payload source, ref, name; play — и account, apkpure — и ack), upload (path, name,
+    package?), check (package). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
     shelf = db.get_shelf(c, job["shelf_id"])
     payload = json.loads(job["payload"]) if job["payload"] else {}
     package = job["package"] or payload.get("package", "")
@@ -266,7 +286,8 @@ def run_job(env, c, job) -> None:
         if job["kind"] == "add":
             gid = payload.get("account") or gid
             _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
-                      name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid))
+                      name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid),
+                      ack=payload.get("ack") is True)
         elif job["kind"] == "upload":
             with jobs.hold(env.cfg.download_lock):
                 _space(env, c)

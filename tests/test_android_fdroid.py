@@ -26,7 +26,8 @@ def repo(tmp_path, builds: dict[int, tuple]) -> dict[str, bytes]:
 def test_fdroid_info_fixture():
     http = FakeHttp(raw={fdroid.API + VLC: api()})
     pkg = fdroid.info(http, VLC)
-    assert (pkg.package, pkg.suggested) == (VLC, 13070208) and pkg.versions[:2] == (("3.7.2", 13070208), ("3.7.2", 13070207))
+    assert (pkg.package, pkg.suggested) == (VLC, 13070208)
+    assert pkg.versions[:2] == (("3.7.2", 13070208), ("3.7.2", 13070207))
     assert fdroid.candidates(pkg) == [13070208, 13070207, 13070206, 13070205]
     own = fdroid.info(FakeHttp(raw={fdroid.API + "org.fdroid.fdroid": api("package_fdroid.json")}), "org.fdroid.fdroid")
     assert fdroid.candidates(own) == [1023052]                     # рекомендуемая 1.23.2, не новейшая 2.0.2

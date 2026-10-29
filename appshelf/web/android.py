@@ -288,9 +288,9 @@ def _register_scope(app, w, scope: Scope):
             return None, (413, TOO_BIG) if n else (400, "Файл пустой")
         return dest, None
 
-    def requeue(c, shelf, app) -> None:
-        """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново; свой файл без
-        источника и уже ждущее задание — ничего."""
+    def requeue(c, shelf, app, ack: bool = False) -> None:
+        """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново (APKPure — с
+        галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего."""
         package = app["package"]
         if app["source"] == "upload" or db.active_for(c, shelf.id, package):
             return
@@ -299,8 +299,10 @@ def _register_scope(app, w, scope: Scope):
             if db.has_current(c, shelf.id, package):
                 db.enqueue(c, shelf.id, "check", w.now(), package=package)
             else:
-                db.enqueue(c, shelf.id, "add", w.now(), package=package,
-                           payload={"source": app["source"], "ref": app["source_ref"], "name": app["name"]})
+                payload = {"source": app["source"], "ref": app["source_ref"], "name": app["name"]}
+                if app["source"] == "apkpure":
+                    payload["ack"] = ack
+                db.enqueue(c, shelf.id, "add", w.now(), package=package, payload=payload)
 
     @app.get(p, response_class=HTMLResponse)
     def android_catalog(request: Request):
@@ -317,7 +319,8 @@ def _register_scope(app, w, scope: Scope):
             shelf = ensure(c, request)
             with store.tx(c):
                 if db.get_app(c, shelf.id, package) is None:
-                    db.put_app(c, shelf.id, package, name or package, source, package, w.now(), google_account_id=account)
+                    db.put_app(c, shelf.id, package, name or package, source, package, w.now(),
+                               google_account_id=account)
                     db.enqueue(c, shelf.id, "add", w.now(), package=package,
                                payload={"source": source, "ref": package, **payload})
         return back(p)
@@ -342,9 +345,10 @@ def _register_scope(app, w, scope: Scope):
         return add_package(request, "play", package, "", {"account": acct.id}, acct.id)
 
     @app.post(f"{p}/add/link", response_class=HTMLResponse, dependencies=deps)
-    def add_link(request: Request, url: str = Form(""), name: str = Form("")):
+    def add_link(request: Request, url: str = Form(""), name: str = Form(""), ack: str = Form("")):
         """Страница приложения в магазине (links.parse) или прямая ссылка на APK. Google Play — первым подключённым
-        аккаунтом области; ссылка и ID AppGallery — без карточки, пока обработчик не узнает пакет."""
+        аккаунтом области; ссылка и ID AppGallery — без карточки, пока обработчик не узнает пакет; APKPure — тоже без
+        карточки (до сверки подписи), с галочкой ack."""
         url, name = url.strip(), name.strip()[:200]
         try:
             if len(url) > MAX_URL:
@@ -358,11 +362,14 @@ def _register_scope(app, w, scope: Scope):
             if acct is None:
                 return add_page(request, status_code=400, error=NEED_PLAY, link_url=url)
             return add_package(request, "play", ref, "", {"account": acct.id}, acct.id)
-        if source not in ("link", "appgallery"):
+        if source not in ("link", "appgallery", "apkpure"):
             return add_package(request, source, ref, name, {"name": name})
+        payload = {"source": source, "ref": ref, "name": name}
+        if source == "apkpure":
+            payload["ack"] = ack == "1"
         with w.conn() as c:
             shelf = ensure(c, request)
-            db.enqueue(c, shelf.id, "add", w.now(), payload={"source": source, "ref": ref, "name": name})
+            db.enqueue(c, shelf.id, "add", w.now(), payload=payload)
         return back(p)
 
     @app.post(f"{p}/add/upload", response_class=HTMLResponse, dependencies=deps)
@@ -434,7 +441,8 @@ def _register_scope(app, w, scope: Scope):
         return change(request, package, lambda c, root, sid: db.unpin_version(c, root, sid, package, version_id))
 
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
-    def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form("")):
+    def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),
+                      ack: str = Form("")):
         """Сменить источник: версии и закрепления остаются, первая версия из нового источника — по правилу подписи.
         Ссылка — страница магазина (links.parse) или прямая на APK; страница другого пакета — отказ."""
         with w.conn() as c:
@@ -459,7 +467,7 @@ def _register_scope(app, w, scope: Scope):
             return catalog_page(request, 400, "Источник — RuStore, страница магазина или ссылка на APK")
         with w.conn() as c:
             db.set_source(c, shelf.id, package, source, ref)
-            requeue(c, shelf, db.get_app(c, shelf.id, package))
+            requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1")
         return back(p)
 
     @app.post(p + "/jobs/{job_id}/dismiss", dependencies=deps)

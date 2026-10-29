@@ -1,5 +1,6 @@
 """Источник Google Play в конвейере (spec 2026-10-28 §6.4): одним APK — на полку, набор файлов и некупленное —
 отказ, купленное — только на полку того, чей аккаунт купил, отказ токена — подключение истекло, задание ждёт."""
+import json
 from dataclasses import replace
 
 import pytest
@@ -15,10 +16,24 @@ PAID = play.PlayApp("com.example.paid", "Платное", 1, "1.0", True, True, 
 
 
 class FakeHttp:
-    """RuStore для подсказки «есть в RuStore»: overallInfo по пакету из .rustore, иначе 404."""
+    """Подсказка «есть в …»: RuStore — overallInfo по пакету из .rustore (цена), иначе 404; AppGallery — пакеты
+    .appgallery, F-Droid — пакеты .fdroid, остальное — «нет»."""
 
     def __init__(self, rustore_apps=None):
         self.rustore, self.calls = dict(rustore_apps or {}), []
+        self.appgallery, self.fdroid = set(), set()
+
+    def form(self, url, data, *, headers=None):
+        self.calls.append(url)
+        package = json.loads(data["pkgInfo"])["params"][0]["package"]
+        found = [{"id": "C1000001", "package": package, "version": "1", "versionCode": 1, "downurl": "https://x/a.apk"}]
+        return {"rtnCode": 0, "list": found if package in self.appgallery else []}
+
+    def request(self, method, url, *, headers=None, body=None, max_bytes=0):
+        self.calls.append(url)
+        if url.rsplit("/", 1)[1] not in self.fdroid:
+            return 404, {}, b'{"error":"NOT_FOUND"}'
+        return 200, {}, b'{"suggestedVersionCode": 1, "packages": [{"versionName": "1", "versionCode": 1}]}'
 
     def json(self, url, *, headers=None, body=None):
         self.calls.append(url)
@@ -93,6 +108,19 @@ def test_play_split_refused_with_rustore_hint(setup, ctx, conn, clock):
     http.rustore[PKG] = 9900                                      # в RuStore платное — подсказки нет
     db.remove_app(conn, fetch.shelf_root(ctx.env.cfg, shelf), shelf.id, PKG)
     assert add(ctx, conn, clock, shelf, g.id)[0]["error"] == sources.SPLIT_TEXT
+
+
+def test_split_hint_lists_all_sources(setup, ctx, conn, clock):
+    g, fake, http = setup
+    fake.split.add(PKG)
+    http.rustore[PKG], http.appgallery, http.fdroid = 0, {PKG}, {PKG}
+    shelf = db.ensure_shelf(conn, g.user_id, clock.iso())
+    job, _ = add(ctx, conn, clock, shelf, g.id)
+    assert job["error"] == sources.SPLIT_TEXT + "; есть в RuStore, AppGallery, F-Droid — смените источник"
+    http.rustore.clear()
+    http.appgallery.clear()
+    db.remove_app(conn, fetch.shelf_root(ctx.env.cfg, shelf), shelf.id, PKG)
+    assert add(ctx, conn, clock, shelf, g.id)[0]["error"] == sources.SPLIT_TEXT + "; есть в F-Droid — смените источник"
 
 
 def test_play_paid_not_owned_refused(setup, ctx, conn, clock):

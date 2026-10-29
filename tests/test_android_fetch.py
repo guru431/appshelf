@@ -230,6 +230,66 @@ def test_appgallery_id_card_gets_package_ref(ctx, conn, clock, tmp_path):
     assert db.get_app(conn, shelf.id, PKG)["source_ref"] == PKG and versions(conn, shelf)["current"] == 2
 
 
+def add_from(ctx, conn, clock, source, apk_path, **payload):
+    """Как «По ссылке» на страницу магазина без карточки (APKPure; AppGallery по ID): задание add с ref — пакетом."""
+    shelf = shelf_of(conn, clock)
+    ctx.sources.apks[PKG] = apk_path
+    return shelf, run(ctx, conn, shelf, "add", clock, source=source, ref=PKG, name="", **payload)
+
+
+def test_apkpure_signature_must_match_rustore(ctx, conn, clock, tmp_path):
+    ctx.sources.signatures[PKG] = cert_sha(b"CERT-A")
+    shelf, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "b.apk", cert=b"CERT-B"))
+    assert (job["status"], job["error"]) == ("error", "подпись не совпала с RuStore")
+    assert db.get_app(conn, shelf.id, PKG) is None
+    _, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk", cert=b"CERT-A"))  # совпала: без ack
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (job["status"], app["source"], app["status"], app["last_error"]) == ("done", "apkpure", "ok", "")
+
+
+def test_apkpure_without_reference_needs_ack(ctx, conn, clock, tmp_path):
+    shelf, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk"), ack=False)
+    assert job["status"] == "error" and "нужно подтверждение" in job["error"]
+    assert db.get_app(conn, shelf.id, PKG) is None
+    assert ("rustore_signature", PKG) in ctx.sources.calls
+    _, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk"), ack=True)
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (job["status"], app["status"], app["last_error"]) == ("done", "ok", fetch.NOT_VERIFIED)
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=2)            # дальше — без галочки
+    ctx.sources._latest[PKG] = Latest(2, "", True)
+    run(ctx, conn, shelf, "check", clock, package=PKG)
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (versions(conn, shelf)["current"], app["last_error"]) == (2, fetch.NOT_VERIFIED)
+
+
+@pytest.mark.parametrize("source", ["appgallery", "fdroid"])
+def test_appgallery_signer_differs_from_rustore_notice(ctx, conn, clock, tmp_path, source):
+    ctx.sources.signatures[PKG] = cert_sha(b"CERT-B")
+    shelf, job = add_from(ctx, conn, clock, source, make_apk(tmp_path / "a.apk", cert=b"CERT-A"))
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (job["status"], app["status"], app["last_error"]) == ("done", "ok", fetch.SIGNER_DIFFERS)
+    assert fetch.SIGNER_DIFFERS == "подписан не так, как в RuStore: не встанет поверх версии оттуда"
+    ctx.sources.signatures[PKG] = cert_sha(b"CERT-A")                               # совпала — метки нет
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=2)
+    ctx.sources._latest[PKG] = Latest(2, "", True)
+    run(ctx, conn, shelf, "check", clock, package=PKG)
+    assert db.get_app(conn, shelf.id, PKG)["last_error"] == ""
+
+
+def test_change_source_to_apkpure_checks_rustore_signature(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", cert=b"CERT-A"))
+    db.set_source(conn, shelf.id, PKG, "apkpure", PKG)
+    ctx.sources.got[PKG] = Got("", "", None)
+    ctx.sources.signatures[PKG] = cert_sha(b"CERT-A")
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=2, cert=b"CERT-B")
+    ctx.sources._latest[PKG] = Latest(2, "", True)
+    job = run(ctx, conn, shelf, "check", clock, package=PKG)
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (job["status"], job["error"]) == ("error", "подпись не совпала с RuStore")
+    assert versions(conn, shelf) == {"current": 1} and (app["status"], app["source"]) == ("ok", "apkpure")
+    assert on_shelf(cfg, shelf) == [f"{PKG}-1"]
+
+
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):
     shelf = shelf_of(conn, clock)
     up = cfg.tmp_dir / "web" / "up-1.apk"

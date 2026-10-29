@@ -32,7 +32,7 @@ class Config:
     google_client_secret: str = field(default="", repr=False)  # только в appshelf.env и запросе к token endpoint
     # APPSHELF_PROXIES: имя → http://… или socks5h://… (бывает с паролем) — только для запросов к Google Play
     proxies: dict[str, str] = field(default_factory=dict, repr=False)
-    appgallery_host: str = ""    # APPSHELF_APPGALLERY_HOST: хост клиентского API AppGallery; "" — android.appgallery.HOST
+    appgallery_host: str = ""    # APPSHELF_APPGALLERY_HOST: хост API AppGallery; "" — android.appgallery.HOST
 
     @property
     def google_dir(self) -> Path:

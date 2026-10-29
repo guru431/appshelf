@@ -33,7 +33,8 @@ def test_appgallery_detail_fixture():
     assert (app.app_id, app.package, app.name, app.version_name, app.version_code, app.size) == \
         (VTB_ID, VTB, "Банк ВТБ", "20.19.0.6", 2090141590, 189014452)
     assert app.sha256 == "aefbcd22d2514d586fe0cbb35896d410974bc92b7009ca65e0a8b836977e1764"
-    assert app.apk_url.startswith("https://appdlc-drru.hispace.dbankcloud.ru/dl/appdl/") and app.icon_url.endswith(".webp")
+    assert app.apk_url.startswith("https://appdlc-drru.hispace.dbankcloud.ru/dl/appdl/")
+    assert app.icon_url.endswith(".webp")
     _, url, headers, form = http.calls[0]
     assert url == API and headers["User-Agent"].startswith("UpdateSDK##")
     assert form["method"] == "client.updateCheck" and json.loads(form["pkgInfo"])["params"][0]["package"] == VTB

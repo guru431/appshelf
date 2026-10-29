@@ -129,6 +129,17 @@ def test_add_link_routes_store_pages(web, conn):
     assert r.status_code == 400 and "не похоже на страницу приложения" in r.text
 
 
+def test_add_link_apkpure_passes_ack_without_card(web, conn):
+    for ack in ({"ack": "1"}, {}):
+        r = web.client.post("/android/add/link", data={"url": "https://apkpure.com/k-9-mail/com.fsck.k9", "name": "",
+                                                       **ack}, follow_redirects=False)
+        assert r.status_code == 303
+    jobs = [(j["package"], json.loads(j["payload"])) for j in conn.execute("SELECT * FROM android_jobs ORDER BY id")]
+    assert jobs == [("", {"source": "apkpure", "ref": "com.fsck.k9", "name": "", "ack": True}),
+                    ("", {"source": "apkpure", "ref": "com.fsck.k9", "name": "", "ack": False})]
+    assert db.shelf_for_user(conn, 1) is not None and db.list_apps(conn, shelf(conn).id) == []
+
+
 def test_add_link_play_page_needs_connected_account(web, conn, clock, acct):
     r = web.client.post("/android/add/link", data={"url": "https://play.google.com/store/apps/details?id=com.fsck.k9"})
     assert r.status_code == 400 and "подключите Google-аккаунт к Google Play" in r.text
@@ -146,7 +157,8 @@ def test_change_source_to_store_page(web, conn, tmp_path):
                         follow_redirects=False)
     assert r.status_code == 303
     assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
-    r = web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": "https://f-droid.org/packages/ru.other/"})
+    r = web.client.post(f"/android/apps/{PKG}/source",
+                        data={"source": "link", "ref": "https://f-droid.org/packages/ru.other/"})
     assert r.status_code == 400 and "ru.other" in r.text
     r = web.client.post(f"/android/apps/{PKG}/source",
                         data={"source": "link", "ref": f"https://play.google.com/store/apps/details?id={PKG}"})

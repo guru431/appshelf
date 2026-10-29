@@ -48,14 +48,20 @@ class FakeHttp:
 
 class FakeSources:
     """fetch копирует apks[ref] в dest; latest — из latest[ref]. found — ответ search, got[ref] — что вернёт fetch
-    (по умолчанию Got("", "", None)), fail[ref] — исключение fetch и latest. Вызовы — в calls."""
+    (по умолчанию Got("", "", None)), fail[ref] — исключение fetch и latest, signatures[пакет] — подпись в RuStore
+    (нет — None). Вызовы — в calls."""
 
     def __init__(self, apks: dict[str, Path] | None = None, latest: dict[str, Latest] | None = None):
         self.apks, self._latest = dict(apks or {}), dict(latest or {})
         self.found: list = []
         self.got: dict[str, Got] = {}
         self.fail: dict[str, Exception] = {}
+        self.signatures: dict[str, str] = {}
         self.calls: list = []
+
+    def rustore_signature(self, package: str) -> str | None:
+        self.calls.append(("rustore_signature", package))
+        return self.signatures.get(package)
 
     def search(self, query: str) -> list:
         self.calls.append(("search", query))
