@@ -39,3 +39,15 @@ class FakePlay:
         package = delivery.url.rsplit("/", 1)[1]
         self._call("download", package)
         shutil.copyfile(self.apks[package], dest)
+
+
+class FakePool:
+    """play.PlayPool: клиент — FakePlay своего Google-аккаунта; без действующего подключения — PlayAuthError."""
+
+    def __init__(self, by_gid: dict[int, FakePlay]):
+        self.by_gid = by_gid
+
+    def client(self, acct) -> FakePlay:
+        if acct.play != "ok":
+            raise play.PlayAuthError(play.NOT_CONNECTED)
+        return self.by_gid[acct.id]

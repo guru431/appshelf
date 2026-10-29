@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
-from .android import db as android_db, fetch as android_fetch, net
+from .android import db as android_db, fetch as android_fetch, net, play
 from .android.sources import Sources
 from .config import from_env
 
@@ -64,7 +64,7 @@ def main(argv=None) -> int:
         if args.cmd == "rotate-token":
             return rotate_token(cfg, c, args, acct if args.email else None)
         print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a),
-                                   sources=Sources(net.Http(cfg.sources_ca))), c))
+                                   sources=Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg))), c))
     return 0
 
 

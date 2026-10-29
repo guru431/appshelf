@@ -143,7 +143,7 @@ def test_check_downloads_newer_and_rotates(ctx, cfg, conn, clock, tmp_path):
 class Breaking(FakeSources):
     """Обрыв посередине: часть файла записана, затем FetchError."""
 
-    def fetch(self, source, ref, dest):
+    def fetch(self, source, ref, dest, **kw):
         dest.write_bytes(b"PK\x03\x04part")
         raise net.FetchError("обрыв при скачивании: ConnectionResetError")
 
@@ -247,7 +247,7 @@ def test_removed_while_downloading_is_cancelled(ctx, cfg, conn, clock, tmp_path)
     shelf = shelf_of(conn, clock)
 
     class Removing(FakeSources):
-        def fetch(self, source, ref, dest):
+        def fetch(self, source, ref, dest, **kw):
             db.remove_app(conn, cfg.archive / shelf.shelf, shelf.id, PKG)
             return super().fetch(source, ref, dest)
 

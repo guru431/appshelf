@@ -22,13 +22,13 @@ class FakeSources:
         self.calls.append(("search", query))
         return list(self.found)
 
-    def latest(self, source: str, ref: str, stored_etag: str) -> Latest:
+    def latest(self, source: str, ref: str, stored_etag: str, **kw) -> Latest:
         self.calls.append(("latest", source, ref))
         if ref in self.fail:
             raise self.fail[ref]
         return self._latest[ref]
 
-    def fetch(self, source: str, ref: str, dest: Path) -> Got:
+    def fetch(self, source: str, ref: str, dest: Path, **kw) -> Got:
         self.calls.append(("fetch", source, ref))
         if ref in self.fail:
             raise self.fail[ref]

@@ -284,6 +284,19 @@ def connect(cfg, gid: int, email: str, oauth_token: str, proxy: str, *, http_fac
 
 # --- клиент ------------------------------------------------------------------------
 
+class PlayPool:
+    """Клиенты Play для конвейера (Sources(play=…)): по Google-аккаунту (people.GoogleAccount) с его прокси; без
+    действующего подключения — PlayAuthError, задание ждёт."""
+
+    def __init__(self, cfg, *, http_factory=net.Http):
+        self.cfg, self.http_factory = cfg, http_factory
+
+    def client(self, acct) -> PlayClient:
+        if acct.play != "ok":
+            raise PlayAuthError(NOT_CONNECTED)
+        return PlayClient(self.cfg, acct.id, acct.proxy, http_factory=self.http_factory)
+
+
 class PlayClient:
     """Запросы к Play от имени подключённого Google-аккаунта gid; proxy — имя из APPSHELF_PROXIES."""
 

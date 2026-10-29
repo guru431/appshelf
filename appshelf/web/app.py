@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from starlette.concurrency import run_in_threadpool
 
 from .. import ipatool, jobs, notify, removed, store, webauth
-from ..android import net
+from ..android import net, play
 from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
@@ -70,10 +70,10 @@ def parse_app_id(ref: str) -> int | None:
 def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=time.monotonic, send=notify.send_mail,
                disk_free=jobs.free_bytes, start_worker: bool = True, sources=None, google_http=None) -> FastAPI:
     """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID;
-    sources — источники APK (по умолчанию RuStore и ссылки, с доп. корнями APPSHELF_SOURCES_CA);
+    sources — источники APK (по умолчанию RuStore, ссылки и Google Play, с доп. корнями APPSHELF_SOURCES_CA);
     google_http — HTTP к token endpoint Google (по умолчанию android.net.Http: только https и глобальные адреса)."""
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
-                   sources=sources or Sources(net.Http(cfg.sources_ca)))
+                   sources=sources or Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg)))
     flow = LoginFlow(clock=clock)
     w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
                webauth.load_key(cfg.cookie_key))

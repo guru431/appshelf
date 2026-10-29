@@ -15,6 +15,14 @@ from pathlib import Path
 from ..store import AppGone, rmtree_logged, tx
 
 ANDROID_DIR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+-\d+(-\d+)?$")
+PLAY_OK = "SELECT id FROM google_accounts WHERE play = 'ok'"
+# Google-аккаунт задания Play: из payload add, иначе — карточки Play («Повторить», проверка); у аккаунта нет
+# подключения — задание ждёт (spec §9). Аккаунта нет вовсе — задание идёт и падает ошибкой «удалён»
+JOB_ACCOUNT = """COALESCE(CASE WHEN json_valid(j.payload) AND json_extract(j.payload, '$.source') = 'play'
+                               THEN json_extract(j.payload, '$.account') END,
+                          (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
+                               AND a.package = j.package AND a.source = 'play'))"""
+RUNNABLE = f"NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok')"
 
 
 @dataclass(frozen=True)
@@ -118,10 +126,17 @@ def get_app(c, shelf_id: int, package: str):
     return c.execute("SELECT * FROM android_apps WHERE shelf_id=? AND package=?", (shelf_id, package)).fetchone()
 
 
-def put_app(c, shelf_id: int, package: str, name: str, source: str, source_ref: str, now: str) -> None:
-    """Карточка (queued) — до первой версии; есть — не трогаем."""
-    c.execute("INSERT OR IGNORE INTO android_apps (shelf_id, package, name, source, source_ref, status, published_at) "
-              "VALUES (?, ?, ?, ?, ?, 'queued', ?)", (shelf_id, package, name, source, source_ref, now))
+def put_app(c, shelf_id: int, package: str, name: str, source: str, source_ref: str, now: str,
+            google_account_id: int | None = None, paid: bool = False) -> None:
+    """Карточка (queued) — до первой версии; есть — не трогаем. Google Play — каким аккаунтом качать и купленное ли."""
+    c.execute("INSERT OR IGNORE INTO android_apps (shelf_id, package, name, source, source_ref, status, published_at, "
+              "google_account_id, paid) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)",
+              (shelf_id, package, name, source, source_ref, now, google_account_id, int(paid)))
+
+
+def set_paid(c, shelf_id: int, package: str, paid: bool) -> None:
+    """Купленное ли — по ответу Google Play при скачивании."""
+    c.execute("UPDATE android_apps SET paid=? WHERE shelf_id=? AND package=?", (int(paid), shelf_id, package))
 
 
 def set_status(c, shelf_id: int, package: str, status: str, error: str = "") -> None:
@@ -163,9 +178,10 @@ def has_current(c, shelf_id: int, package: str) -> bool:
 
 
 def apps_to_check(c) -> list[sqlite3.Row]:
-    """Ночная проверка: все полки; свой файл (upload) не проверяется."""
-    return c.execute("SELECT * FROM android_apps WHERE source IN ('rustore', 'link') AND status IN ('ok', 'error') "
-                     "ORDER BY shelf_id, package").fetchall()
+    """Ночная проверка: все полки; свой файл (upload) не проверяется, Google Play — только аккаунтом с действующим
+    подключением."""
+    return c.execute("SELECT * FROM android_apps WHERE status IN ('ok', 'error') AND (source IN ('rustore', 'link') "
+                     f"OR source = 'play' AND google_account_id IN ({PLAY_OK})) ORDER BY shelf_id, package").fetchall()
 
 
 def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
@@ -307,10 +323,16 @@ def enqueue(c, shelf_id: int, kind: str, now: str, package: str = "", payload: d
 
 def take_job(c):
     with tx(c):
-        job = c.execute("SELECT * FROM android_jobs WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+        job = c.execute(f"SELECT * FROM android_jobs j WHERE status='queued' AND {RUNNABLE} ORDER BY id LIMIT 1"
+                        ).fetchone()
         if job is not None:
             c.execute("UPDATE android_jobs SET status='running' WHERE id=?", (job["id"],))
     return job
+
+
+def requeue_job(c, job_id: int) -> None:
+    """Подключение к Play истекло посреди задания: снова в очередь — возьмётся, когда подключат заново."""
+    c.execute("UPDATE android_jobs SET status='queued' WHERE id=?", (job_id,))
 
 
 def finish_job(c, job_id: int, status: str, now: str, error: str = "") -> None:

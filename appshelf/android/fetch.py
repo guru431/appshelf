@@ -11,13 +11,14 @@ import secrets
 import shutil
 from pathlib import Path
 
-from .. import apk, ipa, jobs, notify, store
+from .. import apk, ipa, jobs, notify, people, store
 from ..ipatool import IpatoolError
-from . import db, net
+from . import db, net, play
 from .net import SourceError
+from .sources import ACCOUNT_GONE
 
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
-SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом"}
+SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 
 
@@ -47,7 +48,8 @@ def _space(env, c) -> None:
 
 
 def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: str, expected_package: str | None,
-              expected_signer: str, name_hint: str, icon: bytes | None) -> tuple[str, str]:
+              expected_signer: str, name_hint: str, icon: bytes | None, google_account_id: int | None = None,
+              paid: bool = False) -> tuple[str, str]:
     """APK из path — на полку: (пакет, "updated" | "pending" | "same"). path переносится на полку или остаётся
     вызывающему. expected_package — карточка уже есть (RuStore, проверка, новая версия файлом): нет её — AppGone;
     без него карточка появляется, когда пакет стал известен (ссылка, свой файл)."""
@@ -76,7 +78,8 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     if app is None:
         if db.get_shelf(c, shelf.id) is None:  # участника удалили, пока качали: карточку в ничью полку не ставим
             raise store.AppGone(info.package)
-        db.put_app(c, shelf.id, info.package, info.label or name_hint.strip() or info.package, source, source_ref, now)
+        db.put_app(c, shelf.id, info.package, info.label or name_hint.strip() or info.package, source, source_ref, now,
+                   google_account_id, paid)
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)
     root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
@@ -105,33 +108,59 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     return info.package, "updated" if role == "current" else "pending"
 
 
+def _account(c, source: str, gid: int | None):
+    """Google-аккаунт, которым качать из Play; у прочих источников — None."""
+    if source != "play":
+        return None
+    acct = people.get_google(c, gid) if gid else None
+    if acct is None:
+        raise SourceError(ACCOUNT_GONE)
+    return acct
+
+
+def _own_shelf(shelf: db.Shelf, account) -> bool:
+    """Купленное — только на Android-полку участника, чей аккаунт купил (spec §6.4): не публичная и не чужая."""
+    return account is not None and shelf.user_id is not None and shelf.user_id == account.user_id
+
+
+def play_expired(env, c, gid: int) -> None:
+    """Google Play не принял токен аккаунта: подключение истекло, его задания ждут нового."""
+    people.set_play(c, gid, "expired", env.now())
+
+
 def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, expected_package: str | None,
-              name_hint: str) -> tuple[str, str]:
-    """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания."""
+              name_hint: str, account=None) -> tuple[str, str]:
+    """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания. account — Google-аккаунт
+    источника play."""
     with jobs.hold(env.cfg.download_lock):
         shelf = db.get_shelf(c, shelf.id) or shelf  # токен каталога мог смениться (rotate_shelf), пока ждали замок
         _space(env, c)
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         try:
-            got = env.sources.fetch(source, ref, work / "app.apk")
+            got = env.sources.fetch(source, ref, work / "app.apk", account=account,
+                                    allow_paid=_own_shelf(shelf, account))
             package, result = store_apk(env, c, shelf, work / "app.apk", source=source, source_ref=ref,
                                         expected_package=expected_package, expected_signer=got.expected_signer,
-                                        name_hint=name_hint or got.name, icon=got.icon)
+                                        name_hint=name_hint or got.name, icon=got.icon,
+                                        google_account_id=account.id if account is not None else None, paid=got.paid)
             app = db.get_app(c, shelf.id, package)
             if got.etag and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_etag(c, shelf.id, package, got.etag)
+            if source == "play" and app is not None:
+                db.set_paid(c, shelf.id, package, got.paid)
             return package, result
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
 
 def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
-    """Проверка обновления карточки rustore / link: "updated" | "pending" | "same". RuStore: versionCode не больше
-    известного (текущей или ждущей «Принять») — без скачивания; ссылка: ETag/Last-Modified/Length те же — тоже.
-    Иначе — скачать и сравнить versionCode самого APK."""
+    """Проверка обновления карточки rustore / link / play: "updated" | "pending" | "same". RuStore и Google Play:
+    versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка: ETag/Last-Modified/
+    Length те же — тоже. Иначе — скачать и сравнить versionCode самого APK."""
     pkg = app["package"]
-    latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"])
+    account = _account(c, app["source"], app["google_account_id"])
+    latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
     known = c.execute("SELECT MAX(version_code) AS v FROM android_versions WHERE shelf_id=? AND package=? "
                       "AND role IN ('current', 'pending')", (shelf.id, pkg)).fetchone()["v"]
     if known is not None and (latest.version_code is not None and latest.version_code <= known
@@ -139,7 +168,7 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
         result = "same"
     else:
         _, result = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
-                              name_hint=app["name"])
+                              name_hint=app["name"], account=account)
     db.set_status(c, shelf.id, pkg, "ok")
     db.set_checked(c, shelf.id, pkg, env.now(), result, latest.etag or None)
     return result
@@ -184,19 +213,25 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
 
 
 def run_job(env, c, job) -> None:
-    """Задание обработчика: add (payload source, ref, name), upload (path, name, package?), check (package)."""
+    """Задание обработчика: add (payload source, ref, name; play — и account), upload (path, name, package?),
+    check (package). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
     shelf = db.get_shelf(c, job["shelf_id"])
     payload = json.loads(job["payload"]) if job["payload"] else {}
     package = job["package"] or payload.get("package", "")
     work = env.cfg.tmp_dir / "web" / f"android-{job['id']}"
+    gid = None
     try:
         if shelf is None:
             raise store.AppGone(package)
+        card = db.get_app(c, shelf.id, package) if package else None
+        if card is not None and card["source"] == "play":
+            gid = card["google_account_id"]
         if package:
             db.set_status(c, shelf.id, package, "downloading")
         if job["kind"] == "add":
+            gid = payload.get("account") or gid
             _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
-                      name_hint=payload.get("name", ""))
+                      name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid))
         elif job["kind"] == "upload":
             with jobs.hold(env.cfg.download_lock):
                 _space(env, c)
@@ -213,6 +248,12 @@ def run_job(env, c, job) -> None:
         db.finish_job(c, job["id"], "done", env.now())
     except store.AppGone:
         db.finish_job(c, job["id"], "cancelled", env.now(), "снято с полки во время скачивания")
+    except play.PlayAuthError:  # как SessionExpired у Apple ID: задание ждёт, пока аккаунт не подключат заново
+        db.requeue_job(c, job["id"])
+        if package:
+            db.set_status(c, shelf.id, package, "queued")
+        if gid is not None:
+            play_expired(env, c, gid)
     except Exception as e:  # ошибка задания — текст у карточки и у задания
         if isinstance(e, jobs.LowSpace):
             jobs.low_space(env, c, e)
