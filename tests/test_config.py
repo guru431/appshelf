@@ -76,6 +76,15 @@ def test_sources_ca_is_optional():
     assert cfg.sources_ca == Path("/etc/appshelf/ca.pem")
 
 
+def test_appgallery_host_is_optional():
+    assert from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}).appgallery_host == ""
+    cfg = from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE,
+                    "APPSHELF_APPGALLERY_HOST": " store-dre.hispace.dbankcloud.com "})
+    assert cfg.appgallery_host == "store-dre.hispace.dbankcloud.com"
+    with pytest.raises(ValueError, match="APPSHELF_APPGALLERY_HOST"):
+        from_env({"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE, "APPSHELF_APPGALLERY_HOST": "https://x/y"})
+
+
 def test_proxies_parsed_from_env():
     env = {"PUB_TOKEN": TOKEN, "APPSHELF_PUBLIC_BASE": BASE}
     assert from_env(env).proxies == {} and from_env(env).google_dir == Path("/etc/appshelf/google")

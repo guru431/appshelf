@@ -4,7 +4,46 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from appshelf.android import net
 from appshelf.android.sources import Got, Latest
+
+
+def _answer(value):
+    if isinstance(value, Exception):
+        raise value
+    return value
+
+
+class FakeHttp:
+    """Подставной net.Http по адресам (без query): json, form — ответ JSON (или исключение); request — (статус,
+    заголовки, тело); download — байты файла (или исключение); head — Meta. Вызовы — в calls."""
+
+    def __init__(self, json_routes=None, files=None, heads=None, forms=None, raw=None):
+        self.json_routes, self.files, self.heads = json_routes or {}, files or {}, heads or {}
+        self.forms, self.raw = forms or {}, raw or {}
+        self.calls = []
+
+    def json(self, url, *, headers=None, body=None):
+        self.calls.append(("json", url, headers, body))
+        return _answer(self.json_routes[url.split("?")[0]])
+
+    def form(self, url, data, *, headers=None):
+        self.calls.append(("form", url, headers, data))
+        return _answer(self.forms[url.split("?")[0]])
+
+    def request(self, method, url, *, headers=None, body=None, max_bytes=net.MAX_JSON):
+        self.calls.append(("request", method, url, headers))
+        return _answer(self.raw[url])
+
+    def download(self, url, dest, *, max_bytes=net.MAX_APK, headers=None):
+        self.calls.append(("download", url, max_bytes))
+        data = _answer(self.files[url])
+        dest.write_bytes(data)
+        return net.Meta(url, 200, '"e"', "", len(data), "")
+
+    def head(self, url, headers=None):
+        self.calls.append(("head", url))
+        return _answer(self.heads[url])
 
 
 class FakeSources:

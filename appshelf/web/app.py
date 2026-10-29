@@ -73,7 +73,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     sources — источники APK (по умолчанию RuStore, ссылки и Google Play, с доп. корнями APPSHELF_SOURCES_CA);
     google_http — HTTP к token endpoint Google (по умолчанию android.net.Http: только https и глобальные адреса)."""
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
-                   sources=sources or Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg)))
+                   sources=sources or Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg),
+                                              appgallery_host=cfg.appgallery_host))
     flow = LoginFlow(clock=clock)
     w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
                webauth.load_key(cfg.cookie_key))

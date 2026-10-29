@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from android_fakes import FakeHttp
 from apk_factory import png_bytes
 from appshelf.android import net, rustore, sources
 
@@ -12,30 +13,6 @@ SBER_SIG = "fea43ebfc12201c7d860b1de28a0f8a330ecc4c30863dae7ce6cf4c98b99a2ea"
 
 def fixture(name: str) -> dict:
     return json.loads((DATA / f"{name}.json").read_text(encoding="utf-8"))
-
-
-class FakeHttp:
-    """json — ответ по пути адреса (без запроса), download — байты по адресу, head — Meta по адресу."""
-
-    def __init__(self, json_routes=None, files=None, heads=None):
-        self.json_routes, self.files, self.heads = json_routes or {}, files or {}, heads or {}
-        self.calls = []
-
-    def json(self, url, *, headers=None, body=None):
-        self.calls.append(("json", url, headers, body))
-        return self.json_routes[url.split("?")[0]]
-
-    def download(self, url, dest, *, max_bytes=net.MAX_APK, headers=None):
-        self.calls.append(("download", url, max_bytes))
-        data = self.files[url]
-        if isinstance(data, Exception):
-            raise data
-        dest.write_bytes(data)
-        return net.Meta(url, 200, '"e"', "", len(data), "")
-
-    def head(self, url, headers=None):
-        self.calls.append(("head", url))
-        return self.heads[url]
 
 
 OVERALL = f"{rustore.BASE}/applicationData/overallInfo/ru.sberbankmobile"

@@ -18,7 +18,8 @@ from .net import SourceError
 from .sources import ACCOUNT_GONE, SplitOnly
 
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
-SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play"}
+SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
+                "appgallery": "AppGallery"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
 PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"
@@ -152,11 +153,13 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
         try:
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
                                     allow_paid=_own_shelf(shelf, account))
-            package, result = store_apk(env, c, shelf, work / "app.apk", source=source, source_ref=ref,
+            package, result = store_apk(env, c, shelf, work / "app.apk", source=source, source_ref=got.ref or ref,
                                         expected_package=expected_package, expected_signer=got.expected_signer,
                                         name_hint=name_hint or got.name, icon=got.icon,
                                         google_account_id=account.id if account is not None else None, paid=got.paid)
             app = db.get_app(c, shelf.id, package)
+            if got.ref and got.ref != ref and app is not None and (app["source"], app["source_ref"]) == (source, ref):
+                db.set_source(c, shelf.id, package, source, got.ref)  # AppGallery: ID со страницы → пакет
             if got.etag and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_etag(c, shelf.id, package, got.etag)
             if source == "play" and app is not None:

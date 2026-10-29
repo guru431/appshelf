@@ -216,6 +216,20 @@ def test_link_add_keeps_etag_from_download(ctx, conn, clock, tmp_path):
     assert db.get_app(conn, shelf.id, PKG)["source_etag"] == '"e"||5'
 
 
+def test_appgallery_id_card_gets_package_ref(ctx, conn, clock, tmp_path):
+    """Ссылка с ID AppGallery: карточка появляется с пакетом в source_ref — ночью updateCheck по пакету."""
+    shelf = shelf_of(conn, clock)
+    ctx.sources.apks["C102312137"] = make_apk(tmp_path / "x.apk")
+    ctx.sources.got["C102312137"] = Got("Пример", "", None, ref=PKG)
+    run(ctx, conn, shelf, "add", clock, source="appgallery", ref="C102312137", name="")
+    app = db.get_app(conn, shelf.id, PKG)
+    assert (app["source"], app["source_ref"], app["status"]) == ("appgallery", PKG, "ok")
+    ctx.sources.apks["C102312137"] = make_apk(tmp_path / "y.apk", version_code=2)       # «Сменить источник» на ID
+    db.set_source(conn, shelf.id, PKG, "appgallery", "C102312137")
+    run(ctx, conn, shelf, "add", clock, package=PKG, source="appgallery", ref="C102312137", name="")
+    assert db.get_app(conn, shelf.id, PKG)["source_ref"] == PKG and versions(conn, shelf)["current"] == 2
+
+
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):
     shelf = shelf_of(conn, clock)
     up = cfg.tmp_dir / "web" / "up-1.apk"

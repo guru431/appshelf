@@ -1,5 +1,5 @@
-"""Источники APK (spec 2026-10-28 §6.1–6.2, §6.4): RuStore, прямая ссылка и Google Play (подключённым Google-аккаунтом,
-android/play.py); свой файл приходит из браузера и источника не имеет. Запросы — последовательно, с паузой между ними
+"""Источники APK (spec 2026-10-28 §6.1–6.2, §6.4–6.5): RuStore, прямая ссылка, Google Play (подключённым
+Google-аккаунтом, android/play.py), AppGallery; свой файл приходит из браузера и источника не имеет. Запросы — последовательно, с паузой между ними
 (правила источников запрещают выкачку, §11)."""
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import rustore
+from . import appgallery, links, rustore
 from .net import FetchError, Http, Meta, SourceError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
@@ -40,6 +40,7 @@ class Got:
     icon: bytes | None         # PNG из источника
     etag: str = ""             # признаки файла по ссылке — чтобы первая ночь не качала его заново
     paid: bool = False         # Google Play: купленное
+    ref: str = ""              # ref карточки, если источник его уточнил (AppGallery: пакет вместо ID со страницы)
 
 
 def _etag(meta: Meta) -> str:
@@ -47,9 +48,12 @@ def _etag(meta: Meta) -> str:
 
 
 class Sources:
-    def __init__(self, http: Http, *, play=None, sleep=time.sleep, pause: float = 2.0, clock=time.monotonic):
-        """play — android.play.PlayPool (или подмена): client(Google-аккаунт) → клиент Play."""
+    def __init__(self, http: Http, *, play=None, sleep=time.sleep, pause: float = 2.0, clock=time.monotonic,
+                 appgallery_host: str = ""):
+        """play — android.play.PlayPool (или подмена): client(Google-аккаунт) → клиент Play; appgallery_host —
+        APPSHELF_APPGALLERY_HOST ("" — appgallery.HOST)."""
         self.http, self.play, self.sleep, self.pause, self.clock = http, play, sleep, pause, clock
+        self.appgallery_host = appgallery_host or appgallery.HOST
         self._last: float | None = None
 
     def search(self, query: str) -> list[rustore.StoreApp]:
@@ -68,11 +72,14 @@ class Sources:
             client = self._play(account)
             self._wait()
             return Latest(client.details(ref).version_code, "", True)
+        if source == "appgallery":
+            return Latest(self._appgallery(ref).version_code, "", True)
         raise SourceError(f"источник «{source}» не проверяется")
 
     def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False) -> Got:
-        """APK в dest. rustore, play — ref: пакет; link — ref: адрес. play — Google-аккаунтом account; купленное —
-        только при allow_paid (полка того, чей аккаунт купил), отказ — до доставки."""
+        """APK в dest. rustore, play — ref: пакет; link — ref: адрес; appgallery — пакет или ID со страницы (Got.ref —
+        пакет). play — Google-аккаунтом account; купленное — только при allow_paid (полка того, чей аккаунт купил),
+        отказ — до доставки."""
         if source == "play":
             return self._fetch_play(ref, dest, account, allow_paid)
         if source == "rustore":
@@ -90,7 +97,20 @@ class Sources:
         if source == "link":
             self._wait()
             return Got("", "", None, _etag(self.http.download(ref, dest)))
+        if source == "appgallery":
+            app = self._appgallery(ref)
+            self._wait()
+            appgallery.download(self.http, app, dest)
+            return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
         raise SourceError(f"источник «{source}» не скачивается")
+
+    def _appgallery(self, ref: str) -> appgallery.AgApp:
+        """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""
+        if links.APPGALLERY_ID_RE.match(ref):
+            self._wait()
+            ref = appgallery.package_of(self.http, ref)
+        self._wait()
+        return appgallery.info(self.http, self.appgallery_host, ref)
 
     def _play(self, account):
         if account is None:

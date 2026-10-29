@@ -64,7 +64,8 @@ def main(argv=None) -> int:
         if args.cmd == "rotate-token":
             return rotate_token(cfg, c, args, acct if args.email else None)
         print(nightly.run(jobs.Env(cfg, lambda a: ipatool.for_account(cfg, a),
-                                   sources=Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg))), c))
+                                   sources=Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg),
+                                                   appgallery_host=cfg.appgallery_host)), c))
     return 0
 
 

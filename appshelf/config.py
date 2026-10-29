@@ -12,6 +12,7 @@ from pathlib import Path
 GB = 1024 ** 3
 TOKEN_RE = re.compile(r"[0-9a-f]{32}")
 PROXY_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,32}")
+HOST_RE = re.compile(r"[a-z0-9-]+(\.[a-z0-9-]+)+")
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class Config:
     google_client_secret: str = field(default="", repr=False)  # только в appshelf.env и запросе к token endpoint
     # APPSHELF_PROXIES: имя → http://… или socks5h://… (бывает с паролем) — только для запросов к Google Play
     proxies: dict[str, str] = field(default_factory=dict, repr=False)
+    appgallery_host: str = ""    # APPSHELF_APPGALLERY_HOST: хост клиентского API AppGallery; "" — android.appgallery.HOST
 
     @property
     def google_dir(self) -> Path:
@@ -118,7 +120,15 @@ def from_env(env=None) -> Config:
         google_client_id=env.get("GOOGLE_CLIENT_ID", "").strip(),
         google_client_secret=env.get("GOOGLE_CLIENT_SECRET", "").strip(),
         proxies=_proxies(env.get("APPSHELF_PROXIES", "")),
+        appgallery_host=_host(env.get("APPSHELF_APPGALLERY_HOST", "")),
     )
+
+
+def _host(text: str) -> str:
+    host = text.strip().lower()
+    if host and not HOST_RE.fullmatch(host):
+        raise ValueError(f"APPSHELF_APPGALLERY_HOST в appshelf.env — только имя хоста, без https:// и пути: «{host}»")
+    return host
 
 
 def _proxies(text: str) -> dict[str, str]:
