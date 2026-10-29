@@ -2,6 +2,12 @@
 Побочные находки, только `open`. Ревизия: MonthlyStratReview 1-го числа. Stale >90 дней → alert.
 Новые записи сверху. Выполненные — удаляются (след в `git log`), отклонённые — переносятся в [FINDINGS-archive.md](FINDINGS-archive.md).
 
+## 2026-10-29 · Полный уровень тестов красный: test_apk_live без корня НУЦ на рабочей машине [P3]
+**Context:** полный уровень `pytest -q -m "not manual" --timeout=300` (registry, ClaudeTestSweepFull по субботам) 2026-10-29, Task 6 плана этапа 5.
+**What:** `tests/test_apk_live.py::test_rustore_sber_apk_live` падает `static-m.rustore.ru: SSLCertVerificationError` — CDN RuStore под сертификатом НУЦ, а в локальном `.env` нет `APPSHELF_SOURCES_CA` (в `.env.example` — закомментирован). Код не виноват: на сервере файл корней есть. Остальные живые (ipatool по SSH, AppGallery/F-Droid/APKPure) зелёные.
+**Proposal:** положить PEM Russian Trusted Root CA (SHA-256 `D2:6D…CF:31`, как `/etc/appshelf/sources-ca.pem`) на рабочую машину вне репозитория и прописать `APPSHELF_SOURCES_CA=<путь>` в `.env`; либо в тесте `pytest.skip`, если переменной нет (как `APPSHELF_PLAY_TEST_GID`).
+**Status:** open
+
 ## 2026-10-29 · Android: проверки на телефонах (критерии 1–5 спецификации) не сделаны ни на одном этапе [P2]
 **Context:** сверка со спецификацией, Task 6 плана этапа 5; вики `android-live-checks-2026-10.md` — «Телефон (шаг 4) — ещё не проверено» с этапа 1, этапы 1–4 выложены без неё.
 **What:** код и тесты есть, но на живом Android-телефоне не проверено: APK из браузера ставится и встаёт обновлением поверх (критерии 1–3), подпись (4), «Войти через Google» в Chrome, Safari и веб-приложении iPhone (5), что показывают Play Protect, Samsung Auto Blocker, Huawei Pure Mode; этап 5 — приложение из AppGallery, F-Droid и APKPure (с галочкой). Что-то из этого не работает — полка бесполезна, а тесты зелёные.
