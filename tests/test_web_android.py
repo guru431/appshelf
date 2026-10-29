@@ -166,6 +166,25 @@ def test_change_source_to_store_page(web, conn, tmp_path):
     assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
 
 
+def test_card_shows_source_and_notices(web, conn, tmp_path):
+    web.sources.signatures["ru.f"] = cert_sha(b"CERT-B")                      # в RuStore подписан иначе
+    for package, url in (("ru.f", "https://f-droid.org/packages/ru.f/"), ("ru.p", "https://apkpure.com/p/ru.p")):
+        web.sources.apks[package] = make_apk(tmp_path / f"{package}.apk", package=package)
+        web.client.post("/android/add/link", data={"url": url, "name": "", "ack": "1"})
+        work(web, conn)
+    page = web.client.get("/android").text
+    assert "F-Droid" in page and "APKPure" in page
+    assert fetch.SIGNER_DIFFERS in page and "подпись не сверена" in page and "не удалось обновить" not in page
+    for name in ("Брать из RuStore", "Брать из AppGallery", "Брать из F-Droid", "Брать из APKPure"):
+        assert name in page, name
+    assert 'name="ack"' in page.split("Брать из APKPure")[0].rsplit("<form", 1)[1]   # галочка — в форме APKPure
+    r = web.client.post("/android/apps/ru.f/source", data={"source": "appgallery", "ref": ""}, follow_redirects=False)
+    assert r.status_code == 303
+    app = db.get_app(conn, shelf(conn).id, "ru.f")
+    assert (app["source"], app["source_ref"]) == ("appgallery", "ru.f")
+    assert conn.execute("SELECT kind FROM android_jobs WHERE status='queued'").fetchone()["kind"] == "check"
+
+
 def test_upload_of_garbage_shows_error(web, conn, cfg):
     r = web.client.post("/android/add/upload", data={"name": "Мусор"}, files={"file": ("x.apk", b"garbage")},
                         follow_redirects=False)

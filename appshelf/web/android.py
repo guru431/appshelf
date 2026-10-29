@@ -34,6 +34,8 @@ PIN_BUSY = "Идёт скачивание — попробуйте через м
 NEED_PLAY = "Сначала подключите Google-аккаунт к Google Play на странице «Аккаунты»"
 PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя пакета"
 NO_PLAY_SOURCE = "Источником карточки Google Play не ставится — снимите её и добавьте приложение из Google Play"
+BY_PACKAGE = ("rustore", "appgallery", "fdroid", "apkpure")   # «Сменить источник» без адреса: ref — пакет карточки
+NOTICES = {fetch.SIGNER_DIFFERS: "подпись не как в RuStore", fetch.NOT_VERIFIED: "подпись не сверена"}
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,8 @@ def register_routes(app, w) -> None:
         allowed = guest or w.person(request) is not None
         return w.page(request, "guest.html", "guest", status_code, configured=True, allowed=allowed,
                       closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
-                      sources=SOURCES, android_version=apk.android_version, apk_name=fetch.apk_name,
+                      sources=SOURCES, notices=NOTICES, android_version=apk.android_version,
+                      apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f))
 
     @app.get("/p", response_class=HTMLResponse)
@@ -245,6 +248,7 @@ def _register_scope(app, w, scope: Scope):
         resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners,
                       busy=busy, nightly=nightly, fresh=_fresh(apps, w.now()), statuses=json.dumps({a.package: a.status for a in apps}),
                       status_url="/api/android/status" + ("?public=1" if scope.public else ""), sources=SOURCES,
+                      notices=NOTICES,
                       android_version=apk.android_version, apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f), prefix=p, public=scope.public, edit=edit,
                       guest=guest)
@@ -450,7 +454,7 @@ def _register_scope(app, w, scope: Scope):
         if app_row is None:
             return not_found()
         ref = ref.strip()
-        if source == "rustore":
+        if source in BY_PACKAGE:
             ref = package
         elif source == "link":
             try:
@@ -464,7 +468,7 @@ def _register_scope(app, w, scope: Scope):
             if source not in ("link", "appgallery") and ref != package:
                 return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
-            return catalog_page(request, 400, "Источник — RuStore, страница магазина или ссылка на APK")
+            return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")
         with w.conn() as c:
             db.set_source(c, shelf.id, package, source, ref)
             requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1")

@@ -1,4 +1,4 @@
-from apk_factory import make_apk
+from apk_factory import cert_sha, make_apk
 from appshelf import nightly, store
 from appshelf.android import db, fetch, net
 from appshelf.android.sources import Latest
@@ -89,6 +89,36 @@ def test_upload_source_not_checked(ctx, cfg, conn, clock, tmp_path):
     ctx.sources.calls.clear()
     assert nightly.run(ctx.env, conn) == nightly.NO_LOGIN
     assert ctx.sources.calls == []
+
+
+def test_nightly_checks_new_sources(ctx, cfg, conn, clock, tmp_path):
+    owner(conn, clock)
+    ctx.sources.signatures["ru.p"] = cert_sha(b"CERT-A")                  # APKPure сверяется с RuStore
+    shelf = card(ctx, conn, clock, tmp_path, "ru.g", "appgallery", "ru.g")
+    card(ctx, conn, clock, tmp_path, "ru.f", "fdroid", "ru.f")
+    card(ctx, conn, clock, tmp_path, "ru.p", "apkpure", "ru.p")
+    ctx.sources._latest.update({"ru.g": Latest(2, "", True), "ru.f": Latest(None, "fd:1", False)})
+    ctx.sources.apks["ru.g"] = make_apk(tmp_path / "g2.apk", package="ru.g", version_code=2)
+    ctx.sources.fail["ru.p"] = net.SourceError("нет в APKPure")
+    ctx.sources.calls.clear()
+    result = nightly.run(ctx.env, conn)
+    assert result.endswith("Android: обновлено 1, без изменений 1, ошибок 1")
+    assert codes(conn) == {("ru.g", "current"): 2, ("ru.g", "previous"): 1, ("ru.f", "current"): 1,
+                           ("ru.p", "current"): 1}
+    assert ("fetch", "fdroid", "ru.f") not in ctx.sources.calls                 # метка та же — не качаем
+    f, p = db.get_app(conn, shelf.id, "ru.f"), db.get_app(conn, shelf.id, "ru.p")
+    assert (f["check_result"], f["source_etag"]) == ("same", "fd:1")
+    assert (p["status"], p["check_result"], p["last_error"]) == ("ok", "error", "нет в APKPure")
+
+
+def test_notice_survives_same_check(ctx, cfg, conn, clock, tmp_path):
+    ctx.sources.signatures["ru.f"] = cert_sha(b"CERT-B")                  # в RuStore подписан иначе
+    shelf = card(ctx, conn, clock, tmp_path, "ru.f", "fdroid", "ru.f")
+    assert db.get_app(conn, shelf.id, "ru.f")["last_error"] == fetch.SIGNER_DIFFERS
+    ctx.sources._latest["ru.f"] = Latest(None, "fd:1", False)
+    assert fetch.check_all(ctx.env, conn, tmp_path / "work") == "Android: обновлено 0, без изменений 1, ошибок 0"
+    app = db.get_app(conn, shelf.id, "ru.f")
+    assert (app["status"], app["check_result"], app["last_error"]) == ("ok", "same", fetch.SIGNER_DIFFERS)
 
 
 def test_check_all_counts_pending_as_updated(ctx, cfg, conn, clock, tmp_path):

@@ -26,6 +26,7 @@ SIGNER_DIFFERS = "подписан не так, как в RuStore: не вста
 NOT_VERIFIED = "подпись не сверена: пакета нет в RuStore"
 NEED_ACK = ("нужно подтверждение для APKPure: пакета нет в RuStore, подпись не с чем сверить — добавьте ещё раз "
             "с галочкой")
+NOTICES = (SIGNER_DIFFERS, NOT_VERIFIED)   # метки сверки у карточки: проверка «новее нет» их не стирает
 PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"
 
 
@@ -192,10 +193,12 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
 
 
 def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
-    """Проверка обновления карточки rustore / link / play: "updated" | "pending" | "same". RuStore и Google Play:
-    versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка: ETag/Last-Modified/
-    Length те же — тоже. Иначе — скачать и сравнить versionCode самого APK. Новая версия из Play только набором
-    файлов — "same" и отметка у карточки (текущая остаётся); эту версию следующие ночи уже не запрашивают."""
+    """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
+    AppGallery, APKPure: versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка
+    (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
+    versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
+    (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
+    остаётся."""
     pkg = app["package"]
     account = _account(c, app["source"], app["google_account_id"])
     latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
@@ -206,6 +209,8 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
     if known is not None and (latest.version_code is not None and latest.version_code <= known
                               or latest.version_code is None and not latest.changed):
         result = "same"
+        if app["last_error"] in NOTICES:  # не скачивали — сверку с RuStore не повторяли
+            note = app["last_error"]
     elif known is not None and split_mark and app["source_etag"] == split_mark:
         result, note = "same", SPLIT_UPDATE
     else:

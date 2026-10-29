@@ -1,15 +1,20 @@
 {# Карточка Android-приложения: каталог участника, публичная полка, страница гостя. edit — действия «⋯», «Повторить»,
-   «Принять новую подпись»; prefix — адреса форм области. Из контекста: fresh, sources, android_version, apk_name. #}
+   «Принять новую подпись»; prefix — адреса форм области. Из контекста: fresh, sources, notices, android_version,
+   apk_name. Метка сверки с RuStore (notices) живёт в last_error — это не ошибка. #}
 {% macro card(a, url, edit, prefix) %}
 {% set v = a.current %}
+{% set notice = a.last_error if a.last_error in notices else '' %}
+{% set err = '' if notice else a.last_error %}
 <div class="card app">
   {% if v %}<img src="{{ url(v['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
   <div class="body">
     <div><b>{{ a.name }}</b>
       {%- if a.package in fresh %}{% set d = v['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}
       {%- if a.pending %} <span class="tag">подпись сменилась</span>{% endif %}
-      {%- if a.paid %} <span class="tag">купленное</span>{% endif %}</div>
+      {%- if a.paid %} <span class="tag">купленное</span>{% endif %}
+      {%- if notice %} <span class="tag">{{ notices[notice] }}</span>{% endif %}</div>
     {% if a.paid %}<div class="meta">Купленное в Google Play: может потребовать Play Store для проверки лицензии.</div>{% endif %}
+    {% if notice %}<div class="meta">{{ notice }}</div>{% endif %}
     {% if v %}
     <div class="meta">{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
       · {{ sources.get(a.source, a.source) }} · подпись {{ a.signer[:4] }}…{{ a.signer[-4:] }}
@@ -32,9 +37,9 @@
     {% if a.source != 'upload' and edit %}<form method="post" action="{{ prefix }}/apps/{{ a.package }}/retry" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
     {% elif v and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия
-      {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% elif a.last_error %} {{ a.last_error }}
+      {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% elif err %} {{ err }}
       {%- else %} новее нет{% endif %}</div>
-    {% elif a.last_error %}<div class="meta">не удалось обновить: {{ a.last_error }}</div>
+    {% elif err %}<div class="meta">не удалось обновить: {{ err }}</div>
     {% endif %}
   </div>
   {% if edit %}
@@ -46,11 +51,16 @@
       {%- for x in (a.current, a.previous, a.kept) if x %}{# kept всегда закреплена #}
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/versions/{{ x['id'] }}/{{ 'unpin' if x['pinned'] else 'pin' }}"><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
       {%- endfor %}
-      {%- if a.source != 'rustore' %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="rustore"><button class="secondary">Брать из RuStore</button></form>
+      {%- for s in ('rustore', 'appgallery', 'fdroid') if a.source != s %}
+      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="{{ s }}"><button class="secondary">Брать из {{ sources[s] }}</button></form>
+      {%- endfor %}
+      {%- if a.source != 'apkpure' %}
+      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="apkpure">
+        <label class="meta"><input type="checkbox" name="ack" value="1"> APKPure распространял подменённые APK — понимаю</label>
+        <button class="secondary">Брать из APKPure</button></form>
       {%- endif %}
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source" class="field"><input type="hidden" name="source" value="link">
-        <input name="ref" type="url" placeholder="https://…/app.apk" value="{{ a.source_ref if a.source == 'link' }}" required><button class="secondary">Брать по ссылке</button></form>
+        <input name="ref" type="url" placeholder="страница магазина или https://…/app.apk" value="{{ a.source_ref if a.source == 'link' }}" required><button class="secondary">Брать по ссылке</button></form>
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/upload" enctype="multipart/form-data" class="field">
         <input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required><button class="secondary">Загрузить новую версию</button></form>
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/remove"><button class="danger">Снять с полки</button></form></div>
