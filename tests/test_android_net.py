@@ -31,6 +31,8 @@ class Resp:
         chunk, self.body = self.body[:n], self.body[n:]
         return chunk
 
+    read1 = read
+
     def close(self):
         pass
 
@@ -158,6 +160,26 @@ def test_download_refuses_declared_oversize_and_truncated(tmp_path):
     with pytest.raises(net.FetchError, match="не полностью"):
         net.Http(resolve=fake_resolve("8.8.8.8"), connect=short).download("https://bank.example/x.apk", tmp_path / "b")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_download_gives_up_after_deadline(tmp_path):
+    """Сервер шлёт по байту раз в 50 с: тайм-аут сокета не срабатывает, а замок скачивания один на сервер."""
+    class Slow(Resp):
+        def read1(self, n=-1):
+            now[0] += 50
+            return self.read(1)
+
+        def read(self, n=-1):  # read() ждал бы весь кусок — загрузчик должен брать то, что пришло
+            if n != 1:
+                raise AssertionError("download читает read(n) вместо read1")
+            return super().read(1)
+
+    now = [0.0]
+    server = Server(Slow(200, {"Content-Length": "1000"}, b"x" * 1000))
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=server, clock=lambda: now[0])
+    with pytest.raises(net.FetchError, match="дольше 30 мин"):
+        http.download("https://bank.example/x.apk", tmp_path / "x.apk")
+    assert not (tmp_path / "x.apk").exists() and now[0] <= net.DOWNLOAD_DEADLINE + 100
 
 
 def test_connects_to_vetted_ip_with_host_for_tls():

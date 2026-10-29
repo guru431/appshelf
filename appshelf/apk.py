@@ -28,6 +28,8 @@ MAGIC = b"APK Sig Block 42"
 V2_ID, V3_ID = 0x7109871a, 0xf05368c0
 MAX_MANIFEST = 16 << 20
 ICON_MAX = 8 << 20  # «иконка» больше — не читается: zip-бомба съела бы память appshelf-web
+ICON_PIXELS = 4096 * 4096  # и картинка-бомба: мало байт, сотни Мпикс — размер из заголовка, до load()
+MAX_V1 = 1 << 20     # файл подписи v1 (META-INF/*.RSA) — килобайты; больше — бомба
 MAX_SIG_BLOCK = 64 << 20
 VERSIONS = {21: "5", 22: "5.1", 23: "6", 24: "7", 25: "7.1", 26: "8", 27: "8.1", 28: "9", 29: "10", 30: "11",
             31: "12", 32: "12L", 33: "13", 34: "14", 35: "15", 36: "16"}
@@ -59,6 +61,8 @@ def read_apk(path: Path) -> ApkInfo:
                 raise ApkError("манифест APK слишком большой")
             manifest = z.read("AndroidManifest.xml")
             v1 = sorted(n for n in names if V1_RE.match(n))
+            if v1 and z.getinfo(v1[0]).file_size > MAX_V1:
+                raise ApkError("файл подписи v1 в APK слишком большой")
             pkcs7 = z.read(v1[0]) if v1 else b""
     except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError):
         raise ApkError("файл не APK: это не zip-архив или он повреждён") from None
@@ -108,6 +112,8 @@ def extract_icon(path: Path) -> bytes | None:
                     continue
                 try:
                     img = Image.open(io.BytesIO(z.read(name)))
+                    if img.width * img.height > ICON_PIXELS:
+                        continue
                     img.load()
                 except Exception:  # битая или незнакомая картинка — следующая
                     continue

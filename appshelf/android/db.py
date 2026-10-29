@@ -245,6 +245,13 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
         else:
             role = "current"
             old = _rotate(c, shelf_id, package)
+            # pending не новее новой текущей: «Принять» её — откат на старую версию с чужой подписью
+            stale = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
+                                                 "AND role='pending' AND version_code<=?",
+                                                 (shelf_id, package, v.version_code))]
+            c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? AND role='pending' "
+                      "AND version_code<=?", (shelf_id, package, v.version_code))
+            old += stale
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (v.signer, shelf_id, package))
         c.execute("""INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk,
                          abis, signer, source, size, sha256, dir, downloaded_at, role)

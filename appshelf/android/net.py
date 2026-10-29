@@ -13,6 +13,7 @@ import json as jsonlib
 import socket
 import ssl
 import sys
+import time
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ MAX_APK = 1 << 30
 MAX_JSON = 5 << 20
 MAX_REDIRECTS = 5
 CHUNK = 1 << 20
+DOWNLOAD_DEADLINE = 1800   # с, на весь файл — как у IPA (ipatool.DOWNLOAD_TIMEOUT)
 REDIRECTS = (301, 302, 303, 307, 308)
 BLOCKED = "адрес недоступен для сервера: ссылка ведёт во внутреннюю сеть"
 # ВТБ на User-Agent curl отвечает 403, на браузерный — файлом (живая проверка 2026-10-28)
@@ -33,6 +35,14 @@ class FetchError(Exception):
 
 class BlockedAddress(FetchError):
     pass
+
+
+class StatusError(FetchError):
+    """Источник ответил HTTP-статусом ошибки (status): 404 — «такого нет», остальное — сбой."""
+
+    def __init__(self, text: str, status: int):
+        super().__init__(text)
+        self.status = status
 
 
 class SourceError(Exception):
@@ -167,9 +177,11 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
 
 class Http:
     def __init__(self, extra_ca: Path | None = None, *, resolve=socket.getaddrinfo, connect=None,
-                 timeout: float = 60.0, proxy: str = "", proxy_name: str = "", dial=socket.create_connection):
+                 timeout: float = 60.0, proxy: str = "", proxy_name: str = "", dial=socket.create_connection,
+                 clock=time.monotonic):
         """proxy — только для Google Play (адреса — константы клиента): с ним адрес не проверяется на «глобальный» и
-        локально не резолвится, а сбой прокси — ошибка, не прямое соединение."""
+        локально не резолвится, а сбой прокси — ошибка, не прямое соединение. timeout — на операцию сокета; на весь
+        файл — DOWNLOAD_DEADLINE (по clock)."""
         self.ctx = ssl.create_default_context()
         if extra_ca:
             try:
@@ -177,7 +189,7 @@ class Http:
             except (ssl.SSLError, OSError) as e:  # необязательный файл не роняет службу: CDN под НУЦ — ошибка TLS
                 print(f"appshelf: APPSHELF_SOURCES_CA {extra_ca} не загружен, только системные корни: {e}",
                       file=sys.stderr)
-        self.resolve, self.timeout = resolve, timeout
+        self.resolve, self.timeout, self.clock = resolve, timeout, clock
         self.proxy, self.proxy_name, self.dial = proxy, proxy_name, dial
         self.connect = connect or (lambda host, ip, port, ctx, timeout:
                                    _PinnedHTTPS(host, ip, port, ctx, timeout, self._socket))
@@ -209,7 +221,7 @@ class Http:
         resp, conn, final = self._request("GET" if data is None else "POST", url, hdrs, data)
         try:
             if resp.status != 200:
-                raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
+                raise StatusError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}", resp.status)
             return _json_body(resp)
         finally:
             _close(resp, conn)
@@ -240,8 +252,11 @@ class Http:
             _close(resp, conn)
 
     def download(self, url: str, dest: Path, *, max_bytes: int = MAX_APK, headers: dict | None = None) -> Meta:
-        """Файл в dest кусками; ошибка или больше max_bytes — dest удалён, FetchError."""
+        """Файл в dest кусками; ошибка, больше max_bytes или дольше DOWNLOAD_DEADLINE — dest удалён, FetchError.
+        Кусок — что пришло одним recv (read1): read(n) ждал бы n байт, и медленный сервер держал бы замок
+        скачивания (один на сервер) сколько угодно."""
         try:
+            deadline = self.clock() + DOWNLOAD_DEADLINE
             resp, conn, final = self._request("GET", url, headers or {})
             try:
                 if resp.status != 200:
@@ -251,10 +266,12 @@ class Http:
                     raise FetchError(f"файл больше {max_bytes >> 20} МБ")
                 n = 0
                 with open(dest, "wb") as f:
-                    while chunk := _read(resp, CHUNK):
+                    while chunk := _read(resp, CHUNK, partial=True):
                         n += len(chunk)
                         if n > max_bytes:
                             raise FetchError(f"файл больше {max_bytes >> 20} МБ")
+                        if self.clock() > deadline:
+                            raise FetchError(f"скачивание дольше {DOWNLOAD_DEADLINE // 60} мин — прервано")
                         f.write(chunk)
                 if meta.length is not None and n != meta.length:
                     raise FetchError("файл скачан не полностью")
@@ -305,9 +322,9 @@ class Http:
         raise FetchError(f"слишком много переадресаций (больше {MAX_REDIRECTS})")
 
 
-def _read(resp, n: int) -> bytes:
+def _read(resp, n: int, partial: bool = False) -> bytes:
     try:
-        return resp.read(n)
+        return resp.read1(n) if partial else resp.read(n)
     except (OSError, http.client.HTTPException) as e:
         raise FetchError(f"обрыв при скачивании: {e.__class__.__name__}") from None
 

@@ -7,7 +7,7 @@ from android_fakes import FakeSources
 from apk_factory import cert_sha, make_apk, png_bytes
 from appshelf import ipa, jobs, store
 from appshelf.android import db, fetch, net
-from appshelf.android.sources import Got, Latest
+from appshelf.android.sources import RUSTORE_DOWN, SPLIT_TEXT, Got, Latest, SplitOnly
 from appshelf.config import GB
 
 PKG = "ru.example.app"
@@ -265,6 +265,8 @@ def test_apkpure_without_reference_needs_ack(ctx, conn, clock, tmp_path):
 @pytest.mark.parametrize("source", ["appgallery", "fdroid"])
 def test_appgallery_signer_differs_from_rustore_notice(ctx, conn, clock, tmp_path, source):
     ctx.sources.signatures[PKG] = cert_sha(b"CERT-B")
+    if source == "appgallery":                                  # Sources.fetch AppGallery всегда называет пакет
+        ctx.sources.got[PKG] = Got("", "", None, ref=PKG)
     shelf, job = add_from(ctx, conn, clock, source, make_apk(tmp_path / "a.apk", cert=b"CERT-A"))
     app = db.get_app(conn, shelf.id, PKG)
     assert (job["status"], app["status"], app["last_error"]) == ("done", "ok", fetch.SIGNER_DIFFERS)
@@ -276,18 +278,66 @@ def test_appgallery_signer_differs_from_rustore_notice(ctx, conn, clock, tmp_pat
     assert db.get_app(conn, shelf.id, PKG)["last_error"] == ""
 
 
+def change_source(ctx, conn, clock, shelf, source, ref):
+    """Как «Сменить источник» у карточки с текущей версией: новый источник и проверка с прежним для отката."""
+    app = db.get_app(conn, shelf.id, PKG)
+    previous = [app["source"], app["source_ref"], app["source_etag"]]
+    db.set_source(conn, shelf.id, PKG, source, ref)
+    return run(ctx, conn, shelf, "check", clock, package=PKG, previous=previous)
+
+
 def test_change_source_to_apkpure_checks_rustore_signature(ctx, cfg, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", cert=b"CERT-A"))
-    db.set_source(conn, shelf.id, PKG, "apkpure", PKG)
     ctx.sources.got[PKG] = Got("", "", None)
     ctx.sources.signatures[PKG] = cert_sha(b"CERT-A")
     ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=2, cert=b"CERT-B")
     ctx.sources._latest[PKG] = Latest(2, "", True)
-    job = run(ctx, conn, shelf, "check", clock, package=PKG)
+    job = change_source(ctx, conn, clock, shelf, "apkpure", PKG)
     app = db.get_app(conn, shelf.id, PKG)
-    assert (job["status"], job["error"]) == ("error", "подпись не совпала с RuStore")
-    assert versions(conn, shelf) == {"current": 1} and (app["status"], app["source"]) == ("ok", "apkpure")
+    assert (job["status"], job["error"]) == ("error", "подпись не совпала с RuStore — источник не сменён")
+    assert versions(conn, shelf) == {"current": 1} and (app["status"], app["source"]) == ("ok", "rustore")
     assert on_shelf(cfg, shelf) == [f"{PKG}-1"]
+
+
+def test_change_source_verified_by_download_even_without_newer(ctx, conn, clock, tmp_path):
+    """Версия в новом источнике не новее — его всё равно проверяют скачиванием; набор файлов — отказ и откат."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk"))
+    ctx.sources.got[PKG] = Got("", "", None)
+    ctx.sources._latest[PKG] = Latest(1, "", True)
+    ctx.sources.calls.clear()
+    job = change_source(ctx, conn, clock, shelf, "fdroid", PKG)
+    assert job["status"] == "done" and ("fetch", "fdroid", PKG) in ctx.sources.calls
+    assert db.get_app(conn, shelf.id, PKG)["source"] == "fdroid"
+    ctx.sources.fail[PKG] = SplitOnly(SPLIT_TEXT)
+    job = change_source(ctx, conn, clock, shelf, "apkpure", PKG)
+    assert job["error"] == SPLIT_TEXT + " — источник не сменён"
+    assert db.get_app(conn, shelf.id, PKG)["source"] == "fdroid" and versions(conn, shelf) == {"current": 1}
+
+
+def test_rustore_down_refuses_apkpure(ctx, conn, clock, tmp_path):
+    ctx.sources.signatures[PKG] = net.SourceError(RUSTORE_DOWN)
+    shelf, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk"), ack=True)
+    assert (job["status"], job["error"]) == ("error", RUSTORE_DOWN) and db.get_app(conn, shelf.id, PKG) is None
+    _, job = add_from(ctx, conn, clock, "fdroid", make_apk(tmp_path / "a.apk"))           # метка — не отказ
+    assert job["status"] == "done" and db.get_app(conn, shelf.id, PKG)["last_error"] == ""
+
+
+def test_store_page_file_of_other_package_refused(ctx, conn, clock, tmp_path):
+    """APKPure (или F-Droid) под пакетом страницы отдал другое приложение — не на полку: сверяли подпись не того."""
+    shelf, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk", package="ru.bank"), ack=True)
+    assert job["status"] == "error" and "ru.bank" in job["error"] and PKG in job["error"]
+    assert db.get_app(conn, shelf.id, "ru.bank") is None
+
+
+def test_newer_same_signer_drops_stale_pending(ctx, cfg, conn, clock, tmp_path):
+    """После pending (чужая подпись, v2) пришла v3 с прежней подписью: «Принять» v2 был бы откатом."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk"), signer="")
+    for code, cert in ((2, b"CERT-B"), (3, b"CERT-A")):
+        ctx.sources.apks[PKG] = make_apk(tmp_path / f"{code}.apk", version_code=code, cert=cert)
+        ctx.sources._latest[PKG] = Latest(code, "", True)
+        run(ctx, conn, shelf, "check", clock, package=PKG)
+    assert versions(conn, shelf) == {"current": 3, "previous": 1}
+    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-3"]
 
 
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):

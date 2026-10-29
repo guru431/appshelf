@@ -5,6 +5,7 @@ import pytest
 
 from android_fakes import FakeHttp
 from apk_factory import png_bytes
+from appshelf import apk
 from appshelf.android import net, rustore, sources
 
 DATA = Path(__file__).parent / "data" / "rustore"
@@ -78,6 +79,12 @@ def test_rustore_fetch_returns_signature_name_and_icon(tmp_path):
     assert got.icon.startswith(b"\x89PNG")
     broken = sources.Sources(rustore_http(**{ICON: net.FetchError("нет")}), sleep=lambda s: None)
     assert broken.fetch("rustore", "ru.sberbankmobile", tmp_path / "b.apk").icon is None
+
+
+def test_source_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(apk, "ICON_PIXELS", 10 * 10)
+    got = sources.Sources(rustore_http(), sleep=lambda s: None).fetch("rustore", "ru.sberbankmobile", tmp_path / "a.apk")
+    assert got.icon is None
 
 
 def test_paid_app_refused(tmp_path):

@@ -60,8 +60,12 @@ class FakeSources:
         self.calls: list = []
 
     def rustore_signature(self, package: str) -> str | None:
+        """signatures[пакет] — подпись или исключение (RuStore недоступен)."""
         self.calls.append(("rustore_signature", package))
-        return self.signatures.get(package)
+        sig = self.signatures.get(package)
+        if isinstance(sig, Exception):
+            raise sig
+        return sig
 
     def search(self, query: str) -> list:
         self.calls.append(("search", query))

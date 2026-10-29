@@ -258,8 +258,8 @@ def test_change_source_keeps_versions(web, conn, tmp_path):
     app = db.get_app(conn, shelf(conn).id, PKG)
     assert (app["source"], app["source_ref"], app["status"]) == ("rustore", PKG, "queued")
     assert db.list_apps(conn, shelf(conn).id)[0].current["version_code"] == 1
-    assert conn.execute("SELECT kind, package FROM android_jobs WHERE status='queued'").fetchone()[:] == \
-        ("check", PKG)
+    job = conn.execute("SELECT kind, package, payload FROM android_jobs WHERE status='queued'").fetchone()
+    assert (job["kind"], job["package"], json.loads(job["payload"])) == ("check", PKG, {"previous": ["link", URL, ""]})
     assert web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": "http://x/a.apk"}
                            ).status_code == 400
     assert web.client.post(f"/android/apps/{PKG}/source", data={"source": "upload", "ref": ""}).status_code == 400

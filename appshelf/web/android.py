@@ -292,16 +292,18 @@ def _register_scope(app, w, scope: Scope):
             return None, (413, TOO_BIG) if n else (400, "Файл пустой")
         return dest, None
 
-    def requeue(c, shelf, app, ack: bool = False) -> None:
+    def requeue(c, shelf, app, ack: bool = False, previous: list | None = None) -> None:
         """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново (APKPure — с
-        галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего."""
+        галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего. previous —
+        прежние (source, ref, etag) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
         package = app["package"]
         if app["source"] == "upload" or db.active_for(c, shelf.id, package):
             return
         with store.tx(c):
             db.set_status(c, shelf.id, package, "queued")
             if db.has_current(c, shelf.id, package):
-                db.enqueue(c, shelf.id, "check", w.now(), package=package)
+                db.enqueue(c, shelf.id, "check", w.now(), package=package,
+                           payload={"previous": previous} if previous else None)
             else:
                 payload = {"source": app["source"], "ref": app["source_ref"], "name": app["name"]}
                 if app["source"] == "apkpure":
@@ -448,7 +450,8 @@ def _register_scope(app, w, scope: Scope):
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),
                       ack: str = Form("")):
         """Сменить источник: версии и закрепления остаются, первая версия из нового источника — по правилу подписи.
-        Ссылка — страница магазина (links.parse) или прямая на APK; страница другого пакета — отказ."""
+        Ссылка — страница магазина (links.parse) или прямая на APK; страница другого пакета — отказ. Новый источник
+        сразу проверяется скачиванием; его отказ (подпись, набор файлов, нет пакета) возвращает прежний."""
         with w.conn() as c:
             shelf, app_row = own(c, request, package)
         if app_row is None:
@@ -470,8 +473,10 @@ def _register_scope(app, w, scope: Scope):
         else:
             return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")
         with w.conn() as c:
+            old = db.get_app(c, shelf.id, package)
             db.set_source(c, shelf.id, package, source, ref)
-            requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1")
+            requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1",
+                    previous=[old["source"], old["source_ref"], old["source_etag"]])
         return back(p)
 
     @app.post(p + "/jobs/{job_id}/dismiss", dependencies=deps)

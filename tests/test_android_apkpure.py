@@ -98,9 +98,15 @@ def test_hint_lists_free_sources():
 
 
 def test_rustore_signature_or_none():
-    sig = "ab" * 32
-    http = FakeHttp(json_routes={f"{rustore.BASE}/applicationData/overallInfo/{K9}": {"code": "OK", "body": {
+    sig, info = "ab" * 32, f"{rustore.BASE}/applicationData/overallInfo/"
+    http = FakeHttp(json_routes={info + K9: {"code": "OK", "body": {
         "appId": 1, "packageName": K9, "versionCode": 1, "signature": sig}},
-        f"{rustore.BASE}/applicationData/overallInfo/{WA}": net.FetchError("ответил 404")})
+        info + WA: net.StatusError("backapi.rustore.ru ответил 404", 404),
+        info + "ru.down": net.StatusError("backapi.rustore.ru ответил 503", 503),
+        info + "ru.cut": net.FetchError("backapi.rustore.ru: TimeoutError"),
+        info + "ru.odd": {"code": "ERROR"}})
     src = sources.Sources(http, sleep=lambda s: None)
     assert (src.rustore_signature(K9), src.rustore_signature(WA)) == (sig, None)
+    for package in ("ru.down", "ru.cut", "ru.odd"):                       # «не знаю» — не «нет»
+        with pytest.raises(net.SourceError, match="RuStore не ответил"):
+            src.rustore_signature(package)

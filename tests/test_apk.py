@@ -87,6 +87,25 @@ def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     assert apk.extract_icon(only_huge) is None
 
 
+def test_huge_v1_signature_file_refused_unread(tmp_path, monkeypatch):
+    """Файл подписи v1 — бомба (сжатые нули): без предела read_apk распаковал бы его целиком в память."""
+    path = make_apk(tmp_path / "a.apk", files={"META-INF/A.RSA": b"\0" * (apk.MAX_V1 + 1)})
+    import zipfile
+    read, names = zipfile.ZipFile.read, []
+    monkeypatch.setattr(zipfile.ZipFile, "read", lambda z, name, *a: names.append(name) or read(z, name, *a))
+    with pytest.raises(apk.ApkError, match="подпис"):
+        apk.read_apk(path)
+    assert "META-INF/A.RSA" not in names
+
+
+def test_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):
+    """Картинка-бомба (мало байт, много пикселей) не распаковывается: размер — из заголовка, до load()."""
+    monkeypatch.setattr(apk, "ICON_PIXELS", 100 * 100)
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48),
+                                               "res/mipmap-xxhdpi/ic_launcher.png": png_bytes(144)})
+    assert Image.open(io.BytesIO(apk.extract_icon(path))).size == (48, 48)
+
+
 def test_android_version():
     assert apk.android_version(26) == "8" and apk.android_version(99) == "API 99"
     assert [apk.android_version(s) for s in (21, 23, 24, 28, 29, 35, 36)] == ["5", "6", "7", "9", "10", "15", "16"]

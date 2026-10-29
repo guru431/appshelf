@@ -27,6 +27,8 @@ NOT_VERIFIED = "подпись не сверена: пакета нет в RuSto
 NEED_ACK = ("нужно подтверждение для APKPure: пакета нет в RuStore, подпись не с чем сверить — добавьте ещё раз "
             "с галочкой")
 NOTICES = (SIGNER_DIFFERS, NOT_VERIFIED)   # метки сверки у карточки: проверка «новее нет» их не стирает
+PACKAGE_REFS = ("rustore", "play", "fdroid", "apkpure")   # ref — пакет: файл обязан быть им
+NOT_CHANGED = " — источник не сменён"
 PLAY_EXPIRED_SUBJECT = "appshelf: подключение Google Play истекло"
 
 
@@ -159,16 +161,23 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         try:
-            reference = env.sources.rustore_signature(ref) if source == "apkpure" else None
+            reference = env.sources.rustore_signature(ref) if source == "apkpure" else None  # не ответил — отказ
             if source == "apkpure" and reference is None and not ack and not db.has_current(c, shelf.id, ref):
                 raise SourceError(NEED_ACK)
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
                                     allow_paid=_own_shelf(shelf, account))
+            want = got.ref or (ref if source in PACKAGE_REFS else "")
+            if want and (found := apk.read_apk(work / "app.apk").package) != want:
+                # сверяли подпись и карточку этого пакета, а пришёл другой — не на полку
+                raise apk.ApkError(f"в файле приложение {found}, а в {SOURCE_NAMES[source]} — {want}")
             expected, signer_from, notice = got.expected_signer, "", ""
             if source == "apkpure":
                 expected, signer_from, notice = (reference, "rustore", "") if reference else ("", "", NOT_VERIFIED)
             elif source in ("appgallery", "fdroid"):
-                reference = env.sources.rustore_signature(got.ref or ref)
+                try:
+                    reference = env.sources.rustore_signature(want)
+                except SourceError:  # метка — подсказка, не защита: RuStore не ответил — без неё
+                    reference = None
                 if reference and apk.read_apk(work / "app.apk").signer != reference:
                     notice = SIGNER_DIFFERS
             package, result = store_apk(env, c, shelf, work / "app.apk", source=source, source_ref=got.ref or ref,
@@ -192,13 +201,14 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             shutil.rmtree(work, ignore_errors=True)
 
 
-def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
+def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False) -> str:
     """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
     AppGallery, APKPure: versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка
     (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
     versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
     (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
-    остаётся."""
+    остаётся. force (первая проверка после «Сменить источник») — скачивать, даже если новее нет, и набор файлов —
+    отказ: новый источник проверяется своим файлом."""
     pkg = app["package"]
     account = _account(c, app["source"], app["google_account_id"])
     latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
@@ -206,19 +216,19 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path) -> str:
                       "AND role IN ('current', 'pending')", (shelf.id, pkg)).fetchone()["v"]
     split_mark = f"split:{latest.version_code}" if app["source"] == "play" else ""
     note = ""
-    if known is not None and (latest.version_code is not None and latest.version_code <= known
-                              or latest.version_code is None and not latest.changed):
+    if not force and known is not None and (latest.version_code is not None and latest.version_code <= known
+                                            or latest.version_code is None and not latest.changed):
         result = "same"
         if app["last_error"] in NOTICES:  # не скачивали — сверку с RuStore не повторяли
             note = app["last_error"]
-    elif known is not None and split_mark and app["source_etag"] == split_mark:
+    elif not force and known is not None and split_mark and app["source_etag"] == split_mark:
         result, note = "same", SPLIT_UPDATE
     else:
         try:
             _, result, note = _download(env, c, shelf, app["source"], app["source_ref"], work, expected_package=pkg,
                                         name_hint=app["name"], account=account)
         except SplitOnly:
-            if known is None:  # первой версии нет — это ошибка добавления, а не отметка
+            if known is None or force:  # первой версии нет — это ошибка добавления, а не отметка
                 raise
             result, note = "same", SPLIT_UPDATE
     db.set_status(c, shelf.id, pkg, "ok", note)
@@ -274,7 +284,8 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
 
 def run_job(env, c, job) -> None:
     """Задание обработчика: add (payload source, ref, name; play — и account, apkpure — и ack), upload (path, name,
-    package?), check (package). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
+    package?), check (package; после «Сменить источник» — payload previous: отказ нового источника возвращает
+    прежний). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
     shelf = db.get_shelf(c, job["shelf_id"])
     payload = json.loads(job["payload"]) if job["payload"] else {}
     package = job["package"] or payload.get("package", "")
@@ -305,7 +316,15 @@ def run_job(env, c, job) -> None:
             app = db.get_app(c, shelf.id, package)
             if app is None:
                 raise store.AppGone(package)
-            check_app(env, c, shelf, app, work)
+            previous = payload.get("previous")  # «Сменить источник»: прежние (source, ref, etag) — откатить при отказе
+            try:
+                check_app(env, c, shelf, app, work, force=bool(previous))
+            except (apk.ApkError, net.FetchError, SourceError) as e:
+                if not previous:
+                    raise
+                db.set_source(c, shelf.id, package, previous[0], previous[1])
+                db.set_etag(c, shelf.id, package, previous[2] or "")
+                raise SourceError(describe(e) + NOT_CHANGED) from e
         db.finish_job(c, job["id"], "done", env.now())
     except store.AppGone:
         db.finish_job(c, job["id"], "cancelled", env.now(), "снято с полки во время скачивания")

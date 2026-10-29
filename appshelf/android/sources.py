@@ -12,11 +12,12 @@ from PIL import Image
 
 from .. import apk
 from . import apkpure, appgallery, fdroid, links, rustore
-from .net import FetchError, Http, Meta, SourceError
+from .net import FetchError, Http, Meta, SourceError, StatusError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
 ICON_MAX = 1 << 20
 SPLIT_TEXT = "набором файлов — из браузера не ставится"
+RUSTORE_DOWN = "RuStore не ответил — подпись не с чем сверить, повторите позже"
 NOT_OWNED = "платное — не куплено этим аккаунтом"
 PAID_ELSEWHERE = "купленное в Google Play — только на личную полку того, чей аккаунт его купил"
 ACCOUNT_GONE = "Google-аккаунт удалён — смените источник"
@@ -128,12 +129,17 @@ class Sources:
         raise SourceError(f"источник «{source}» не скачивается")
 
     def rustore_signature(self, package: str) -> str | None:
-        """Подпись пакета в RuStore — образец для AppGallery, F-Droid и APKPure; нет пакета или сбой — None."""
+        """Подпись пакета в RuStore — образец для AppGallery, F-Droid и APKPure. Пакета нет (404) — None; RuStore не
+        ответил или ответил не то — SourceError(RUSTORE_DOWN): «нет» и «не знаю» — не одно и то же."""
         try:
             self._wait()
             return rustore.info(self.http, package).signature or None
+        except StatusError as e:
+            if e.status == 404:
+                return None
+            raise SourceError(RUSTORE_DOWN) from None
         except (FetchError, SourceError):
-            return None
+            raise SourceError(RUSTORE_DOWN) from None
 
     def elsewhere(self, package: str) -> list[str]:
         """Где ещё пакет есть одним бесплатным APK — для подсказки к набору файлов (spec §6.4): RuStore (не платное),
@@ -222,10 +228,12 @@ class Sources:
         try:
             self._wait()
             self.http.download(url, tmp, max_bytes=ICON_MAX)
-            img = Image.open(tmp)
-            img.load()
-            out = io.BytesIO()
-            img.convert("RGBA").save(out, "PNG")
+            with Image.open(tmp) as img:
+                if img.width * img.height > apk.ICON_PIXELS:  # картинка-бомба: размер из заголовка, до load()
+                    return None
+                img.load()
+                out = io.BytesIO()
+                img.convert("RGBA").save(out, "PNG")
             return out.getvalue()
         except (FetchError, SourceError, OSError, ValueError, Image.DecompressionBombError):
             return None
