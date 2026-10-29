@@ -161,6 +161,8 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                 db.set_etag(c, shelf.id, package, got.etag)
             if source == "play" and app is not None:
                 db.set_paid(c, shelf.id, package, got.paid)
+                if got.name and app["name"] == package:  # панель знала только пакет — название из Play
+                    db.set_name(c, shelf.id, package, got.name)
             return package, result
         finally:
             shutil.rmtree(work, ignore_errors=True)

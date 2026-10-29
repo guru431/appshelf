@@ -62,6 +62,7 @@ class AppView:
     previous: sqlite3.Row | None
     kept: sqlite3.Row | None
     pending: sqlite3.Row | None
+    paid: bool = False      # Google Play: купленное
 
 
 # --- полки -------------------------------------------------------------------
@@ -134,6 +135,10 @@ def put_app(c, shelf_id: int, package: str, name: str, source: str, source_ref: 
               (shelf_id, package, name, source, source_ref, now, google_account_id, int(paid)))
 
 
+def set_name(c, shelf_id: int, package: str, name: str) -> None:
+    c.execute("UPDATE android_apps SET name=? WHERE shelf_id=? AND package=?", (name, shelf_id, package))
+
+
 def set_paid(c, shelf_id: int, package: str, paid: bool) -> None:
     """Купленное ли — по ответу Google Play при скачивании."""
     c.execute("UPDATE android_apps SET paid=? WHERE shelf_id=? AND package=?", (int(paid), shelf_id, package))
@@ -168,7 +173,7 @@ def list_apps(c, shelf_id: int) -> list[AppView]:
                                               (shelf_id, a["package"]))}
         out.append(AppView(a["package"], a["name"], a["source"], a["source_ref"], a["signer"], a["status"],
                            a["last_error"], a["checked_at"], a["check_result"], vs.get("current"),
-                           vs.get("previous"), vs.get("kept"), vs.get("pending")))
+                           vs.get("previous"), vs.get("kept"), vs.get("pending"), bool(a["paid"])))
     return sorted(out, key=lambda v: (v.name.casefold(), v.package))
 
 

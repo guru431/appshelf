@@ -65,6 +65,7 @@ def test_play_free_single_apk_added(setup, ctx, conn, clock):
     job, app = add(ctx, conn, clock, shelf, g.id)
     assert job["status"] == "done", job["error"]
     assert (app["status"], app["source"], app["google_account_id"], app["paid"]) == ("ok", "play", g.id, 0)
+    assert app["name"] == "Почта"                                 # панель знала только пакет — название из Play
     assert db.has_current(conn, shelf.id, PKG)
     assert [c[0] for c in fake.calls] == ["details", "delivery", "download"]
 

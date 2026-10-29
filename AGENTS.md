@@ -18,6 +18,7 @@
 - Пароль Apple ID не сохраняется нигде: в ipatool — только stdin, в appshelf-web — память ≤ 10 минут.
 - ipatool — только от пользователя `appshelf` с `HOME=/etc/appshelf/accounts/<id>` (и `IPATOOL_DEVICE_MAC` из `accounts.device_mac`, если не пуст): HOME выбирает учётку, шифрование привязано к machine-id, у root — ещё к product_uuid.
 - Вход в панель — Apple ID или Google-аккаунт; новые — по приглашению владельца или из «Добавить» вошедшего участника, всегда отдельным участником; у каждого Apple ID своя полка и свой HOME ipatool. Google-аккаунт к другому участнику — только «Связать»; Apple ID не переходит никогда. `GOOGLE_CLIENT_SECRET` — только в `/etc/appshelf/appshelf.env`.
+- Google Play: мастер-токен — только файлом `/etc/appshelf/google/<id>/aas` (0600), `oauth_token` — только в обработке формы; прокси (`APPSHELF_PROXIES`) — только для Play; купленное — только на полку того, чей аккаунт купил (проверка на сервере).
 - appshelf-web — один процесс uvicorn; второй потеряет пароль между шагами входа.
 - PUB_TOKEN не печатать и не коммитить.
 - Тесты — на Windows (`.venv/Scripts/python -m pytest -q`), `integration` ходит на сервер по SSH (`.env`).

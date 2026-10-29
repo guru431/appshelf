@@ -28,8 +28,8 @@ The web UI is in Russian.
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
 - PWA: the shelf on the Home Screen.
-- Android: a section with each person's Android shelf — APKs from RuStore, from a direct link on a bank's site or an
-  uploaded file; install and update from the phone's browser, nightly check for new versions, a signing rule (see
+- Android: a section with each person's Android shelf — APKs from RuStore, Google Play, from a direct link on a
+  bank's site or an uploaded file; install and update from the phone's browser, nightly check for new versions, a signing rule (see
   "Android").
 - A public Android shelf: the owner fills it, a guest opens it with a 6-digit PIN and can only install; brute-force
   protection.
@@ -251,10 +251,11 @@ The same server also keeps Android shelves: the **Android** section of the panel
 the header. From an Android phone the panel opens right in it, from an iPhone in Apple, from a computer in the
 section opened last. An Android shelf belongs to a person, not to an Apple ID: an APK is not tied to any account.
 Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/superpowers/specs/2026-10-28-android-design.md)
-(stages 1–3 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking).
+(stages 1–4 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking, Google
+Play — free apps that come as one APK).
 
 - **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
-  paid apps are unavailable), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own
+  paid apps are unavailable), Google Play — with a connected Google account (below), "By link" — a direct `https` link to an APK on a bank's or developer's site, "Own
   file" — an upload of up to 1 GB. The server never follows a link into an internal network: the name is resolved
   before every request and after every redirect, and any non-global address (private, loopback, link-local,
   multicast) is refused before connecting.
@@ -268,7 +269,7 @@ Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/sup
 - **Versions** — as with IPAs: current, previous, pinned; "⋯" — check for update, pin, change source, upload a new
   version as a file, remove from the shelf. Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
-- **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore by `versionCode`, a link by
+- **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore and Google Play by `versionCode`, a link by
   `ETag`, `Last-Modified`, `Content-Length`; uploaded files are not checked. The night's result ends with
   "Android: обновлено N, без изменений M, ошибок K".
 - **Russian CA certificates.** The RuStore CDN and the Sber and VTB sites use certificates of the Russian Ministry of
@@ -283,6 +284,37 @@ Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/sup
 
 Hints for the phone are in the section's catalog: Samsung Auto Blocker, Huawei Pure Mode, Play Protect; from 2027
 Google requires developer verification for installs outside stores too.
+
+### Google Play
+
+A small client of the Google Play protocol of our own (`appshelf/android/play.py`), no external programs. Downloads go
+through a Google account connected to Play on the accounts page; there is no shared service account.
+
+- **Connecting** — "Подключить к Google Play" next to a Google account: on a computer sign in with that account at
+  `accounts.google.com/EmbeddedSetup`, copy the `oauth_token` cookie (F12 → Application → Cookies) and paste it into the
+  form within 10 minutes. The server exchanges it for a master token; the account address in Google's answer must
+  match, otherwise it is refused. **The master token gives access to the whole Google account, not only to Play**, the
+  server owner can technically use it, and Google may block the account for a third-party client — the connect page
+  warns about all of this. The server never gets the Google password.
+- **Where tokens live.** The master token and the "device" profile are files in `/etc/appshelf/google/<id>/`
+  (`appshelf`, directory 0700, files 0600; `deploy/install.sh` creates `/etc/appshelf/google`, the units write there
+  via `ReadWritePaths`), the Play token stays in process memory. Never in the database, logs or argv. "Отключить Google
+  Play" and deleting the Google account delete the directory.
+- **One APK only.** Only what Play delivers as a single file goes on a shelf. Almost everything in Play is an App
+  Bundle (split APKs): a browser cannot install that, the card says so and, if the package is free in RuStore,
+  suggests switching the source. A new version that arrives as a bundle leaves the previous one on the shelf, marked.
+- **Purchased apps** go only to the personal shelf of the person whose account bought them (checked on the server):
+  not to the public shelf, not to anyone else's. "My purchases" will come after a live check of purchases through a
+  proxy in the account's country.
+- **Proxies** — for the account's country: `APPSHELF_PROXIES` in `appshelf.env` (space-separated `name=url`,
+  `http://host:port` or `socks5h://[user:password@]host:port`), chosen by the owner when connecting. A proxy is used
+  only for Google Play requests; if it is down, the card shows an error — there is no direct fallback. From a Russian
+  address Play shows prices in rubles and does not deliver paid apps.
+- **Expired.** A changed Google password or revoked access means "подключение Google Play истекло": a banner in the
+  Android section and on the accounts page, the account's jobs wait, its apps are skipped at night; mail goes only
+  about the owner's Google accounts, one per episode. "Подключить заново" takes a new `oauth_token`.
+- **Live test** — `pytest -m integration tests/test_android_play_live.py` with `APPSHELF_PLAY_TEST_GID=<id of a
+  connected Google account>` in `.env`: `details` of a free package as `appshelf` on the server.
 
 ### Public shelf
 

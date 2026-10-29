@@ -1,13 +1,16 @@
-"""«Аккаунты» (spec 2026-10-08 §10.4, 2026-10-12 §6, 2026-10-28 §5, §10): Apple ID и Google-аккаунты людей, вошедших
-в этом браузере, — по человеку: состояние, место, вход заново, добавить, удалить полку или Google-аккаунт, убрать
-человека с устройства, «Связать» двух вошедших, если хотя бы у одного нет Apple ID."""
+"""«Аккаунты» (spec 2026-10-08 §10.4, 2026-10-12 §6, 2026-10-28 §5, §6.4, §10): Apple ID и Google-аккаунты людей,
+вошедших в этом браузере, — по человеку: состояние, место, вход заново, добавить, удалить полку или Google-аккаунт,
+подключить Google-аккаунт к Google Play и отключить, убрать человека с устройства, «Связать» двух вошедших, если хотя бы
+у одного нет Apple ID. oauth_token подключения — только в памяти обработки формы: не в ответе, журнале, базе."""
 from __future__ import annotations
+
+import sys
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, people, store, webauth
-from ..android import db as android_db
+from ..android import db as android_db, net, play
 from ..config import GB
 from .common import ACCT_COOKIE, WHO_COOKIE, WebCtx, back, relogin_query
 from .signin import login_page, submit
@@ -18,6 +21,9 @@ LAST_OWNER_ID = "Последний Apple ID владельца удалить �
 ANDROID_BUSY = "Идёт скачивание на Android-полку — попробуйте через минуту"
 BOTH_APPLE = "У обоих есть Apple ID — их не связать"
 LINK_ARCHIVE_DOWN = "Архив недоступен — связать сейчас нельзя"
+NO_TOKEN = "Вставьте значение cookie oauth_token со страницы Google"
+NO_PROXY = "Такого прокси нет в APPSHELF_PROXIES"
+OWNER_PROXY = "Прокси выбирает владелец сервера"
 
 
 def register_routes(app: FastAPI, w: WebCtx) -> None:
@@ -153,6 +159,60 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         except jobs.AccountBusy:
             return google_confirm(request, g, ANDROID_BUSY, 409)
         return without(request, g.user_id, back("/apple")) if gone else back("/apple")
+
+    def connect_page(request: Request, g, error: str = "", status_code: int = 200):
+        """Подключение к Google Play: инструкция, предупреждение, поле oauth_token (без значения — его не отдаём
+        назад), прокси — если владелец среди вошедших."""
+        owner = any(u.role == people.OWNER for u in request.state.users)
+        return w.page(request, "play_connect.html", "apple", status_code, g=g, error=error,
+                      proxies=sorted(w.cfg.proxies) if owner else [])
+
+    @app.get("/google/{gid}/play", response_class=HTMLResponse)
+    def play_form(request: Request, gid: int):
+        g = own_google(request, gid)
+        if g is None:
+            return PlainTextResponse("not found", status_code=404)
+        return connect_page(request, g)
+
+    @app.post("/google/{gid}/play", response_class=HTMLResponse)
+    def play_connect(request: Request, gid: int, oauth_token: str = Form(""), proxy: str = Form("")):
+        g = own_google(request, gid)
+        if g is None:
+            return PlainTextResponse("not found", status_code=404)
+        if any(u.role == people.OWNER for u in request.state.users):
+            proxy = proxy.strip()
+            if proxy and proxy not in w.cfg.proxies:
+                return connect_page(request, g, NO_PROXY, 400)
+        elif proxy:
+            return connect_page(request, g, OWNER_PROXY, 403)
+        else:
+            proxy = g.proxy  # выбрал владелец раньше
+        if not oauth_token.strip():
+            return connect_page(request, g, NO_TOKEN, 400)
+        try:
+            country = play.connect(w.cfg, g.id, g.email, oauth_token.strip(), proxy)
+        except play.PlayError as e:  # тексты без токенов (play.py)
+            return connect_page(request, g, str(e), 400)
+        except net.FetchError as e:
+            print(f"appshelf: подключение Google-аккаунта #{g.id} к Play: {e}", file=sys.stderr)
+            return connect_page(request, g, f"Google недоступен: {e}", 502)
+        with w.conn() as c:
+            with store.tx(c):
+                people.set_proxy(c, g.id, proxy)
+                people.set_play(c, g.id, "ok", w.now(), country)
+        return back("/apple")
+
+    @app.post("/google/{gid}/play/disconnect", response_class=HTMLResponse)
+    def play_disconnect(request: Request, gid: int):
+        """Мастер-токен и профиль устройства — с диска, токен Play — из памяти; задания аккаунта ждут нового."""
+        g = own_google(request, gid)
+        if g is None:
+            return PlainTextResponse("not found", status_code=404)
+        with w.conn() as c:
+            people.set_play(c, g.id, "none", w.now())
+        store.rmtree_logged(play.token_dir(w.cfg, g.id))
+        play.forget(g.id)
+        return back("/apple")
 
     @app.get("/apple/add", response_class=HTMLResponse)
     def add_form(request: Request):

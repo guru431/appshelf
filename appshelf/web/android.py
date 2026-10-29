@@ -1,5 +1,5 @@
 """Раздел Android панели (spec 2026-10-28 §5 «Раздел по умолчанию», §6, §8, §10): каталог Android-полки, «Добавить»
-(RuStore, ссылка, свой файл), действия карточки. Две области с одними обработчиками (Scope): своя полка — активного
+(RuStore, Google Play, ссылка, свой файл), действия карточки. Две области с одними обработчиками (Scope): своя полка — активного
 участника раздела (request.state.who, выбор — /who/<id>), публичная — одна на сервер: читают все вошедшие, меняет и задаёт PIN только
 владелец. Пакет ищется только на полке области, чужой — 404. Скачивает обработчик заданий (android.fetch.run_job),
 страница только ставит задания."""
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,13 +23,15 @@ from .admin import owner_only
 from .common import back
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
-SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл"}
+SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play"}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
 MAX_URL = 2000
 PIN_FORMAT = "PIN — 6 цифр, только цифры 0–9"
 PIN_BUSY = "Идёт скачивание — попробуйте через минуту: PIN не изменён"
+NEED_PLAY = "Сначала подключите Google-аккаунт к Google Play на странице «Аккаунты»"
+PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя пакета"
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,18 @@ def default_section(user_agent: str, cookie: str | None, explicit: str | None) -
 
 def set_section(w, resp, section: str) -> None:
     resp.set_cookie(OS_COOKIE, section, max_age=10 * 365 * 86400, samesite="lax", secure=w.secure)
+
+
+def play_package(text: str) -> str:
+    """Ссылка Google Play (https://play.google.com/store/apps/details?id=<пакет>) или само имя пакета → пакет; не
+    то — ""."""
+    text = text.strip()
+    if "://" in text:
+        u = urllib.parse.urlsplit(text)
+        if u.scheme != "https" or u.hostname != "play.google.com" or u.path.rstrip("/") != "/store/apps/details":
+            return ""
+        text = urllib.parse.parse_qs(u.query).get("id", [""])[0]
+    return text if apk.PACKAGE_RE.match(text) else ""
 
 
 def nightly_part(result: str) -> str:
@@ -188,6 +203,13 @@ def _register_scope(app, w, scope: Scope):
             return db.ensure_public_shelf(c, w.now())
         return db.ensure_shelf(c, request.state.who.id, w.now())
 
+    def google_accounts(c, request: Request) -> list:
+        """Google-аккаунты, которыми качают из Play на полку области: своя — активного участника, публичная —
+        владельца (spec §6.4)."""
+        if not scope.public:
+            return people.google_of(c, request.state.who.id)
+        return [g for u in people.list_users(c) if u.role == people.OWNER for g in people.google_of(c, u.id)]
+
     def own(c, request: Request, package: str):
         """(полка области, карточка пакета на ней); полки или карточки нет — None на их месте."""
         shelf = shelf_of(c, request)
@@ -207,7 +229,10 @@ def _register_scope(app, w, scope: Scope):
             if scope.public and edit:  # блок «Гостевой доступ» — владельцу
                 guest = {"url": f"{cfg.public_base}/p", "closed": pin.closed_until(c, w.now()),
                          "set_at": store.get_state(c, pin.SET_AT_KEY) if pin.is_set(c) else ""}
+            expired = [g.email for g in google_accounts(c, request) if g.play == "expired"] if edit else []
         banners = [error] if error else []
+        banners += [f"Подключение Google Play {email} истекло — подключите заново на странице «Аккаунты»"
+                    for email in expired]
         try:
             free = jobs.free_space(w.env)
         except jobs.ArchiveUnavailable:
@@ -234,9 +259,10 @@ def _register_scope(app, w, scope: Scope):
         with w.conn() as c:
             shelf = shelf_of(c, request)
             on_shelf = {a.package for a in db.list_apps(c, shelf.id)} if shelf is not None else set()
+            play_accounts = [g for g in google_accounts(c, request) if g.play == "ok"]
         return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
                       found=found, search_error=search_error, on_shelf=on_shelf, error=error, link_url=link_url,
-                      prefix=p, public=scope.public)
+                      prefix=p, public=scope.public, play_accounts=play_accounts)
 
     def save_upload(file: UploadFile | None) -> tuple[Path | None, tuple[int, str] | None]:
         """Загрузка — потоком во временный файл (tmp/web, локально); (путь, None) или (None, (код, текст))."""
@@ -294,6 +320,24 @@ def _register_scope(app, w, scope: Scope):
                     db.put_app(c, shelf.id, package, name or package, "rustore", package, w.now())
                     db.enqueue(c, shelf.id, "add", w.now(), package=package,
                                payload={"source": "rustore", "ref": package, "name": name})
+        return back(p)
+
+    @app.post(f"{p}/add/play", response_class=HTMLResponse, dependencies=deps)
+    def add_play(request: Request, package: str = Form(""), account: int = Form(0)):
+        """Из Google Play подключённым аккаунтом области; купленное и набор файлов отсеет обработчик (sources)."""
+        package = play_package(package)
+        if not package:
+            return add_page(request, status_code=400, error=PLAY_PACKAGE)
+        with w.conn() as c:
+            acct = next((g for g in google_accounts(c, request) if g.id == account and g.play == "ok"), None)
+            if acct is None:
+                return add_page(request, status_code=400, error=NEED_PLAY)
+            shelf = ensure(c, request)
+            with store.tx(c):
+                if db.get_app(c, shelf.id, package) is None:  # уже на полке — второго не ставим
+                    db.put_app(c, shelf.id, package, package, "play", package, w.now(), google_account_id=acct.id)
+                    db.enqueue(c, shelf.id, "add", w.now(), package=package,
+                               payload={"source": "play", "ref": package, "account": acct.id})
         return back(p)
 
     @app.post(f"{p}/add/link", response_class=HTMLResponse, dependencies=deps)

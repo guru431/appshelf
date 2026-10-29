@@ -22,6 +22,22 @@
 {% endif %}
 <p class="hint">RuStore — универсальный APK, подпись сверяется с той, что сообщает RuStore. Платные без входа в RuStore
   не скачать.</p>
+<h2>Google Play</h2>
+{% if play_accounts %}
+<form method="post" action="{{ prefix }}/add/play" class="card">
+  <label>Ссылка Google Play или имя пакета<input name="package" placeholder="https://play.google.com/store/apps/details?id=… или com.example.app" required></label>
+  {% if play_accounts | length > 1 %}<label>Каким аккаунтом<select name="account">
+    {%- for g in play_accounts %}<option value="{{ g.id }}">{{ g.email }}</option>{% endfor %}</select></label>
+  {%- else %}<input type="hidden" name="account" value="{{ play_accounts[0].id }}">{% endif %}
+  <button>Добавить</button></form>
+<p class="hint">Одним файлом Google Play отдаёт немногие приложения: большинство приходит набором (split APK) — такое из
+  браузера не ставится, и полка подскажет, если пакет есть в RuStore. {% if public %}Купленное на публичную полку не
+  добавляется.{% else %}Купленное — только на свою полку; без Play Store на телефоне оно может не пройти проверку
+  лицензии.{% endif %}</p>
+{% else %}
+<p class="hint">Чтобы брать приложения из Google Play, подключите Google-аккаунт к Google Play на странице
+  <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}.</p>
+{% endif %}
 <h2>По ссылке</h2>
 <form method="post" action="{{ prefix }}/add/link" class="card">
   <label>Ссылка на APK<input name="url" type="url" value="{{ link_url }}" placeholder="https://…/app.apk" required></label>

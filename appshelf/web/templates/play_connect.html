@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block main %}
+<h2>Подключить {{ g.email }} к Google Play</h2>
+<div class="banner"><b>Прочитайте до подключения.</b>
+  Сервер получит ключ с доступом к Google-аккаунту {{ g.email }} целиком, а не только к Google Play:
+  владелец сервера технически может им воспользоваться.
+  Google может заблокировать аккаунт за сторонний клиент Google Play — подключайте аккаунт, потерю которого переживёте.</div>
+<div class="card">
+<ol>
+  <li>На компьютере откройте <a href="https://accounts.google.com/EmbeddedSetup" target="_blank" rel="noreferrer">accounts.google.com/EmbeddedSetup</a>
+    (лучше в приватном окне) и войдите аккаунтом {{ g.email }}.</li>
+  <li>Примите условия («I agree»). Если после этого страница замерла — так и должно быть.</li>
+  <li>Откройте инструменты разработчика (F12) → Application (Приложение) → Cookies → https://accounts.google.com и
+    скопируйте значение cookie <code>oauth_token</code> — оно начинается с <code>oauth2_4/</code>.</li>
+  <li>Вставьте его ниже в течение 10 минут: значение годится один раз.</li>
+</ol>
+</div>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post" action="/google/{{ g.id }}/play" class="card" autocomplete="off">
+  <label>oauth_token<input name="oauth_token" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
+  {% if proxies %}<label>Прокси — для страны аккаунта<select name="proxy"><option value="">без прокси</option>
+    {%- for name in proxies %}<option value="{{ name }}"{% if name == g.proxy %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>{% endif %}
+  <div class="bar"><button>Подключить</button><a class="btn secondary" href="/apple">Отмена</a></div>
+</form>
+<p class="hint">Пароль Google сервер не видит: вы вводите его на странице Google. Сменить пароль Google — значит отозвать
+  ключ: подключение истечёт, и его нужно будет сделать заново. Отключить Google Play можно на странице «Аккаунты» — ключ
+  удалится с сервера.</p>
+{% endblock %}

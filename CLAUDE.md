@@ -4,8 +4,8 @@ IPA из истории покупок основного Apple ID владел�
 Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026-10-05-appshelf-design.md`.
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
 Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
-Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–3 реализованы;
-этап 3 — вход Google и «Связать» — `docs/superpowers/plans/2026-10-28-android-stage3.md`).
+Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–4 реализованы;
+этап 4 — Google Play — `docs/superpowers/plans/2026-10-28-android-stage4.md`, протокол — вики проекта, google-play-protocol).
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
@@ -15,8 +15,9 @@ Android-полки, вход Google, публичная полка — `docs/sup
   `signin.py`, вход Google — `google_signin.py`, «Аккаунты» и «Связать» — `accounts.py`, раздел Android — `android.py`),
   `cli.py`.
 - `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
-  (HTTP источников: только https и глобальные адреса), `rustore.py`, `sources.py`, `fetch.py` (конвейер и задания),
-  `pin.py` (PIN публичной полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
+  (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
+  Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `sources.py`, `fetch.py` (конвейер и
+  задания), `pin.py` (PIN публичной полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
   `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker
@@ -56,6 +57,13 @@ Android-полки, вход Google, публичная полка — `docs/sup
   переходит никогда (`jobs.link_users` → `LinkRefused`).
 - `GOOGLE_CLIENT_SECRET` — только в `/etc/appshelf/appshelf.env`: не в git, журнале, ответах, cookie, тексте ошибок.
   Ключ Google-аккаунта — `sub`; адрес и имя — только для показа и писем.
+- Мастер-токен Google Play (AAS) — только файлом `/etc/appshelf/google/<id>/aas` (`appshelf`, 0600, каталог 0700),
+  токен Play — в памяти процесса, `oauth_token` — только в обработке формы подключения: не в базе, журнале,
+  `jobs.error`, argv, тексте ошибок и страниц. Удаление Google-аккаунта и «Отключить Google Play» удаляют каталог.
+- Прокси — `APPSHELF_PROXIES` в `/etc/appshelf/appshelf.env` (`имя=url`, пароль — только там; у аккаунта — имя),
+  только для запросов к Google Play; источник «ссылка» — всегда напрямую с проверкой адреса.
+- Купленное в Google Play — только на Android-полку участника, чей аккаунт купил: проверка — на сервере
+  (`fetch._own_shelf`), до доставки; на публичную и чужую — отказ.
 - Каталог кода на сервере получает групповые права по расписанию — данные и секреты там не держать. Код, `.venv`
   и `bin/` — root (`deploy/install.sh`): appshelf только читает и исполняет, иначе его код стал бы root при выкладке.
 - Патчи форка — LF (`*.patch -text`); правка — в `.work/ipatool-src` и перегенерация (`ipatool/README.md`).

@@ -16,8 +16,15 @@
 {% endfor %}
 {% for x in g.google %}
 <div class="row">
-  <div class="body"><div class="title">{{ x.email }}</div><div class="meta">Google{% if x.name %} · {{ x.name }}{% endif %} · последний вход {{ x.last_login_at[:10] or '—' }}</div></div>
-  <div class="act"><a class="btn sm danger" href="/google/{{ x.id }}/delete">Удалить</a></div>
+  <div class="body"><div class="title">{{ x.email }}</div><div class="meta">Google{% if x.name %} · {{ x.name }}{% endif %} · последний вход {{ x.last_login_at[:10] or '—' }}</div>
+    <div class="meta">{% if x.play == 'ok' %}Google Play подключён{% if x.play_country %} · {{ x.play_country }}{% endif %}{% if x.proxy %} · прокси {{ x.proxy }}{% endif %}
+      {%- elif x.play == 'expired' %}<span class="err">подключение Google Play истекло</span>{% if x.play_since %} {{ x.play_since[:16] | replace('T', ' ') }} UTC{% endif %}
+      {%- else %}Google Play не подключён{% endif %}</div></div>
+  <div class="act">
+    {%- if x.play == 'none' %}<a class="btn sm tint" href="/google/{{ x.id }}/play">Подключить к Google Play</a>
+    {%- else %}{% if x.play == 'expired' %}<a class="btn sm tint" href="/google/{{ x.id }}/play">Подключить заново</a>{% endif %}
+    <form method="post" action="/google/{{ x.id }}/play/disconnect"><button class="sm secondary">Отключить Google Play</button></form>{% endif %}
+    <a class="btn sm danger" href="/google/{{ x.id }}/delete">Удалить</a></div>
 </div>
 {% endfor %}
 </div>

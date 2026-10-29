@@ -7,7 +7,9 @@
   <div class="body">
     <div><b>{{ a.name }}</b>
       {%- if a.package in fresh %}{% set d = v['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}
-      {%- if a.pending %} <span class="tag">подпись сменилась</span>{% endif %}</div>
+      {%- if a.pending %} <span class="tag">подпись сменилась</span>{% endif %}
+      {%- if a.paid %} <span class="tag">купленное</span>{% endif %}</div>
+    {% if a.paid %}<div class="meta">Купленное в Google Play: может потребовать Play Store для проверки лицензии.</div>{% endif %}
     {% if v %}
     <div class="meta">{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
       · {{ sources.get(a.source, a.source) }} · подпись {{ a.signer[:4] }}…{{ a.signer[-4:] }}
@@ -30,7 +32,8 @@
     {% if a.source != 'upload' and edit %}<form method="post" action="{{ prefix }}/apps/{{ a.package }}/retry" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
     {% elif v and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия
-      {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% else %} новее нет{% endif %}</div>
+      {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% elif a.last_error %} {{ a.last_error }}
+      {%- else %} новее нет{% endif %}</div>
     {% elif a.last_error %}<div class="meta">не удалось обновить: {{ a.last_error }}</div>
     {% endif %}
   </div>
