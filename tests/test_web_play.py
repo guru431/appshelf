@@ -120,7 +120,7 @@ def test_add_from_play_by_url_and_package(pweb, conn, clock):
 
 def test_add_play_needs_connected_account(pweb, conn, clock, cfg):
     assert 'action="/android/add/play"' not in pweb.client.get("/android/add").text   # подключённого нет
-    assert "подключите Google-аккаунт к Google Play" in pweb.client.get("/android/add").text
+    assert "Google-аккаунт добавлен, но к Google Play ещё не подключён" in pweb.client.get("/android/add").text
     r = pweb.client.post("/android/add/play", data={"package": "com.fsck.k9", "account": pweb.gid})
     assert r.status_code == 400 and "подключите Google-аккаунт к Google Play" in r.text
     uid, foreign = google_only(conn, clock)                                     # чужой подключённый аккаунт

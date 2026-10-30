@@ -96,6 +96,9 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
             raise store.AppGone(info.package)
         title = info.label or name_hint.strip() or apk.resource_label(path) or info.package
         db.put_app(c, shelf.id, info.package, title, source, source_ref, now, google_account_id, paid)
+    elif app["name"] == info.package:  # карточка заведена по пакету (F-Droid, Play) — название из источника или файла
+        if title := name_hint.strip() or info.label or apk.resource_label(path):
+            db.set_name(c, shelf.id, info.package, title)
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)
     root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
@@ -200,8 +203,6 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                 db.set_etag(c, shelf.id, package, got.etag)
             if source == "play" and app is not None:
                 db.set_paid(c, shelf.id, package, got.paid)
-                if got.name and app["name"] == package:  # панель знала только пакет — название из Play
-                    db.set_name(c, shelf.id, package, got.name)
             return package, result, notice
         finally:
             shutil.rmtree(work, ignore_errors=True)

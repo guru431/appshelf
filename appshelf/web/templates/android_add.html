@@ -34,9 +34,13 @@
   браузера не ставится, и полка подскажет, если пакет есть в RuStore, AppGallery или F-Droid. {% if public %}Купленное на публичную полку не
   добавляется.{% else %}Купленное — только на свою полку; без Play Store на телефоне оно может не пройти проверку
   лицензии.{% endif %}</p>
+{% elif has_google %}
+<p class="hint">Google-аккаунт добавлен, но к Google Play ещё не подключён: «Подключить к Google Play» на странице
+  <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}. Понадобится
+  компьютер: ключ для Play берётся со страницы входа Google.</p>
 {% else %}
-<p class="hint">Чтобы брать приложения из Google Play, подключите Google-аккаунт к Google Play на странице
-  <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}.</p>
+<p class="hint">Чтобы брать приложения из Google Play, добавьте Google-аккаунт и подключите его к Google Play на
+  странице <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}.</p>
 {% endif %}
 <h2>По ссылке</h2>
 <form method="post" action="{{ prefix }}/add/link" class="card">

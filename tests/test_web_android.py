@@ -120,6 +120,18 @@ def test_add_link_names_card_from_resources(web, conn, tmp_path, cfg):
     assert Image.open(io.BytesIO(icon)).size == (192, 192)
 
 
+def test_store_page_card_named_from_resources(web, conn, tmp_path):
+    """Карточку по странице F-Droid панель заводит до скачивания с именем пакета (F-Droid названия не даёт) — название
+    приходит из resources.arsc скачанного APK (Fennec с F-Droid)."""
+    from test_apk import ICON, LABEL, SHORT_FILES, SHORT_RES
+    web.sources.apks[PKG] = make_apk(tmp_path / "a.apk", label=f"@{LABEL:#x}", icon_ref=ICON, resources=SHORT_RES,
+                                     files=SHORT_FILES)
+    web.client.post("/android/add/link", data={"url": f"https://f-droid.org/packages/{PKG}/", "name": ""})
+    assert db.get_app(conn, shelf(conn).id, PKG)["name"] == PKG
+    work(web, conn)
+    assert db.get_app(conn, shelf(conn).id, PKG)["name"] == "Aurora Store"
+
+
 def test_add_link_routes_store_pages(web, conn):
     def post(url, name=""):
         return web.client.post("/android/add/link", data={"url": url, "name": name}, follow_redirects=False)

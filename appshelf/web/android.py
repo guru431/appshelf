@@ -152,8 +152,7 @@ def register_routes(app, w) -> None:
                       closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
                       sources=SOURCES, notices=NOTICES, android_version=apk.android_version,
                       apk_name=fetch.apk_name,
-                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
-                      app_url=lambda package: fetch.app_url(cfg, shelf, package))
+                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f))
 
     @app.get("/p", response_class=HTMLResponse)
     def guest(request: Request):
@@ -284,10 +283,11 @@ def _register_scope(app, w, scope: Scope):
         with w.conn() as c:
             shelf = shelf_of(c, request)
             on_shelf = {a.package for a in db.list_apps(c, shelf.id)} if shelf is not None else set()
-            play_accounts = [g for g in google_accounts(c, request) if g.play == "ok"]
+            accounts = google_accounts(c, request)
+        play_accounts = [g for g in accounts if g.play == "ok"]
         return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
                       found=found, search_error=search_error, on_shelf=on_shelf, error=error, link_url=link_url,
-                      prefix=p, public=scope.public, play_accounts=play_accounts)
+                      prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts))
 
     def save_upload(file: UploadFile | None) -> tuple[Path | None, tuple[int, str] | None]:
         """Загрузка — потоком во временный файл (tmp/web, локально); (путь, None) или (None, (код, текст))."""

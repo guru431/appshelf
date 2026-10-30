@@ -1,7 +1,7 @@
 {# Карточка Android-приложения: каталог участника, публичная полка, страница гостя. edit — действия «⋯», «Повторить»,
-   «Принять новую подпись»; prefix — адреса форм области. Из контекста: fresh, sources, notices, android_version,
-   apk_name, app_url (постоянная ссылка на приложение). Метка сверки с RuStore (notices) живёт в last_error — это не
-   ошибка. #}
+   «Принять новую подпись», «Скопировать ссылку»; prefix — адреса форм области. Из контекста: fresh, sources, notices,
+   android_version, apk_name, app_url (постоянная ссылка на приложение; нужна, только если edit). Метка сверки с
+   RuStore (notices) живёт в last_error — это не ошибка. #}
 {% macro card(a, url, edit, prefix) %}
 {% set v = a.current %}
 {% set notice = a.last_error if a.last_error in notices else '' %}
@@ -22,7 +22,6 @@
       {%- if v['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
     {% if v['target_sdk'] < 24 %}<div class="err">Android 15+ не поставит: приложение собрано под старые версии (targetSdk {{ v['target_sdk'] }}).</div>{% endif %}
     <p class="install"><a class="btn pill" href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
-      {% set link = app_url(a.package) %}<a class="btn sm secondary" href="{{ link }}" data-copy="{{ link }}">Скопировать ссылку</a>
       {% if a.previous %}{% set p = a.previous %}<span class="meta">предыдущая: <a href="{{ url(p['dir'], apk_name(a.package, p['version_name'])) }}" download>{{ p['version_name'] }}</a>
         {%- if p['signer'] != a.signer %} (другая подпись){% endif %}
         {%- if p['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</p>
@@ -47,6 +46,9 @@
   {% if edit %}
   <details class="pop more"><summary aria-label="Действия">⋯</summary>
     <div class="sheet">
+      {%- if v %}{% set link = app_url(a.package) %}
+      <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
+      {%- endif %}
       {%- if v and a.status in ('ok', 'error') and a.source != 'upload' %}
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/check"><button>Проверить обновление</button></form>
       {%- endif %}

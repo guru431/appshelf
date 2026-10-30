@@ -262,22 +262,26 @@ label input { margin-top: 6px; font-weight: 400; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
-<script>
-addEventListener('click', function (e) {   // «Скопировать ссылку»: адрес — в data-copy; без буфера обмена — обычная ссылка
-  var b = e.target.closest && e.target.closest('[data-copy]');
-  if (!b || !navigator.clipboard) return;
-  e.preventDefault();
-  navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function () {
-    b.textContent = 'Ссылка скопирована';
-  }, function () { b.textContent = 'Не скопировалось — удерживайте кнопку'; });
-});
-</script>
 {% if nav not in ('login', 'guest') %}
 <script>
 addEventListener('pointerdown', function (e) {   // меню закрывается касанием мимо него
   Array.prototype.forEach.call(document.querySelectorAll('details.pop[open]'), function (d) {
     if (!d.contains(e.target)) d.open = false;
   });
+});
+addEventListener('click', function (e) {   // «Скопировать ссылку»: адрес — в data-copy; буфер недоступен — показать адрес
+  var b = e.target.closest && e.target.closest('[data-copy]');
+  if (!b) return;
+  e.preventDefault();
+  var link = b.getAttribute('data-copy');
+  function show() {
+    if (b.nextElementSibling) return;
+    var code = document.createElement('code');
+    code.textContent = link;
+    b.after(code);
+  }
+  if (!navigator.clipboard) { show(); return; }
+  navigator.clipboard.writeText(link).then(function () { b.textContent = 'Ссылка скопирована'; }, show);
 });
 </script>
 {% endif %}

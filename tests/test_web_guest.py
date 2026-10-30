@@ -64,7 +64,6 @@ def test_guest_right_pin_lists_apps_without_actions(shelf, anon):
     assert "samesite=lax" in cookie and f"max-age={pin.GUEST_DAYS * 86400}" in cookie
     page = anon.client.get("/p").text
     assert "Банк" in page and "Скачать APK" in page and f"/d/{shelf.shelf}/{PKG}-1/{PKG}-1.0.apk" in page
-    assert f'data-copy="https://apps.example/apk/{shelf.shelf}/{PKG}.apk"' in page   # «Скопировать ссылку»
     assert "<form" not in page and "Действия" not in page and "/admin" not in page and "/android" not in page
     assert "Установка неизвестных приложений" in page                          # подсказки по установке
 
