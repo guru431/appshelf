@@ -1,5 +1,4 @@
 import json
-import urllib.parse
 
 import pytest
 
@@ -8,8 +7,6 @@ from appshelf.android import github, net
 
 REF = "example/android-client"
 LATEST = f"{github.API}/repos/{REF}/releases/latest"
-SEARCH = f"{github.API}/search/repositories?" + urllib.parse.urlencode({
-    "q": "Telegram android in:name,description,readme", "per_page": github.LIMIT})
 
 
 def response(value, status=200):
@@ -82,28 +79,34 @@ def test_github_errors_remain_distinct():
     with pytest.raises(net.SourceError, match="стабильного выпуска"):
         github.info(FakeHttp(raw={LATEST: response({}, 404)}), REF)
     with pytest.raises(net.FetchError, match="ограничил"):
-        github.info(FakeHttp(raw={LATEST: response({}, 403)}), REF)
+        github.info(FakeHttp(raw={LATEST: response({}, 403),
+                                 f"https://github.com/{REF}/releases/latest": response({}, 429)}), REF)
     with pytest.raises(net.FetchError, match="502"):
         github.info(FakeHttp(raw={LATEST: response({}, 502)}), REF)
 
 
-def test_search_checks_bounded_repositories_and_skips_missing_apk():
-    refs = [f"example/client{i}" for i in range(8)]
-    routes = {SEARCH: response({"items": [{"full_name": r} for r in refs]})}
-    routes.update({f"{github.API}/repos/{r}/releases/latest": response(release("client.apk", repo=r))
-                   for r in refs[:github.LIMIT]})
-    routes[f"{github.API}/repos/{refs[1]}/releases/latest"] = response({}, 404)
-    routes[f"{github.API}/repos/{refs[2]}/releases/latest"] = response(release("client.apks", repo=refs[2]))
-    http, pauses = FakeHttp(raw=routes), []
-    apps = github.search(http, "Telegram", wait=lambda: pauses.append(True))
-    assert [a.repository for a in apps] == [refs[0], refs[3], refs[4]]
-    assert len(http.calls) == len(pauses) == github.LIMIT + 1
+def test_api_rate_limit_falls_back_to_same_repository_release_html():
+    page = f"https://github.com/{REF}/releases/latest"
+    fragment = f"https://github.com/{REF}/releases/expanded_assets/v1.2"
+    base = f"/{REF}/releases/download/v1.2/"
+    http = FakeHttp(raw={LATEST: response({}, 403),
+                         page: (200, {}, f'<include-fragment src="{fragment}"></include-fragment>'.encode()),
+                         fragment: (200, {}, (f'<a href="{base}client-x86.apk">x86</a>'
+                                              f'<a href="{base}client-arm64.apk">ARM</a>'
+                                              '<a href="https://github.com/other/app/releases/download/v1.2/client.apk">bad</a>'
+                                              f'<a href="/{REF}/releases/download/other/client.apk">old</a>').encode())})
+    pauses = []
+    app = github.info(http, REF, wait=lambda: pauses.append(True))
+    assert (app.asset_name, app.version_name) == ("client-arm64.apk", "v1.2")
+    assert app.mark == f"gh-web:v1.2:https://github.com{base}client-arm64.apk"
+    assert len(pauses) == 2
+    assert [c[2] for c in http.calls] == [LATEST, page, fragment]
 
 
-def test_search_reports_rate_limit_and_direct_ref_avoids_repository_search():
-    http = FakeHttp(raw={LATEST: response(release("client.apk"))})
-    assert github.search(http, f"https://github.com/{REF}")[0].repository == REF
-    assert len(http.calls) == 1
-    with pytest.raises(net.FetchError, match="ограничил"):
-        github.search(FakeHttp(raw={SEARCH: response({}, 429)}), "Telegram")
-    assert github.search(FakeHttp(), " ") == []
+def test_html_fallback_does_not_follow_foreign_fragment():
+    page = f"https://github.com/{REF}/releases/latest"
+    http = FakeHttp(raw={LATEST: response({}, 429),
+                         page: (200, {}, b'<include-fragment src="https://evil.example/releases/expanded_assets/v1"></include-fragment>')})
+    with pytest.raises(net.SourceError, match="файлы последнего"):
+        github.info(http, REF)
+    assert len(http.calls) == 2

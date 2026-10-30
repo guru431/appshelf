@@ -14,14 +14,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
 from .. import apk, jobs, notify, people, store
 from ..android import db, fdroid_index, fetch, github, links, net, pin
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
-from .common import back
+from .common import TEMPLATES, back
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
@@ -283,16 +283,54 @@ def _register_scope(app, w, scope: Scope):
             on_shelf = {a.package for a in db.list_apps(c, shelf.id)} if shelf is not None else set()
             accounts = google_accounts(c, request)
         play_accounts = [g for g in accounts if g.play == "ok"]
-        if q:
-            try:
-                result = w.env.sources.search_all(q, accounts=play_accounts)
-                found, search_errors = result.options, result.errors
-            except (net.FetchError, net.SourceError) as e:
-                search_errors = [str(e)]
         return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
                       found=found, search_errors=search_errors, sources=SOURCES,
                       on_shelf=on_shelf, error=error, link_url=link_url,
                       prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts))
+
+    @app.get(f"{p}/search", dependencies=deps)
+    def search_stream(request: Request, q: str = ""):
+        """SSE: состояние источника отправляется до его запроса, результаты — по мере получения."""
+        q = q.strip()[:200]
+        if not q:
+            return PlainTextResponse("Введите название приложения", status_code=400)
+        with w.conn() as c:
+            shelf = shelf_of(c, request)
+            apps = db.list_apps(c, shelf.id) if shelf else []
+            on_shelf = {a.package for a in apps}
+            accounts = [g for g in google_accounts(c, request) if g.play == "ok"]
+            split_packages = {a.package for a in apps if "набором файлов" in a.last_error}
+            if shelf:
+                for job in db.open_jobs(c, shelf.id):
+                    ref = json.loads(job["payload"] or "{}").get("ref", "")
+                    if "набором файлов" in job["error"] and apk.PACKAGE_RE.fullmatch(ref):
+                        split_packages.add(ref)
+
+        def message(kind, data):
+            return f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def stream():
+            previous = None
+            try:
+                for update in w.env.sources.search_events(q, accounts=accounts, split_packages=split_packages):
+                    if update.kind == "status":
+                        yield message("status", {"source": update.source, "state": update.state,
+                                                 "detail": update.detail})
+                    if update.result is not None and (update.result != previous or update.kind == "done"):
+                        result = update.result
+                        html = TEMPLATES.get_template("android_search_results.html").render(
+                            found=result.options, search_errors=result.errors, on_shelf=on_shelf,
+                            sources=SOURCES, prefix=p, complete=update.kind == "done")
+                        yield message(update.kind, {"html": html, "count": len(result.options),
+                                                   "errors": len(result.errors)})
+                        previous = result
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Android source search failed")
+                yield message("failed", {"message": "Поиск прервался — повторите запрос. Найденные варианты сохранены."})
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
     def save_upload(file: UploadFile | None) -> tuple[Path | None, tuple[int, str] | None]:
         """Загрузка — потоком во временный файл (tmp/web, локально); (путь, None) или (None, (код, текст))."""

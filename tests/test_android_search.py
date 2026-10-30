@@ -19,8 +19,7 @@ def setup_search(monkeypatch):
     monkeypatch.setattr(appgallery, "info", lambda *a: (_ for _ in ()).throw(net.SourceError("AppGallery не нашёл")))
     monkeypatch.setattr(apkpure, "info", lambda *a: SimpleNamespace(name="Example", version_name="3.0", kind="xapk"))
     release = github.GithubApp("example/android", "android", "v2.1", "https://github.com/example/android/releases/download/v2/app.apk", "app.apk", "gh:1")
-    monkeypatch.setattr(github, "info", lambda *a: release)
-    monkeypatch.setattr(github, "search", lambda *a, **kw: [release])
+    monkeypatch.setattr(github, "info", lambda *a, **kw: release)
     return src
 
 
@@ -30,7 +29,8 @@ def test_search_archive_versions_upstream_github_and_xapk(monkeypatch):
     assert not result.errors
     found = {o.source: o for o in result.options}
     assert found["fdroid_archive"].versions == (("2.0", PKG + "@2"), ("1.0", PKG + "@1"))
-    assert found["github"].package == PKG and len([o for o in result.options if o.source == "github"]) == 1
+    assert found["github"].package == "" and found["github"].related_package == PKG
+    assert len([o for o in result.options if o.source == "github"]) == 1
     assert "набором" in found["apkpure"].reason
     assert "подключите" in found["play"].reason
 
@@ -66,3 +66,53 @@ def test_search_deadline_preserves_results(monkeypatch):
     result = src.search_all("Example")
     assert any(o.source == "fdroid_archive" for o in result.options)
     assert any("слишком долго" in e for e in result.errors)
+
+
+def test_timeout_keeps_the_domain_for_network_exceptions(monkeypatch):
+    src = setup_search(monkeypatch)
+    monkeypatch.setattr(apkpure, "info", lambda *a: (_ for _ in ()).throw(
+        net.FetchError("api.pureapk.com: TimeoutError: timed out")))
+    result = src.search_all("Example")
+    assert any("api.pureapk.com" in e and "вовремя" in e for e in result.errors)
+
+
+def test_single_apk_does_not_query_github(monkeypatch):
+    src = setup_search(monkeypatch)
+    monkeypatch.setattr(apkpure, "info", lambda *a: SimpleNamespace(name="Example", version_name="3.0", kind="apk"))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("single APK must not trigger GitHub lookups")
+
+    monkeypatch.setattr(github, "info", forbidden)
+    src.search_all("Example")
+
+
+def test_status_and_partial_results_arrive_before_later_source_calls(monkeypatch):
+    src = setup_search(monkeypatch)
+    called = []
+    monkeypatch.setattr(rustore, "search", lambda *a: called.append("rustore") or [])
+    updates = src.search_events("Example")
+    first = next(updates)
+    assert (first.kind, first.source, first.state) == ("status", "rustore", "running") and not called
+    assert next(updates).state == "done" and called == ["rustore"]
+    assert next(updates).kind == "results"
+
+
+def test_github_release_is_cached_between_searches(monkeypatch):
+    src = setup_search(monkeypatch)
+    now, calls = [0.0], []
+    src.clock = lambda: now[0]
+    release = github.GithubApp("example/android", "Example", "2", "https://github.com/example/android/releases/download/2/app.apk", "app.apk", "mark")
+    monkeypatch.setattr(github, "info", lambda *a, **kw: calls.append(a[1]) or release)
+    assert src.github_app("example/android") == release
+    assert src.github_app("example/android") == release and calls == ["example/android"]
+    now[0] = 901
+    src.github_app("example/android")
+    assert len(calls) == 2
+
+
+def test_known_split_still_checks_author_when_apkpure_is_unavailable(monkeypatch):
+    src = setup_search(monkeypatch)
+    monkeypatch.setattr(apkpure, "info", lambda *a: (_ for _ in ()).throw(net.FetchError("api.pureapk.com: timed out")))
+    result = src.search_all(PKG, split_packages=(PKG,))
+    assert any(o.source == "github" and o.related_package == PKG for o in result.options)

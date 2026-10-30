@@ -267,6 +267,9 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   to 1 GB. The server never follows a link into an internal network: the name is resolved before every request and
   after every redirect, and any non-global address (private, loopback, link-local, multicast) is refused before
   connecting.
+- **Search progress.** The page opens immediately and shows the current source and partial results.
+  "Stop" closes the search while retaining discovered options; a completed or interrupted search can be retried.
+  Network errors include the affected domain; APKPure metadata uses `api.pureapk.com`.
 - **Source limits.** One whole APK only, nothing paid except apps bought in Google Play. The terms of RuStore,
   AppGallery, APKPure and Google Play forbid automated downloads: requests go one at a time with a pause, the nightly
   check runs once a day; the server owner accepts the risk of losing access.
@@ -354,10 +357,12 @@ its package. The signature of every downloaded version is compared with RuStore.
   main package API automatically checks the archive. Both catalogs are cached in memory for six hours; indexed
   APKs are checked against SHA-256 and the certificate. Selecting an exact version or an archive APK URL keeps
   that version without updating it.
-- **GitHub** checks the latest stable release for a universal or ARM APK. F-Droid results automatically check
-  their upstream GitHub repository; general search also checks up to five matching repositories. Repository
-  links follow releases, while direct APK links retain the selected file. Package IDs and signatures may differ
-  between builds, so each source is offered separately.
+- **GitHub** checks the latest stable release for a universal or ARM APK. Automatic checks run only when a store
+  returns a bundle: the app description or one developer website page supplies the
+  repository, and only that repository's releases are checked. There is no global GitHub search. An explicit
+  repository URL can also be supplied. Release information is cached for 15 minutes; API rate limits fall back
+  to the same repository's public release page. Repository links follow releases; direct APK links retain the
+  selected file. The developer's build may have another package ID and is offered separately.
 - **APKPure** — the APKPure client API without sign-in, single APKs only: an XAPK is refused as a bundle with a hint
   where the package comes as one APK. APKPure has distributed tampered APKs (2021 — a trojan in its client, 2025 —
   Telegram X with a backdoor), so: if the package is in RuStore the signature **must** match, otherwise "подпись не

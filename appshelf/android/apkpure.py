@@ -29,6 +29,7 @@ class PureApp:
     sha1: str
     size: int
     icon_url: str
+    description: str = ""  # ссылки автора для поиска отдельного APK, если магазин отдаёт XAPK
 
 
 def info_url(package: str) -> str:
@@ -52,7 +53,7 @@ def info(http: Http, package: str) -> PureApp:
             return PureApp(package=package, name=_text(app, 1), version_name=_text(app, 6),
                            version_code=int(_text(app, 5)), kind=KINDS[asset[8][0]], url=_text(asset, 9),
                            sha1=_text(asset, 3).lower(), size=int(asset.get(4, [0])[0]),
-                           icon_url=icon[0].decode() if icon else "")
+                           icon_url=icon[0].decode() if icon else "", description=_text(app, 10))
     except (pb.PbError, IndexError, KeyError, TypeError, ValueError, UnicodeDecodeError):
         raise SourceError(UNKNOWN) from None
     raise SourceError("нет в APKPure")

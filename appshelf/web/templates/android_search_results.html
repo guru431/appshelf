@@ -1,0 +1,21 @@
+{% for message in search_errors %}<p class="err">{{ message }}</p>{% endfor %}
+{% if complete and not found %}<p class="meta">{% if search_errors %}Поиск завершён не во всех источниках.{% else %}Ничего не нашлось.{% endif %}</p>{% endif %}
+{% if found %}
+<div class="card list source-results">
+  {%- for s in found %}
+  <div class="row" data-result-key="{{ s.source }}:{{ s.ref }}:{{ s.account }}">
+    <div class="body"><b>{{ s.name }}</b><div class="meta">{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}{% if s.related_package %}<br>Вариант автора для {{ s.related_package }}; пакет APK может отличаться{% endif %}</div></div>
+    <div class="act">
+      {%- if s.package in on_shelf %}<span class="tag">на полке</span>
+      {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
+      {%- else %}<form method="post" action="{{ prefix }}/add/source" class="source-choice">
+        <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">
+        {% if s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
+        {% else %}<input type="hidden" name="ref" value="{{ s.ref }}">{% endif %}
+        {% if s.source == 'apkpure' %}<label><input type="checkbox" name="ack" value="1"> Понимаю риск APKPure: если пакета нет в RuStore, подпись не с чем сверить</label>{% endif %}
+        <button class="sm tint">Добавить · {{ sources[s.source] }}</button></form>{% endif %}
+    </div>
+  </div>
+  {%- endfor %}
+</div>
+{% endif %}

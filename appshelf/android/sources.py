@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import time
+import threading
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,13 +65,23 @@ class Sources:
         self._last: float | None = None
         self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock)
         self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock)
+        self._github_cache = {}
+        self._github_lock = threading.Lock()
 
     def search(self, query: str) -> list[rustore.StoreApp]:
         self._wait()
         return rustore.search(self.http, query)
 
-    def search_all(self, query: str, *, accounts=()):
-        from .search import search
+    def search_all(self, query: str, *, accounts=(), split_packages=()):
+        from .search import Results
+        result = Results((), ())
+        for update in self.search_events(query, accounts=accounts, split_packages=split_packages):
+            if update.result is not None:
+                result = update.result
+        return result
+
+    def search_events(self, query: str, *, accounts=(), split_packages=()):
+        from .search import events
         # Обычное скачивание может ждать дольше; поиск должен вернуть хотя бы частичные
         # результаты до тайм-аута веб-сервера. Настройки общего HTTP-клиента не меняются.
         bounded = copy(self)
@@ -85,7 +96,18 @@ class Sources:
             self._wait()
 
         bounded._wait = wait
-        return search(bounded, query, accounts=accounts)
+        return events(bounded, query, accounts=accounts, split_packages=split_packages)
+
+    def github_app(self, ref: str) -> github.GithubApp:
+        """Повторный поиск и ночная проверка не расходуют квоту для того же выпуска."""
+        with self._github_lock:
+            key = ref.lower()
+            cached = self._github_cache.get(key)
+            if cached is not None and self.clock() < cached[0]:
+                return cached[1]
+            app = github.info(self.http, ref, wait=self._wait)
+            self._github_cache[key] = (self.clock() + 900, app)
+            return app
 
     def latest(self, source: str, ref: str, stored_etag: str, *, account=None) -> Latest:
         if source == "rustore":
@@ -103,7 +125,7 @@ class Sources:
             return Latest(self._appgallery(ref).version_code, "", True)
         if source == "github":
             self._wait()
-            mark = github.info(self.http, ref).mark
+            mark = self.github_app(ref).mark
             return Latest(None, mark, mark != stored_etag)
         if source in ("fdroid", "fdroid_archive"):
             # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
@@ -158,7 +180,7 @@ class Sources:
                 return self._fetch_fdroid_index("fdroid_archive", ref, dest)
         if source == "github":
             self._wait()
-            app = github.info(self.http, ref)
+            app = self.github_app(ref)
             self._wait()
             self.http.download(app.asset_url, dest)
             info = apk.read_apk(dest)

@@ -54,12 +54,18 @@ def test_apkpure_missing_and_broken():
         apkpure.info(FakeHttp(raw={apkpure.info_url(K9): (403, {}, b"")}), K9)
 
 
-def reply(package: str, body: bytes, url: str, icon: str) -> bytes:
+def reply(package: str, body: bytes, url: str, icon: str, description: str = "") -> bytes:
     """Ответ app_version того же вида, что записанный (README фикстуры): одна запись APK с размером и SHA-1 body."""
-    app = [(1, "K-9 Mail"), (2, "K-9 Mail"), (4, package), (5, "39046"), (6, "24.0"),
+    app = [(1, "K-9 Mail"), (2, "K-9 Mail"), (4, package), (5, "39046"), (6, "24.0"), (10, description),
            (24, [(3, hashlib.sha1(body).hexdigest()), (4, len(body)), (8, "APK"), (9, url)]), (27, [(1, [(1, icon)])])]
     return pb.encode([(1, [(7, [(1, [(2, 1)]), (2, [(1, "version_list"), (3, [(2, app)])])])]),
                       (2, [(2, "INVALID_COMMAND"), (3, "SUCCESS")])])
+
+
+def test_apkpure_description_is_available_for_author_lookup():
+    description = "Source: https://github.com/example/android"
+    http = FakeHttp(raw={apkpure.info_url(K9): (200, {}, reply(K9, b"APK", "https://example.org/app.apk", "", description))})
+    assert apkpure.info(http, K9).description == description
 
 
 def test_apkpure_fetch_checks_sha1(tmp_path):

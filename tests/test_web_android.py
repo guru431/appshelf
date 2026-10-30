@@ -31,6 +31,13 @@ def shelf(conn):
     return db.shelf_for_user(conn, 1)
 
 
+def search_results(web, query):
+    response = web.client.get("/android/search", params={"q": query})
+    assert response.status_code == 200 and response.headers["content-type"].startswith("text/event-stream")
+    messages = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    return next(m["html"] for m in reversed(messages) if "html" in m)
+
+
 def add_link(web, conn, tmp_path, url=URL, **apk):
     web.sources.apks[url] = make_apk(tmp_path / f"{len(web.sources.apks)}.apk", **apk)
     assert web.client.post("/android/add/link", data={"url": url, "name": ""},
@@ -75,8 +82,8 @@ def test_explicit_apple_on_android_phone_shows_apple(web):
 def test_add_from_rustore_search_and_install_link(web, conn, tmp_path):
     web.sources.found = [rustore.StoreApp(1, PKG, "Пример Банк", "", 1, "", 0, "", 0),
                          rustore.StoreApp(2, "ru.paid", "Платное", "", 1, "", 199, "", 0)]
-    r = web.client.get("/android/add", params={"q": "сбер"})
-    assert "Пример Банк" in r.text and "платное — недоступно" in r.text and ("search", "сбер") in web.sources.calls
+    html = search_results(web, "сбер")
+    assert "Пример Банк" in html and "платное — недоступно" in html and ("search", "сбер") in web.sources.calls
     web.sources.apks[PKG] = make_apk(tmp_path / "a.apk", min_sdk=26)
     r = web.client.post("/android/add/rustore", data={"package": PKG, "name": "Пример Банк"}, follow_redirects=False)
     assert (r.status_code, r.headers["location"]) == (303, "/android")
@@ -87,9 +94,45 @@ def test_add_from_rustore_search_and_install_link(web, conn, tmp_path):
     page = web.client.get("/android").text
     assert f"https://apps.example/d/{shelf(conn).shelf}/{PKG}-1/{PKG}-1.0.apk" in page
     assert "Android 8+" in page and "RuStore" in page and cert_sha(b"CERT-A")[:4] in page
-    assert "на полке" in web.client.get("/android/add", params={"q": "сбер"}).text
+    assert "на полке" in search_results(web, "сбер")
     web.client.post("/android/add/rustore", data={"package": PKG, "name": "x"})                  # уже на полке
     assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 1
+
+
+def test_search_page_returns_before_sources_are_queried(web):
+    page = web.client.get("/android/add", params={"q": "Example"})
+    assert page.status_code == 200
+    assert ("search", "Example") not in web.sources.calls
+
+
+def test_search_stream_reports_unexpected_failure_and_keeps_partial_results(web, monkeypatch):
+    from appshelf.android.search import Option, Results, Update
+
+    def interrupted(*args, **kw):
+        yield Update("status", "rustore", "running", "backapi.rustore.ru")
+        yield Update("results", result=Results((Option("rustore", PKG, PKG, "Example"),), ()))
+        raise RuntimeError("simulated interrupted search")
+
+    monkeypatch.setattr(web.sources, "search_events", interrupted)
+    response = web.client.get("/android/search", params={"q": "Example"})
+    assert "event: results" in response.text and PKG in response.text
+    assert "event: failed" in response.text and "simulated interrupted search" not in response.text
+
+
+def test_search_remembers_the_package_of_a_failed_bundle_job(web, conn, clock, monkeypatch):
+    from appshelf.android.search import Results, Update
+    sid = db.ensure_shelf(conn, 1, clock.iso()).id
+    jid = db.enqueue(conn, sid, "add", clock.iso(), payload={"source": "apkpure", "ref": PKG})
+    db.finish_job(conn, jid, "error", clock.iso(), "набором файлов — из браузера не ставится")
+    seen = []
+
+    def search(query, **kwargs):
+        seen.append(kwargs["split_packages"])
+        yield Update("done", result=Results((), ()))
+
+    monkeypatch.setattr(web.sources, "search_events", search)
+    web.client.get("/android/search", params={"q": PKG})
+    assert seen == [{PKG}]
 
 
 def test_add_rustore_rejects_bad_package(web, conn):
@@ -103,8 +146,8 @@ def test_search_selects_exact_archive_version_and_github(web, conn, tmp_path):
     web.sources.found = [Option("fdroid_archive", PKG, PKG, "Telegram FOSS", "7.0",
                                 versions=(("7.0", ref),)),
                          Option("github", "example/android", "", "Happ", "v4")]
-    page = web.client.get("/android/add", params={"q": "telegram"})
-    assert "Архив F-Droid" in page.text and ref in page.text and "GitHub" in page.text
+    html = search_results(web, "telegram")
+    assert "Архив F-Droid" in html and ref in html and "GitHub" in html
     web.sources.apks[ref] = make_apk(tmp_path / "archive.apk", version_code=7, version_name="7.0")
     r = web.client.post("/android/add/source", data={"source": "fdroid_archive", "ref": ref,
                                                     "package": PKG, "name": "Telegram FOSS"}, follow_redirects=False)

@@ -1,7 +1,7 @@
 """GitHub Releases: публичные репозитории с одним APK для ARM, без учётной записи и токена.
 
-Поиск проверяет не больше пяти репозиториев. Выбор по имени файла — подсказка: настоящий пакет, ABI и подпись
-проверяет общий конвейер после скачивания. Наборы APK и сборки только для x86 не предлагаются.
+Репозиторий задаёт участник или ссылка автора в описании приложения. Выбор по имени файла — подсказка: настоящий
+пакет, ABI и подпись проверяет общий конвейер после скачивания. Наборы APK и сборки только для x86 не предлагаются.
 """
 from __future__ import annotations
 
@@ -9,15 +9,19 @@ import json
 import re
 import urllib.parse
 from dataclasses import dataclass
+from html.parser import HTMLParser
 
 from .net import FetchError, Http, SourceError
 
 API = "https://api.github.com"
 HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10"}
-LIMIT = 5
 UNKNOWN = "GitHub ответил в неизвестном формате"
 NO_APK = "в последнем выпуске GitHub нет одного APK для ARM"
 REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}\Z")
+
+
+class _RateLimited(FetchError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ def _json(http: Http, path: str):
     if status == 404:
         raise SourceError("в GitHub нет публичного репозитория или опубликованного стабильного выпуска")
     if status in (403, 429):
-        raise FetchError("GitHub ограничил запросы — повторите поиск позже")
+        raise _RateLimited("GitHub ограничил запросы — повторите позже")
     if status != 200:
         raise FetchError(f"GitHub ответил {status}")
     try:
@@ -65,12 +69,15 @@ def _json(http: Http, path: str):
         raise SourceError(UNKNOWN) from None
 
 
-def info(http: Http, ref: str) -> GithubApp:
+def info(http: Http, ref: str, *, wait=lambda: None) -> GithubApp:
     """Последний опубликованный стабильный выпуск; release/latest не включает draft и prerelease."""
     ref = parse_ref(ref)
     if not ref:
         raise SourceError("нужна ссылка на репозиторий GitHub или owner/repo")
-    d = _json(http, f"/repos/{ref}/releases/latest")
+    try:
+        d = _json(http, f"/repos/{ref}/releases/latest")
+    except _RateLimited:
+        return _html_info(http, ref, wait)
     try:
         if not isinstance(d, dict) or not isinstance(d["assets"], list) or not isinstance(d["tag_name"], str):
             raise ValueError
@@ -125,31 +132,71 @@ def _rank(name: str) -> int | None:
     return 2
 
 
-def search(http: Http, query: str, *, wait=lambda: None) -> list[GithubApp]:
-    """До пяти репозиториев с APK; отдельный репозиторий без APK пропускается, сетевой сбой виден вызывающему."""
-    query = query.strip()
-    if not query:
-        return []
-    direct = parse_ref(query)
-    if direct:
-        wait()
-        return [info(http, direct)]
-    params = urllib.parse.urlencode({"q": query[:160] + " android in:name,description,readme", "per_page": LIMIT})
+class _Links(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.fragments, self.links = [], []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "include-fragment" and attrs.get("src"):
+            self.fragments.append(attrs["src"])
+        if tag == "a" and attrs.get("href"):
+            self.links.append(attrs["href"])
+
+
+def _page(http: Http, url: str) -> _Links:
+    status, _, body = http.request("GET", url, headers={"Accept": "text/html"}, max_bytes=2 << 20)
+    if status == 404:
+        raise SourceError("в GitHub нет публичного репозитория или опубликованного стабильного выпуска")
+    if status in (403, 429):
+        raise FetchError("GitHub ограничил запросы — повторите позже")
+    if status != 200:
+        raise FetchError(f"GitHub ответил {status}")
+    parser = _Links()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    return parser
+
+
+def _html_info(http: Http, ref: str, wait) -> GithubApp:
+    """При исчерпанном лимите API — та же публичная страница последнего выпуска и только её список файлов."""
+    page_url = f"https://github.com/{ref}/releases/latest"
     wait()
-    d = _json(http, "/search/repositories?" + params)
-    if not isinstance(d, dict) or not isinstance(d.get("items"), list):
-        raise SourceError(UNKNOWN)
-    found, seen = [], set()
-    for item in d["items"][:LIMIT]:
-        if not isinstance(item, dict) or not isinstance(item.get("full_name"), str):
+    page = _page(http, page_url)
+    prefix = f"/{ref}/releases/expanded_assets/"
+    fragment = next((urllib.parse.urljoin(page_url, u) for u in page.fragments
+                     if _fragment_url(urllib.parse.urljoin(page_url, u), prefix)), "")
+    if not fragment:
+        raise SourceError("не удалось прочитать файлы последнего выпуска GitHub")
+    raw_tag = urllib.parse.urlsplit(fragment).path[len(prefix):]
+    wait()
+    assets = _page(http, fragment)
+    candidates = []
+    for href in assets.links:
+        url = urllib.parse.urljoin(fragment, href)
+        if not _asset_url(url, ref):
             continue
-        ref = parse_ref(item["full_name"])
-        if not ref or ref.lower() in seen:
+        u = urllib.parse.urlsplit(url)
+        # Фрагмент и файл относятся к одному выпуску; посторонние ссылки страницы не кандидаты.
+        if not u.path.lower().startswith(f"/{ref}/releases/download/{raw_tag}/".lower()):
             continue
-        seen.add(ref.lower())
-        try:
-            wait()
-            found.append(info(http, ref))
-        except SourceError:
-            pass
-    return found
+        name = urllib.parse.unquote(u.path.rsplit("/", 1)[-1])
+        rank = _rank(name)
+        if rank is not None:
+            candidates.append((rank, name.lower(), name, url))
+    if not candidates:
+        raise SourceError(NO_APK)
+    _, _, name, url = min(candidates)
+    tag = urllib.parse.unquote(raw_tag)
+    return GithubApp(repository=ref, name=ref.rsplit("/", 1)[1], version_name=tag,
+                     asset_url=url, asset_name=name, mark=f"gh-web:{tag}:{url}")
+
+
+def _fragment_url(url: str, prefix: str) -> bool:
+    try:
+        u = urllib.parse.urlsplit(url)
+        return (u.scheme == "https" and u.hostname == "github.com" and u.port in (None, 443)
+                and u.username is None and u.password is None and not u.query and not u.fragment
+                and u.path.lower().startswith(prefix.lower()) and len(u.path) > len(prefix))
+    except ValueError:
+        return False

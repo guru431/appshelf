@@ -3,31 +3,82 @@
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
 <h2>Найти приложение</h2>
-<form method="get" action="{{ prefix }}/add" class="field" onsubmit="this.querySelector('button').textContent='Ищем…'; this.querySelector('button').disabled=true"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200"><button>Найти</button></form>
-<p class="hint">RuStore, F-Droid и его архив, GitHub, Google Play, AppGallery и APKPure. Поиск может занять минуту.
+<form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
+<p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure.
   Выберите источник: сборки одного приложения могут отличаться подписью и функциями. AppGallery и APKPure
-  проверяются по пакетам, найденным в каталогах и публичном поиске Google Play.</p>
-{% for message in search_errors %}<p class="err">{{ message }}</p>{% endfor %}
-{% if q and not found %}<p class="meta">{% if search_errors %}Поиск завершён не во всех источниках.{% else %}Ничего не нашлось.{% endif %}</p>{% endif %}
-{% if found %}
-<div class="card list source-results">
-  {%- for s in found %}
-  <div class="row">
-    <div class="body"><b>{{ s.name }}</b><div class="meta">{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}</div></div>
-    <div class="act">
-      {%- if s.package in on_shelf %}<span class="tag">на полке</span>
-      {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
-      {%- else %}<form method="post" action="{{ prefix }}/add/source" class="source-choice">
-        <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">
-        {% if s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
-        {% else %}<input type="hidden" name="ref" value="{{ s.ref }}">{% endif %}
-        {% if s.source == 'apkpure' %}<label><input type="checkbox" name="ack" value="1"> Понимаю риск APKPure: если пакета нет в RuStore, подпись не с чем сверить</label>{% endif %}
-        <button class="sm tint">Добавить · {{ sources[s.source] }}</button></form>{% endif %}
-    </div>
-  </div>
-  {%- endfor %}
+  проверяются по найденным пакетам. Если приложение приходит набором файлов, проверяются ссылки автора на GitHub
+  в описании и на его сайте. Поиска по всему GitHub нет.</p>
+<div id="search-progress" class="card" hidden>
+  <p id="search-summary" role="status" aria-live="polite"></p>
+  <div id="source-statuses" aria-live="polite"></div>
 </div>
-{% endif %}
+<div id="search-results">{% include "android_search_results.html" %}</div>
+<noscript><p class="err">Для поиска с отображением хода работы включите JavaScript.</p></noscript>
+<script>
+(function () {
+  var form = document.getElementById('source-search'), input = form.elements.q;
+  var stop = document.getElementById('stop-search'), progress = document.getElementById('search-progress');
+  var summary = document.getElementById('search-summary'), statuses = document.getElementById('source-statuses');
+  var results = document.getElementById('search-results'), stream = null, timer = null;
+  var names = {{ sources | tojson }}, rows = {}, started = 0;
+  function finish(text) {
+    if (stream) stream.close();
+    stream = null; clearInterval(timer); stop.hidden = true;
+    form.querySelector('button').disabled = false; summary.textContent = text;
+    Object.values(rows).forEach(function (target) {
+      if (target.row.classList.contains('busy')) {
+        target.row.className = 'meta'; target.detail.textContent = 'проверка прервана';
+      }
+    });
+  }
+  function render(data) {
+    // Сохранить выбор версии и галочку, когда пришли следующие результаты.
+    var existing = {}, fragment = document.createElement('template');
+    results.querySelectorAll('[data-result-key]').forEach(function (row) { existing[row.dataset.resultKey] = row; });
+    fragment.innerHTML = data.html;
+    fragment.content.querySelectorAll('[data-result-key]').forEach(function (row) {
+      if (existing[row.dataset.resultKey]) row.replaceWith(existing[row.dataset.resultKey]);
+    });
+    results.replaceChildren(fragment.content);
+  }
+  function start() {
+    var query = input.value.trim(); if (!query) return;
+    if (stream) stream.close(); clearInterval(timer);
+    progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {};
+    ['rustore', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github'].forEach(function (source) {
+      var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
+      title.textContent = names[source] + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
+      row.append(title, detail); statuses.append(row); rows[source] = {row: row, detail: detail};
+    });
+    started = Date.now(); form.querySelector('button').disabled = true;
+    function tick() { summary.textContent = 'Поиск идёт · ' + Math.floor((Date.now() - started) / 1000) + ' с'; }
+    tick(); timer = setInterval(tick, 1000);
+    var url = new URL(form.action); url.searchParams.set('q', query); history.replaceState(null, '', url);
+    var active = new EventSource({{ (prefix + '/search') | tojson }} + '?q=' + encodeURIComponent(query)); stream = active;
+    active.addEventListener('status', function (event) {
+      if (stream !== active) return;
+      var data = JSON.parse(event.data), target = rows[data.source]; if (!target) return;
+      target.row.className = data.state === 'error' ? 'err' : data.state === 'running' ? 'meta busy' : 'meta';
+      target.detail.textContent = (data.state === 'running' ? 'ищем · ' : '') + data.detail;
+    });
+    active.addEventListener('results', function (event) { if (stream === active) render(JSON.parse(event.data)); });
+    active.addEventListener('done', function (event) {
+      if (stream !== active) return;
+      var data = JSON.parse(event.data); render(data);
+      Object.values(rows).forEach(function (target) {
+        if (target.detail.textContent === 'ожидает') target.detail.textContent = 'не потребовался';
+      });
+      finish((data.errors ? 'Поиск завершён с ошибками' : 'Поиск завершён') + ' · найдено вариантов: ' + data.count);
+    });
+    active.addEventListener('failed', function (event) { if (stream === active) finish(JSON.parse(event.data).message); });
+    active.onerror = function () { if (stream === active) finish('Соединение с поиском прервалось. Найденные варианты сохранены — повторите запрос.'); };
+  }
+  form.addEventListener('submit', function (event) { event.preventDefault(); start(); });
+  stop.addEventListener('click', function () { finish('Поиск остановлен. Найденные варианты сохранены.'); });
+  window.addEventListener('pagehide', function () { if (stream) stream.close(); clearInterval(timer); });
+  if (input.value.trim()) start();
+}());
+</script>
 <p class="hint">RuStore — универсальный APK, подпись сверяется с той, что сообщает RuStore. Платные без входа в RuStore
   не скачать.</p>
 <h2>Google Play</h2>

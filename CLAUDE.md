@@ -19,7 +19,8 @@ Android-полки, вход Google, публичная полка — `docs/sup
   (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
   Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `appgallery.py` (updateCheck по пакету),
   `fdroid.py` (пакетный API, сборки по ABI), `fdroid_index.py` (основной и архивный каталоги, версии, SHA-256),
-  `github.py` (стабильные выпуски с APK), `search.py` (общий поиск), `discovery.py` (публичный поиск Play),
+  `github.py` (стабильные выпуски с APK), `upstream.py` (репозиторий по ссылкам автора),
+  `search.py` (поток состояний и результатов поиска), `discovery.py` (публичный поиск Play),
   `apkpure.py` (app_version, protobuf), `links.py` (страница магазина →
   источник и пакет), `sources.py`, `fetch.py` (конвейер, задания, сверка подписи с RuStore), `pin.py` (PIN публичной
   полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
