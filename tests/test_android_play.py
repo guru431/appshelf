@@ -32,7 +32,8 @@ class FakeHttp:
         self.routes.setdefault((method, url), []).append((status, body))
         return self
 
-    def request(self, method, url, *, headers=None, body=None, max_bytes=None):
+    def request(self, method, url, *, headers=None, body=None, max_bytes=None, follow=True):
+        assert not follow, "запросы Play не должны следовать редиректам"
         self.calls.append((method, url, headers or {}, body))
         queue = self.routes.get((method, url.split("?")[0]))
         if not queue:
@@ -180,6 +181,19 @@ def test_token_cached_until_expiry(client, clock):
     http.on("POST", play.AUTH_URL, 200, TOKEN_OK.replace(b"1790003600", b"1790007200"))
     client.details("com.fsck.k9")
     assert [c[1] for c in http.calls].count(play.AUTH_URL) == 2
+
+
+@pytest.mark.parametrize("status,error", [(503, "ServiceUnavailable"), (403, "NeedsBrowser"),
+                                          (200, "BadAuthentication")])
+def test_temporary_auth_failure_can_be_retried(cfg, clock, status, error):
+    connect_files(cfg)
+    http = FakeHttp().on("POST", play.AUTH_URL, status, f"Error={error}".encode())
+    c = play.PlayClient(cfg, GID, "", http_factory=lambda *a, **kw: http, clock=lambda: clock.t)
+    with pytest.raises(play.PlayError) as failed:
+        c.details("com.fsck.k9")
+    assert not isinstance(failed.value, play.PlayAuthError)
+    http.on("POST", play.AUTH_URL, 200, TOKEN_OK).on("GET", fdfe("details"), 200, read("details_free_single.bin"))
+    assert c.details("com.fsck.k9").package == "com.fsck.k9"
 
 
 @pytest.mark.parametrize("status,body", [

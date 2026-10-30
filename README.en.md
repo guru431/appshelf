@@ -283,6 +283,9 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   certificate does not become current: the card shows "signature changed" and "Accept the new signature" — such a
   version will not install over the installed one, the app would have to be removed with its data. If the app came
   from Google Play with another signature, remove it first.
+  The shelf compares the SHA-256 of the certificate from v3, then v2, then v1; it does not cryptographically
+  verify the APK signature. A matching fingerprint alone does not prove authenticity: a copied certificate
+  has the same fingerprint. The Android installer performs the final check; use APKs from a trusted source.
 - **Versions** — as with IPAs: current, previous, pinned; "⋯" — check for update, pin, change source, upload a new
   version as a file, remove from the shelf. Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
@@ -329,8 +332,9 @@ through a Google account connected to Play on the accounts page; there is no sha
   proxy in the account's country.
 - **Proxies** — for the account's country: `APPSHELF_PROXIES` in `appshelf.env` (space-separated `name=url`,
   `http://host:port` or `socks5h://[user:password@]host:port`), chosen by the owner when connecting. A proxy is used
-  only for Google Play requests; if it is down, the card shows an error — there is no direct fallback. From a Russian
-  address Play shows prices in rubles and does not deliver paid apps.
+  only for Google Play requests; if it is down, the card shows an error — there is no direct fallback. In the live
+  check from a Russian address, Play showed ruble prices and refused an unpurchased paid app; delivery of a
+  previously purchased app has not been checked yet.
 - **Expired.** A changed Google password or revoked access means "подключение Google Play истекло": a banner in the
   Android section and on the accounts page, the account's jobs wait, its apps are skipped at night; mail goes only
   about the owner's Google accounts, one per episode. "Подключить заново" takes a new `oauth_token`.
@@ -339,7 +343,7 @@ through a Google account connected to Play on the accounts page; there is no sha
 
 ### AppGallery, F-Droid, APKPure
 
-Added "By link" with the app's page (search is RuStore only); "⋯ → Change source" switches a card to any of them by
+Added through the combined search or "By link" with the app's page; "⋯ → Change source" switches a card to any of them by
 its package. The signature of every downloaded version is compared with RuStore.
 
 - **AppGallery** — Huawei's client API without sign-in (`client.updateCheck` by package name: version, file size and

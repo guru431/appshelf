@@ -482,6 +482,65 @@ def test_remove_google_refused_while_downloading(ctx, cfg, conn, clock, monkeypa
     assert people.get_google(conn, gid) is not None and android_db.get_shelf(conn, shelf.id) == shelf
 
 
+@pytest.mark.parametrize("operation", ["account", "user"])
+def test_remove_apple_person_waits_for_android_download(ctx, cfg, conn, clock, monkeypatch, operation):
+    petr = member(conn, clock)
+    shelf = android_shelf_of(cfg, conn, clock, petr.user_id)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    remove = lambda: jobs.remove_account(cfg, conn, petr) if operation == "account" else \
+        jobs.remove_user(cfg, conn, petr.user_id)
+    with ipatool.hold(cfg.download_lock):
+        with pytest.raises(jobs.AccountBusy):
+            remove()
+    jid = android_db.enqueue(conn, shelf.id, "check", clock.iso(), package="ru.x")
+    android_db.take_job(conn)
+    with pytest.raises(jobs.AccountBusy):
+        remove()
+    assert people.get_account(conn, petr.id) is not None and android_db.get_shelf(conn, shelf.id) == shelf
+    android_db.finish_job(conn, jid, "done", clock.iso())
+    remove()
+    assert people.get_user(conn, petr.user_id) is None and not (cfg.archive / shelf.shelf).exists()
+
+
+def test_remove_google_marks_surviving_play_cards(ctx, cfg, conn, clock):
+    uid, (gid,) = google_only(conn, clock, "sub-1")
+    shelf = android_db.ensure_public_shelf(conn, clock.iso())
+    android_db.put_app(conn, shelf.id, "ru.x", "x", "play", "ru.x", clock.iso(), google_account_id=gid)
+    android_db.put_app(conn, shelf.id, "ru.ready", "Ready", "play", "ru.ready", clock.iso(), google_account_id=gid)
+    android_db.add_version(conn, cfg.archive / shelf.shelf, shelf.id, "ru.ready", android_db.NewApk(
+        "1", 1, 23, 33, "", "a" * 64, "play", 1, "b" * 64, "ru.ready-1"), clock.iso())
+    android_db.set_status(conn, shelf.id, "ru.ready", "ok", jobs.android_fetch.SIGNER_DIFFERS)
+    jobs.remove_google(cfg, conn, gid)
+    card = android_db.get_app(conn, shelf.id, "ru.x")
+    assert card["status"] == "error" and card["last_error"] == "Google-аккаунт удалён — смените источник"
+    ready = android_db.get_app(conn, shelf.id, "ru.ready")
+    assert ready["status"] == "ok" and ready["last_error"] == \
+        jobs.android_fetch.SIGNER_DIFFERS + "\nGoogle-аккаунт удалён — смените источник"
+
+
+@pytest.mark.parametrize("operation", ["google", "user"])
+def test_remove_google_waits_for_public_download_without_personal_shelf(ctx, cfg, conn, clock, monkeypatch, operation):
+    uid, (gid,) = google_only(conn, clock, "sub-1")
+    people.set_play(conn, gid, "ok", clock.iso())
+    shelf = android_db.ensure_public_shelf(conn, clock.iso())
+    android_db.put_app(conn, shelf.id, "ru.x", "x", "play", "ru.x", clock.iso(), google_account_id=gid)
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    remove = lambda: jobs.remove_google(cfg, conn, gid) if operation == "google" else jobs.remove_user(cfg, conn, uid)
+    with ipatool.hold(cfg.download_lock):
+        with pytest.raises(jobs.AccountBusy):
+            remove()
+    jid = android_db.enqueue(conn, shelf.id, "add", clock.iso(), package="ru.x",
+                             payload={"source": "play", "ref": "ru.x", "account": gid})
+    assert android_db.take_job(conn)["id"] == jid
+    with pytest.raises(jobs.AccountBusy):
+        remove()
+    assert people.get_google(conn, gid) is not None
+    android_db.finish_job(conn, jid, "done", clock.iso())
+    remove()
+    assert people.get_google(conn, gid) is None
+    assert "Google-аккаунт удалён" in android_db.get_app(conn, shelf.id, "ru.x")["last_error"]
+
+
 def test_remove_user_without_apple_ids(ctx, cfg, conn, clock):
     uid, _ = google_only(conn, clock, "sub-1", "sub-2")
     shelf = android_shelf_of(cfg, conn, clock, uid)

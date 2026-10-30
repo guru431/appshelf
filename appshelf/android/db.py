@@ -148,9 +148,13 @@ def set_paid(c, shelf_id: int, package: str, paid: bool) -> None:
     c.execute("UPDATE android_apps SET paid=? WHERE shelf_id=? AND package=?", (int(paid), shelf_id, package))
 
 
-def set_status(c, shelf_id: int, package: str, status: str, error: str = "") -> None:
+def set_status(c, shelf_id: int, package: str, status: str, error: str | None = None) -> None:
+    if error is None and status in ("queued", "downloading"):
+        # Метка подписи относится к текущему APK: ожидание задания её не отменяет.
+        c.execute("UPDATE android_apps SET status=? WHERE shelf_id=? AND package=?", (status, shelf_id, package))
+        return
     c.execute("UPDATE android_apps SET status=?, last_error=? WHERE shelf_id=? AND package=?",
-              (status, error[:500], shelf_id, package))
+              (status, (error or "")[:500], shelf_id, package))
 
 
 def set_checked(c, shelf_id: int, package: str, now: str, result: str, etag: str | None = None) -> None:

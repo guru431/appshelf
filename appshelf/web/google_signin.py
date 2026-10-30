@@ -11,7 +11,7 @@ import sys
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-from .. import google, notify, people, store, webauth
+from .. import google, jobs, notify, people, store, webauth
 from .common import INVITE_COOKIE, WHO_COOKIE, WebCtx, back, safe_next
 from .signin import INVITE_GONE, JOINED_SUBJECT, label, login_page, signed_in
 
@@ -56,7 +56,8 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
         g = people.google_by_sub(c, cl.sub)
         if g is not None and people.get_user(c, g.user_id) is None:
             # участника удалил код этапа 2 после отката (его строки google_accounts он не знает) — аккаунт новый
-            c.execute("DELETE FROM google_accounts WHERE id=?", (g.id,))
+            # Каталоги и полку убирает remove_user перед транзакцией; новый остаток
+            # не удаляем одной строкой: регистрация откажет, следующий вход повторит уборку.
             g = None
         if g is not None:
             people.mark_google_login(c, g.id, cl.email, cl.name, now)
@@ -98,6 +99,15 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
             return refuse(NO_ANSWER, 502)
         now = w.now()
         with w.conn() as c:
+            orphan = people.google_by_sub(c, cl.sub)
+            if orphan is not None and people.get_user(c, orphan.user_id) is None:
+                adder = any(u.id == flow.add_uid for u, _ in w.signed(c, request))
+                invite = people.active_invite(c, request.cookies.get(INVITE_COOKIE, ""))
+                if adder or invite is not None:
+                    try:
+                        jobs.remove_user(cfg, c, orphan.user_id)
+                    except (jobs.ArchiveUnavailable, jobs.AccountBusy):
+                        return refuse("Прежняя полка занята или архив недоступен — повторите вход позже", 503)
             try:
                 with store.tx(c):
                     uid, how = decide(c, request, flow, cl, now)

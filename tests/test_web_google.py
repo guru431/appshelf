@@ -19,7 +19,7 @@ class FakeHttp:
     def __init__(self):
         self.token, self.fail, self.calls = "", None, []
 
-    def form(self, url, data, *, headers=None):
+    def form(self, url, data, *, headers=None, follow=True):
         self.calls.append((url, data))
         if self.fail is not None:
             raise self.fail
@@ -118,15 +118,24 @@ def test_invite_creates_member_and_mails_owner(gw, conn, cfg, clock):
 
 def test_orphan_google_row_treated_as_new(gw, conn, cfg, clock):
     # откат на этап 2 удалил участника вместе с последним Apple ID, а его строку google_accounts оставил
-    people.create_google(conn, 99, "g-1", "maria@gmail.example", "", clock.iso())
+    from appshelf.android import db, play
+    gid = people.create_google(conn, 99, "g-1", "maria@gmail.example", "", clock.iso())
+    token_dir = play.token_dir(cfg, gid)
+    token_dir.mkdir(parents=True)
+    (token_dir / "aas").write_text("aas_et/old")
+    shelf = db.ensure_shelf(conn, 99, clock.iso())
+    root = cfg.archive / shelf.shelf
+    root.mkdir()
     r = google_login(gw)
     assert r.status_code == 403 and "нужна ссылка-приглашение" in r.text and people.google_by_sub(conn, "g-1")
+    assert token_dir.exists() and root.exists()
     invite(gw, conn, clock)
     r = google_login(gw)
     assert r.status_code == 303
     g = people.google_by_sub(conn, "g-1")
     assert g.user_id != 99 and people.get_user(conn, g.user_id).name == "Мария"
     assert signed_uids(gw.client, cfg, conn, clock) == [g.user_id]
+    assert not token_dir.exists() and not root.exists() and db.get_shelf(conn, shelf.id) is None
 
 
 def test_add_google_from_panel_creates_separate_person(gw, conn, cfg, clock):

@@ -66,7 +66,8 @@ def test_hundred_wrong_from_many_close_for_all(conn):
     assert pin.closed_until(conn, at(86400)) == ""
 
 
-def test_reopen_and_set_pin_open_immediately(conn):
+def test_reopen_and_set_pin_open_immediately(conn, monkeypatch):
+    monkeypatch.setattr(pin, "ALL_LIMIT", 10)  # предел 100 отдельно проверен выше; здесь — повторное открытие
     pin.set_pin(conn, PIN, T0)
     close_for_all(conn)
     store.set_state(conn, pin.MAIL_KEY, T0)                                  # письмо об эпизоде ушло

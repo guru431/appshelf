@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import ipa, notify, people, removed, store
-from .android import db as android_db, fetch as android_fetch
+from .android import db as android_db, fetch as android_fetch, play, sources as android_sources
 from .config import GB, Config
 from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, try_lock
 
@@ -275,6 +275,10 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
     _archive(cfg)
     locks = [cfg.locks_dir / f"{a.id}.lock" for a in accts]
     with ExitStack() as held:
+        try:
+            held.enter_context(hold(cfg.download_lock, REMOVE_LOCK_WAIT))
+        except IpatoolError as e:
+            raise AccountBusy("Android-полка") from e
         for a, lock in zip(accts, locks):
             try:
                 held.enter_context(hold(lock, REMOVE_LOCK_WAIT))
@@ -286,19 +290,31 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
                 raise AccountBusy(busy.email)
             check()
             fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
+            uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
+            removing = {a.id for a in fresh}
+            for uid in uids:
+                last = user_id is not None or not people.google_of(c, uid) and not any(
+                    a.id not in removing for a in people.accounts_of(c, uid))
+                shelf = android_db.shelf_for_user(c, uid)
+                if last and shelf is not None and _android_running(c, shelf.id):
+                    raise AccountBusy("Android-полка")
             for a in fresh:
                 store.delete_shelf(c, a.id)
                 c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
             gids = []
             if user_id is not None:
                 gids = [g.id for g in people.google_of(c, user_id)]
+                if any(_google_running(c, gid) for gid in gids):
+                    raise AccountBusy("Google Play")
                 c.execute("DELETE FROM google_accounts WHERE user_id=?", (user_id,))
-            uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
+            for gid in gids:
+                _google_apps_gone(c, gid)
             gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
         for shelf in gone:
             _drop_android_dirs(cfg, shelf)
         for gid in gids:
             store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
+            play.forget(gid)
         for a in fresh:
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога
@@ -350,20 +366,24 @@ def remove_user(cfg: Config, c, uid: int) -> None:
 def remove_google(cfg: Config, c, gid: int) -> bool:
     """Google-аккаунт; был последним аккаунтом участника — уходят и участник, и его Android-полка (True). Полка
     уходит — под замком скачивания, как rotate_shelf: store_apk не пишет в удаляемый каталог; не дождались или у
-    полки идёт задание — AccountBusy, архив недоступен — ArchiveUnavailable, и не удалено ничего. Уже удалён — False."""
+    полки либо аккаунта (включая публичную полку) идёт задание — AccountBusy. Архив недоступен при удалении личной
+    полки — ArchiveUnavailable, и не удалено ничего. Уже удалён — False."""
     g = people.get_google(c, gid)
     if g is None:
         return False
     with ExitStack() as held:
         if android_db.shelf_for_user(c, g.user_id) is not None:
             _archive(cfg)
-            try:
-                held.enter_context(hold(cfg.download_lock, REMOVE_LOCK_WAIT))
-            except IpatoolError as e:  # не дождались замка скачивания
-                raise AccountBusy(g.email) from e
+        try:
+            held.enter_context(hold(cfg.download_lock, REMOVE_LOCK_WAIT))
+        except IpatoolError as e:  # аккаунтом могут качать на публичную полку без личной
+            raise AccountBusy(g.email) from e
         with store.tx(c):
             if people.get_google(c, gid) is None:
                 return False
+            if _google_running(c, gid):
+                raise AccountBusy(g.email)
+            _google_apps_gone(c, gid)
             c.execute("DELETE FROM google_accounts WHERE id=?", (gid,))
             last = not people.has_apple(c, g.user_id) and not people.google_of(c, g.user_id)
             shelf = android_db.shelf_for_user(c, g.user_id)
@@ -373,7 +393,23 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
         if gone is not None:
             _drop_android_dirs(cfg, gone)
         store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
+        play.forget(gid)
     return last
+
+
+def _google_running(c, gid: int) -> bool:
+    """Включая задание публичной полки, уже взятое обработчиком и ещё ждущее замка скачивания."""
+    return c.execute(f"SELECT 1 FROM android_jobs j WHERE j.status='running' AND {android_db.JOB_ACCOUNT}=? LIMIT 1",
+                     (gid,)).fetchone() is not None
+
+
+def _google_apps_gone(c, gid: int) -> None:
+    """Существующие APK остаются доступны, но источник удалённого аккаунта больше не проверяется."""
+    for app in c.execute("SELECT * FROM android_apps WHERE source='play' AND google_account_id=?", (gid,)).fetchall():
+        current = android_db.has_current(c, app["shelf_id"], app["package"])
+        note = android_fetch._notice(app["last_error"]) if current else ""
+        android_db.set_status(c, app["shelf_id"], app["package"], "ok" if current else "error",
+                              (note + "\n" if note else "") + android_sources.ACCOUNT_GONE)
 
 
 def link_users(cfg: Config, c, keep_uid: int, gone_uid: int) -> None:

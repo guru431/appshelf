@@ -92,7 +92,8 @@ def exchange(http, client_id: str, client_secret: str, redirect_uri: str, code: 
     GoogleError с кодом ошибки Google, без кода, токенов и секрета."""
     try:
         r = http.form(TOKEN_URL, {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
-                                  "client_id": client_id, "client_secret": client_secret, "code_verifier": verifier})
+                                  "client_id": client_id, "client_secret": client_secret, "code_verifier": verifier},
+                        follow=False)
     except FetchError as e:
         raise GoogleError(f"token endpoint: {e}") from None
     if not isinstance(r, dict):

@@ -125,10 +125,12 @@ def result_for(result: str, email: str) -> str:
     """Итог для полки одного Apple ID: его часть «<email>: …» без адреса — адреса других Apple ID участникам не
     показываем. Итог без адресов (пропущена целиком, прогон до перехода на несколько Apple ID) — как есть."""
     prefix = f"{email}: "
-    for part in result.split(SEP):
+    apple_parts = [part for part in result.split(SEP) if not part.startswith("Android: ")]
+    for part in apple_parts:
         if part.startswith(prefix):
             return part[len(prefix):]
-    return result if "@" not in result else NOT_IN_RUN
+    apple = SEP.join(apple_parts)
+    return apple if "@" not in apple else NOT_IN_RUN
 
 
 def _finish(env: Env, c, result: str) -> str:

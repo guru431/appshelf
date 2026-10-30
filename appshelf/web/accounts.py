@@ -16,7 +16,7 @@ from .common import ACCT_COOKIE, WHO_COOKIE, WebCtx, back, relogin_query
 from .signin import login_page, submit
 
 ARCHIVE_DOWN = "Архив недоступен — удалить сейчас нельзя"
-ACCOUNT_BUSY = "Идёт скачивание или проверка этого Apple ID — удалить можно, когда закончится"
+ACCOUNT_BUSY = "Идёт скачивание или проверка Apple ID либо Android-полки — удалить можно, когда закончится"
 LAST_OWNER_ID = "Последний Apple ID владельца удалить нельзя"
 ANDROID_BUSY = "Идёт скачивание на Android-полку — попробуйте через минуту"
 BOTH_APPLE = "У обоих есть Apple ID — их не связать"
@@ -39,9 +39,11 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     def confirm(request: Request, a, error: str = "", status_code: int = 200, refused: bool = False):
         with w.conn() as c:
             size = store.shelf_size(c, a.id)
+            last = len(people.accounts_of(c, a.user_id)) == 1 and not people.google_of(c, a.user_id)
+        tail = " Это последний аккаунт участника: участник и его Android-полка тоже удалятся." if last else ""
         return w.page(request, "confirm.html", "apple", status_code,
                       question=f"Удалить полку {a.email} ({size / GB:.1f} ГБ)? Приложения, история и вход этого "
-                               "Apple ID на сервере удалятся.",
+                               f"Apple ID на сервере удалятся.{tail}",
                       action=f"/apple/{a.id}/delete", button="Удалить", cancel="/apple", error=error, refused=refused)
 
     def signed_here(request: Request, uid: int):
@@ -132,9 +134,13 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             last = not people.has_apple(c, g.user_id) and len(people.google_of(c, g.user_id)) == 1
             shelf = android_db.shelf_for_user(c, g.user_id)
             apps = len(android_db.list_apps(c, shelf.id)) if shelf is not None else 0
+            used = c.execute("SELECT COUNT(*) FROM android_apps WHERE source='play' AND google_account_id=?",
+                             (g.id,)).fetchone()[0]
         person = signed_here(request, g.user_id)
         tail = (f" Это последний аккаунт участника «{person.name}»: участник и его Android-полка (приложений: "
                 f"{apps}) удалятся." if last else "")
+        if used:
+            tail += f" Приложений из Google Play этим аккаунтом: {used}; для их обновлений понадобится другой источник."
         return w.page(request, "confirm.html", "apple", status_code,
                       question=f"Удалить Google-аккаунт {g.email}? Входить им в панель станет нельзя.{tail}",
                       action=f"/google/{g.id}/delete", button="Удалить", cancel="/apple", error=error)
@@ -201,6 +207,15 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                 people.set_proxy(c, g.id, proxy)
                 people.set_play(c, g.id, "ok", w.now(), country)
         return back("/apple")
+
+    @app.get("/google/{gid}/play/disconnect", response_class=HTMLResponse)
+    def play_disconnect_form(request: Request, gid: int):
+        g = own_google(request, gid)
+        if g is None:
+            return PlainTextResponse("not found", status_code=404)
+        return w.page(request, "confirm.html", "apple", question=f"Отключить Google Play {g.email}? Ключ доступа "
+                      "удалится. Скачивание и проверка обновлений из Play остановятся до повторного подключения.",
+                      action=f"/google/{g.id}/play/disconnect", button="Отключить Google Play", cancel="/apple")
 
     @app.post("/google/{gid}/play/disconnect", response_class=HTMLResponse)
     def play_disconnect(request: Request, gid: int):

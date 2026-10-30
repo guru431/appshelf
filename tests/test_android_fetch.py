@@ -375,6 +375,32 @@ def test_garbage_upload_is_job_error_without_card(ctx, cfg, conn, clock):
     assert db.list_apps(conn, shelf.id) == [] and not up.exists()
 
 
+def test_removed_before_download_is_cancelled_without_fetch(ctx, cfg, conn, clock, tmp_path):
+    shelf = shelf_of(conn, clock)
+    db.put_app(conn, shelf.id, PKG, PKG, "rustore", PKG, clock.iso())
+    job_id = db.enqueue(conn, shelf.id, "add", clock.iso(), package=PKG,
+                        payload={"source": "rustore", "ref": PKG})
+    job = db.take_job(conn)
+    db.remove_app(conn, fetch.shelf_root(cfg, shelf), shelf.id, PKG)
+    fetch.run_job(ctx.env, conn, job)
+    result = conn.execute("SELECT status FROM android_jobs WHERE id=?", (job_id,)).fetchone()
+    assert result[0] == "cancelled" and ctx.sources.calls == []
+
+
+def test_signer_notice_survives_failure_and_successful_check(ctx, conn, clock, tmp_path):
+    ctx.sources.signatures[PKG] = cert_sha(b"CERT-B")
+    shelf, _ = add_from(ctx, conn, clock, "fdroid", make_apk(tmp_path / "a.apk"))
+    ctx.sources.fail[PKG] = net.FetchError("источник недоступен")
+    run(ctx, conn, shelf, "check", clock, package=PKG)
+    error = db.get_app(conn, shelf.id, PKG)["last_error"]
+    assert fetch.SIGNER_DIFFERS in error and "источник недоступен" in error
+    del ctx.sources.fail[PKG]
+    ctx.sources._latest[PKG] = Latest(1, "", False)
+    db.set_status(conn, shelf.id, PKG, "queued")
+    run(ctx, conn, shelf, "check", clock, package=PKG)
+    assert db.get_app(conn, shelf.id, PKG)["last_error"] == fetch.SIGNER_DIFFERS
+
+
 def test_removed_while_downloading_is_cancelled(ctx, cfg, conn, clock, tmp_path):
     shelf = shelf_of(conn, clock)
 

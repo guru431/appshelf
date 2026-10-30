@@ -166,7 +166,9 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
     совпасть, нет пакета в RuStore — нужна галочка ack (у приложения на полке подпись уже задана) и метка «не
     сверена»; AppGallery и F-Droid — другая подпись не отказ, а метка."""
     with jobs.hold(env.cfg.download_lock):
-        shelf = db.get_shelf(c, shelf.id) or shelf  # токен каталога мог смениться (rotate_shelf), пока ждали замок
+        shelf = db.get_shelf(c, shelf.id)  # токен каталога мог смениться (rotate_shelf), пока ждали замок
+        if shelf is None or expected_package and db.get_app(c, shelf.id, expected_package) is None:
+            raise store.AppGone(expected_package or ref)
         _space(env, c)
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
@@ -212,14 +214,19 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             shutil.rmtree(work, ignore_errors=True)
 
 
-def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False) -> str:
+def _notice(error: str) -> str:
+    return "\n".join(line for line in error.splitlines() if line in NOTICES)
+
+
+def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, retry_split: bool = False) -> str:
     """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
     AppGallery, APKPure: versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка
     (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
     versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
     (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
     остаётся. force (первая проверка после «Сменить источник») — скачивать, даже если новее нет, и набор файлов —
-    отказ: новый источник проверяется своим файлом."""
+    отказ: новый источник проверяется своим файлом. retry_split — ручная проверка: повторить доставку ранее
+    отклонённой версии, потому что Play мог начать отдавать её одним APK."""
     pkg = app["package"]
     account = _account(c, app["source"], app["google_account_id"])
     latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
@@ -230,9 +237,8 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False) -> 
     if not force and known is not None and (latest.version_code is not None and latest.version_code <= known
                                             or latest.version_code is None and not latest.changed):
         result = "same"
-        if app["last_error"] in NOTICES:  # не скачивали — сверку с RuStore не повторяли
-            note = app["last_error"]
-    elif not force and known is not None and split_mark and app["source_etag"] == split_mark:
+        note = _notice(app["last_error"])  # не скачивали — сверку с RuStore не повторяли
+    elif not force and not retry_split and known is not None and split_mark and app["source_etag"] == split_mark:
         result, note = "same", SPLIT_UPDATE
     else:
         try:
@@ -284,10 +290,12 @@ def check_all(env, c, work: Path) -> str:
 def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
     """Ошибка — у карточки. Есть текущая версия — приложение остаётся «ok» со строкой ошибки и итогом проверки error:
     ставить можно, повторит ночь или «Проверить обновление»."""
-    if db.get_app(c, shelf_id, package) is None:
+    app = db.get_app(c, shelf_id, package)
+    if app is None:
         return
     if db.has_current(c, shelf_id, package):
-        db.set_status(c, shelf_id, package, "ok", describe(e))
+        note = _notice(app["last_error"])
+        db.set_status(c, shelf_id, package, "ok", (note + "\n" if note else "") + describe(e))
         db.set_checked(c, shelf_id, package, now, "error")
     else:
         db.set_status(c, shelf_id, package, "error", describe(e))
@@ -329,7 +337,7 @@ def run_job(env, c, job) -> None:
                 raise store.AppGone(package)
             previous = payload.get("previous")  # «Сменить источник»: прежние (source, ref, etag) — откатить при отказе
             try:
-                check_app(env, c, shelf, app, work, force=bool(previous))
+                check_app(env, c, shelf, app, work, force=bool(previous), retry_split=True)
             except (apk.ApkError, net.FetchError, SourceError) as e:
                 if not previous:
                     raise
@@ -345,6 +353,13 @@ def run_job(env, c, job) -> None:
             db.set_status(c, shelf.id, package, "queued")
         if gid is not None:
             play_expired(env, c, gid)
+    except SplitOnly as e:
+        payload["split_only"], payload["alternatives"] = True, list(e.alternatives)
+        c.execute("UPDATE android_jobs SET payload=? WHERE id=?",
+                  (json.dumps(payload, ensure_ascii=False), job["id"]))
+        db.finish_job(c, job["id"], "error", env.now(), describe(e))
+        if package:
+            app_failed(c, shelf.id, package, e, env.now())
     except Exception as e:  # ошибка задания — текст у карточки и у задания
         if isinstance(e, jobs.LowSpace):
             jobs.low_space(env, c, e)

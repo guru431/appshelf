@@ -91,7 +91,8 @@ def _job_view(j) -> dict:
     p = json.loads(j["payload"] or "{}")
     title = p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or "Свой файл"
     return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title,
-            "query": p.get("ref", "") if j["kind"] == "add" else ""}
+            "query": p.get("ref", "") if j["kind"] == "add" else "",
+            "split_only": p.get("split_only", False), "alternatives": p.get("alternatives", [])}
 
 
 def _fresh(apps, now: str) -> set[str]:
@@ -247,13 +248,17 @@ def _register_scope(app, w, scope: Scope):
             apps = db.list_apps(c, shelf.id) if shelf is not None else []
             cards = {a.package for a in apps}
             # задания без карточки: ссылка и свой файл, пока пакет не известен, и их ошибки — до «Скрыть»
-            pending = [_job_view(j) for j in db.open_jobs(c, shelf.id) if j["package"] not in cards] if shelf else []
+            pending = [_job_view(j) for j in db.open_jobs(c, shelf.id)
+                       if j["package"] not in cards or json.loads(j["payload"] or "{}").get("split_only")] if shelf else []
             busy = shelf is not None and db.has_active(c, shelf.id)
             nightly = (store.get_state(c, "nightly_last"), nightly_part(store.get_state(c, "nightly_result")))
             if scope.public and edit:  # блок «Гостевой доступ» — владельцу
                 guest = {"url": f"{cfg.public_base}/p", "closed": pin.closed_until(c, w.now()),
                          "set_at": store.get_state(c, pin.SET_AT_KEY) if pin.is_set(c) else ""}
-            expired = [g.email for g in google_accounts(c, request) if g.play == "expired"] if edit else []
+            used = {r[0] for r in c.execute("SELECT google_account_id FROM android_apps WHERE shelf_id=? "
+                                           "AND source='play'", (shelf.id,))} if shelf else set()
+            expired = [g.email for g in google_accounts(c, request)
+                       if g.play == "expired" and (not scope.public or g.id in used)] if edit else []
         banners = [error] if error else []
         banners += [f"Подключение Google Play {email} истекло — подключите заново на странице «Аккаунты»"
                     for email in expired]
@@ -584,6 +589,29 @@ def _register_scope(app, w, scope: Scope):
             shelf = shelf_of(c, request)
             if shelf is not None:
                 db.dismiss_job(c, shelf.id, job_id)
+        return back(p)
+
+    @app.post(p + "/jobs/{job_id}/alternative", dependencies=deps)
+    def alternative(request: Request, job_id: int, source: str = Form("")):
+        """После набора файлов — повторное добавление того же пакета из выбранного доступного источника."""
+        with w.conn() as c, store.tx(c):
+            shelf = shelf_of(c, request)
+            job = c.execute("SELECT * FROM android_jobs WHERE id=? AND shelf_id=? AND kind='add' AND status='error'",
+                            (job_id, shelf.id)).fetchone() if shelf else None
+            payload = json.loads(job["payload"] or "{}") if job else {}
+            package = payload.get("ref", "")
+            allowed = {a["source"] for a in payload.get("alternatives", [])}
+            if not payload.get("split_only") or source not in allowed or source not in ("rustore", "appgallery", "fdroid") \
+                    or not apk.PACKAGE_RE.fullmatch(package):
+                return not_found()
+            if db.has_current(c, shelf.id, package) or db.active_for(c, shelf.id, package):
+                return back(p)
+            db.put_app(c, shelf.id, package, payload.get("name") or package, source, package, w.now())
+            db.set_source(c, shelf.id, package, source, package)
+            db.set_status(c, shelf.id, package, "queued", "")
+            db.enqueue(c, shelf.id, "add", w.now(), package=package,
+                       payload={"source": source, "ref": package, "name": payload.get("name", "")})
+            db.dismiss_job(c, shelf.id, job_id)
         return back(p)
 
     return catalog_page

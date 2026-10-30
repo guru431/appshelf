@@ -30,9 +30,9 @@ include = ["appshelf*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# -n auto: набор упёрся в бюджет 60 с (половина — setup create_app); --dist loadfile — модуль целиком на одном
-# процессе, фикстуры модуля не строятся заново на каждом
-addopts = "-n auto --dist loadfile -m 'not integration and not manual'"
+# Четыре процесса укладываются в 60 с без конкуренции десятков работников за диск;
+# --dist loadfile оставляет весь модуль на одном процессе.
+addopts = "-n 4 --dist loadfile -m 'not integration and not manual'"
 # pytest-timeout: зависший тест падает за 30 с со стеком, а не держит прогон
 timeout = 30
 markers = [

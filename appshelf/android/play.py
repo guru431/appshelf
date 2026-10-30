@@ -201,7 +201,7 @@ def _base_params(dev: dict, email: str) -> dict:
 def _auth(http, params: dict, gsf: str) -> tuple[int, dict[str, str]]:
     """POST /auth: ответ — строки «ключ=значение»."""
     status, _, body = http.request("POST", AUTH_URL, headers=_auth_headers(gsf),
-                                   body=urllib.parse.urlencode(params).encode())
+                                   body=urllib.parse.urlencode(params).encode(), follow=False)
     reply = {}
     for line in body.decode("utf-8", "replace").splitlines():
         k, sep, v = line.partition("=")
@@ -218,7 +218,8 @@ def _checkin(http, now: float) -> dict:
     req = pb.encode([(2, 0), (4, [(1, build), (2, 0), (8, "mobile-notroaming"), (9, 0)]), (6, "en_US"),
                      (12, "UTC"), (14, 3), (18, _device_config()), (20, 0)])
     status, _, data = http.request("POST", CHECKIN_URL, headers={**_auth_headers(""),
-                                                                 "Content-Type": "application/x-protobuf"}, body=req)
+                                                                 "Content-Type": "application/x-protobuf"}, body=req,
+                                   follow=False)
     if status != 200:
         raise PlayError(f"Google не принял регистрацию устройства ({status})")
     with _parsing():
@@ -228,7 +229,7 @@ def _checkin(http, now: float) -> dict:
 def _upload_config(http, dev: dict) -> str:
     status, _, data = http.request("POST", f"{FDFE}/uploadDeviceConfig",
                                    headers={**_dfe_headers(dev), "Content-Type": "application/x-protobuf"},
-                                   body=pb.encode([(1, _device_config())]))
+                                   body=pb.encode([(1, _device_config())]), follow=False)
     if status != 200:
         raise PlayError(f"Google Play не принял профиль устройства ({status})")
     with _parsing():
@@ -329,11 +330,11 @@ class PlayClient:
                                           "Token": aas, "oauth2_foreground": "1", "token_request_options": "CAA4AVAB",
                                           "check_email": "1", "system_partition": "1", "service": PLAY_SCOPE},
                               dev["gsf"])
-        if status == 403 or reply.get("Error"):
+        if status == 403 and reply.get("Error") == "BadAuthentication":
             forget(self.gid)
             raise PlayAuthError(NOT_CONNECTED)
         token = reply.get("Auth", "")
-        if status != 200 or not token:
+        if status != 200 or reply.get("Error") or not token:
             raise PlayError(f"Google не выдал токен Play ({status})")
         expiry = reply.get("Expiry", "")
         ttl = reply.get("ExpiresInDurationSec", "")
@@ -350,7 +351,7 @@ class PlayClient:
             headers = _dfe_headers(self._device(), self._token(force=attempt > 0))
             if content_type:
                 headers["Content-Type"] = content_type
-            status, _, data = self.http.request(method, url, headers=headers, body=body)
+            status, _, data = self.http.request(method, url, headers=headers, body=body, follow=False)
             if status != 401:
                 break
         else:

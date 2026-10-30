@@ -41,7 +41,7 @@ class FakeHttp:
         if package not in self.rustore:
             raise net.FetchError("backapi.rustore.ru ответил 404")
         return {"code": "OK", "body": {"appId": 5, "packageName": package, "appName": "x", "versionCode": 1,
-                                       "price": self.rustore[package]}}
+                                       "price": self.rustore[package], "signature": "a" * 64}}
 
 
 def connected(conn, clock, uid, sub="g-1"):
@@ -105,6 +105,7 @@ def test_play_split_refused_with_rustore_hint(setup, ctx, conn, clock):
     db.remove_app(conn, fetch.shelf_root(ctx.env.cfg, shelf), shelf.id, PKG)
     job, _ = add(ctx, conn, clock, shelf, g.id)
     assert job["error"] == sources.SPLIT_TEXT + "; есть в RuStore — смените источник"
+    assert json.loads(job["payload"])["alternatives"] == [{"source": "rustore", "signature": "a" * 64}]
     http.rustore[PKG] = 9900                                      # в RuStore платное — подсказки нет
     db.remove_app(conn, fetch.shelf_root(ctx.env.cfg, shelf), shelf.id, PKG)
     assert add(ctx, conn, clock, shelf, g.id)[0]["error"] == sources.SPLIT_TEXT

@@ -28,6 +28,10 @@ ACCOUNT_GONE = "Google-аккаунт удалён — смените источ
 class SplitOnly(SourceError):
     """Google Play отдаёт приложение только набором файлов (splits, OBB): браузер его не поставит."""
 
+    def __init__(self, text: str, alternatives=()):
+        super().__init__(text)
+        self.alternatives = list(alternatives)
+
 
 @dataclass(frozen=True)
 class Latest:
@@ -199,7 +203,7 @@ class Sources:
         self._wait()
         app = apkpure.info(self.http, package)
         if app.kind != "apk":
-            raise SplitOnly(SPLIT_TEXT + self._hint(package))
+            raise self._split(package)
         return app
 
     def rustore_signature(self, package: str) -> str | None:
@@ -218,21 +222,27 @@ class Sources:
     def elsewhere(self, package: str) -> list[str]:
         """Где ещё пакет есть одним бесплатным APK — для подсказки к набору файлов (spec §6.4): RuStore (не платное),
         AppGallery, F-Droid. Сбой источника — «нет»."""
+        return [links.NAMES[a["source"]] for a in self._alternatives(package)]
+
+    def _alternatives(self, package: str) -> list[dict]:
         found = []
-        for name, check in (("RuStore", lambda: rustore.info(self.http, package).price == 0),
-                            ("AppGallery", lambda: bool(appgallery.info(self.http, self.appgallery_host, package))),
-                            ("F-Droid", lambda: bool(fdroid.info(self.http, package)))):
+        for source, check in (("rustore", lambda: rustore.info(self.http, package)),
+                              ("appgallery", lambda: appgallery.info(self.http, self.appgallery_host, package)),
+                              ("fdroid", lambda: fdroid.info(self.http, package))):
             try:
                 self._wait()
-                if check():
-                    found.append(name)
+                app = check()
+                if source != "rustore" or app.price == 0:
+                    found.append({"source": source, "signature": app.signature if source == "rustore" else ""})
             except (FetchError, SourceError):
                 pass
         return found
 
-    def _hint(self, package: str) -> str:
-        found = self.elsewhere(package)
-        return f"; есть в {', '.join(found)} — смените источник" if found else ""
+    def _split(self, package: str) -> SplitOnly:
+        alternatives = self._alternatives(package)
+        names = [links.NAMES[a["source"]] for a in alternatives]
+        hint = f"; есть в {', '.join(names)} — смените источник" if names else ""
+        return SplitOnly(SPLIT_TEXT + hint, alternatives)
 
     def _fdroid_index(self, source: str) -> fdroid_index.Catalog:
         return self.fdroid_archive if source == "fdroid_archive" else self.fdroid_catalog
@@ -303,7 +313,7 @@ class Sources:
         self._wait()
         delivery = client.delivery(app)
         if delivery.splits or delivery.extra_files:
-            raise SplitOnly(SPLIT_TEXT + self._hint(package))
+            raise self._split(package)
         self._wait()
         client.download(delivery, dest)
         return Got(app.name, "", self._icon(app.icon_url, dest), paid=app.paid)

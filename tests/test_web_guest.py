@@ -17,7 +17,7 @@ def fast_hash(monkeypatch):
 
 @pytest.fixture
 def fewer_for_all(monkeypatch):
-    monkeypatch.setattr(pin, "ALL_LIMIT", 10)
+    monkeypatch.setattr(pin, "ALL_LIMIT", 3)
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ def enter(client, value, ip="198.51.100.7"):
 
 
 def close_for_all(client):
-    """Общий предел — в тестах страницы 10 (fewer_for_all): сто запросов через веб дольше секунды, счёт до 100 —
+    """Общий предел — в тестах страницы 3 (fewer_for_all): сто запросов через веб дольше секунды, счёт до 100 —
     в test_android_pin."""
     for i in range(pin.ALL_LIMIT):
         r = enter(client, "000000", ip=f"198.51.100.{i}")

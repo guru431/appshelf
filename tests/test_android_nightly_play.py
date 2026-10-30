@@ -89,6 +89,17 @@ def test_update_became_split_keeps_current(owner_play, ctx, conn, clock, tmp_pat
     assert (current(conn, shelf, "com.a.one"), app["last_error"]) == (3, "")
 
 
+def test_manual_check_retries_same_split_version(owner_play, ctx, conn, clock, tmp_path):
+    g, fake, shelf = owner_play
+    version(fake, tmp_path, "com.a.one", 2, split=True)
+    nightly.run(ctx.env, conn)
+    version(fake, tmp_path, "com.a.one", 2)
+    db.enqueue(conn, shelf.id, "check", clock.iso(), package="com.a.one")
+    fetch.run_job(ctx.env, conn, db.take_job(conn))
+    assert current(conn, shelf, "com.a.one") == 2
+    assert db.get_app(conn, shelf.id, "com.a.one")["last_error"] == ""
+
+
 def test_nightly_expired_play_account_isolated(owner_play, ctx, conn, clock, tmp_path):
     g, fake, shelf = owner_play
     version(fake, tmp_path, "com.a.two", 1)

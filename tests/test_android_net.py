@@ -92,6 +92,32 @@ def test_relative_redirect_followed():
     assert (meta.url, meta.etag, meta.length) == ("https://bank.example/apk/new.apk", '"e1"', 5)
 
 
+@pytest.mark.parametrize("status", [302, 307, 308])
+def test_sensitive_requests_do_not_follow_redirect(status):
+    for form in (False, True):
+        server = Server(Resp(status, {"Location": "https://other.example/collect"}), Resp(200, {}, b"{}"))
+        http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=server)
+        if form:
+            with pytest.raises(net.FetchError, match=str(status)):
+                http.form("https://oauth.example/token", {"client_secret": "secret"}, follow=False)
+        else:
+            reply, _, _ = http.request("POST", "https://play.example/auth", body=b"Token=secret",
+                                        headers={"Authorization": "Bearer secret"}, follow=False)
+            assert reply == status
+        assert len(server.requests) == 1
+
+
+def test_download_redirect_keeps_cookie_only_on_same_origin(tmp_path):
+    server = Server(Resp(302, {"Location": "/next"}),
+                    Resp(307, {"Location": "https://cdn.example/app.apk"}), Resp(200, {}, b"APK"))
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=server)
+    http.download("https://play.example/start", tmp_path / "app.apk",
+                  headers={"Cookie": "download=secret", "authorization": "Bearer secret", "X-App": "1"})
+    first, same, other = [r[5] for r in server.requests]
+    assert first["Cookie"] == same["Cookie"] == "download=secret"
+    assert "Cookie" not in other and "authorization" not in other and other["X-App"] == "1"
+
+
 def test_too_many_redirects():
     server = Server(*[Resp(302, {"Location": f"https://bank.example/{i}"}) for i in range(10)])
     with pytest.raises(net.FetchError, match="переадресац"):

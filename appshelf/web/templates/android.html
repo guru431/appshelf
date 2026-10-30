@@ -24,6 +24,14 @@
   <div class="body"><b>{{ j.title }}</b>
     {% if j.status == 'error' %}<div class="err">не добавлено: {{ j.error }}</div>
     {% if edit and j.query %}<a href="{{ prefix }}/add?q={{ j.query | urlencode }}">Найти в других источниках</a>{% endif %}
+    {% if edit and j.split_only %}
+      {% for a in j.alternatives %}
+      <form method="post" action="{{ prefix }}/jobs/{{ j.id }}/alternative" class="install">
+        <input type="hidden" name="source" value="{{ a.source }}"><button class="sm tint">Взять из {{ sources[a.source] }}</button>
+        <span class="meta">{% if a.signature %}SHA-256 подписи: {{ a.signature }}{% else %}Подпись будет показана после скачивания{% endif %}</span>
+      </form>
+      {% endfor %}
+    {% endif %}
     {% elif j.status == 'running' %}<div class="meta busy">скачивается…</div>
     {% else %}<div class="meta">в очереди</div>{% endif %}</div>
   {% if j.status == 'error' and edit %}<form method="post" action="{{ prefix }}/jobs/{{ j.id }}/dismiss" class="act"><button class="sm secondary">Скрыть</button></form>{% endif %}

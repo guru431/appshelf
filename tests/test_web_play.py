@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 
 from apk_factory import make_apk
 from appshelf import people
-from appshelf.android import db, fetch, play
+from appshelf.android import db, fetch, play, sources
 from helpers import HOST, sign_in
 from test_web_accounts_google import google_only
 
@@ -141,11 +141,57 @@ def test_disconnect_deletes_token_dir(pweb, connects, conn, clock):
     pweb.client.post(f"/google/{pweb.gid}/play", data={"oauth_token": OAUTH})
     d = play.token_dir(pweb.cfg, pweb.gid)
     assert (d / "aas").exists()
+    confirmation = pweb.client.get(f"/google/{pweb.gid}/play/disconnect")
+    assert confirmation.status_code == 200 and "повторного подключения" in confirmation.text
+    assert f'action="/google/{pweb.gid}/play/disconnect"' in confirmation.text
+    assert (d / "aas").exists() and people.get_google(conn, pweb.gid).play == "ok"
     play._TOKENS[pweb.gid] = ("ya29.x", 9e9)
     r = pweb.client.post(f"/google/{pweb.gid}/play/disconnect", follow_redirects=False)
     assert r.status_code == 303 and not d.exists() and pweb.gid not in play._TOKENS
     assert people.get_google(conn, pweb.gid).play == "none"
     assert "Подключить к Google Play" in pweb.client.get("/apple").text
+
+
+def test_public_expired_banner_only_for_accounts_used_on_shelf(pweb, conn, clock):
+    other = people.create_google(conn, 1, "g-unused", "unused@gmail.example", "", clock.iso())
+    people.set_play(conn, pweb.gid, "ok", clock.iso())
+    people.set_play(conn, other, "ok", clock.iso())
+    people.set_play(conn, pweb.gid, "expired", clock.iso())
+    people.set_play(conn, other, "expired", clock.iso())
+    shelf = db.ensure_public_shelf(conn, clock.iso())
+    db.put_app(conn, shelf.id, "com.example.one", "x", "play", "com.example.one", clock.iso(),
+               google_account_id=pweb.gid)
+    page = pweb.client.get("/android/public").text
+    assert "Подключение Google Play owner@gmail.example истекло" in page
+    assert "unused@gmail.example" not in page
+
+
+def test_split_job_alternatives_download_same_package_and_check_access(pweb, conn, cfg, clock, tmp_path):
+    from test_web_android import work
+    package = "ru.example.app"
+    people.set_play(conn, pweb.gid, "ok", clock.iso())
+    pweb.sources.fail[package] = sources.SplitOnly(sources.SPLIT_TEXT, [
+        {"source": "rustore", "signature": "a" * 64}, {"source": "fdroid", "signature": ""}])
+    pweb.client.post("/android/add/play", data={"package": package, "account": pweb.gid})
+    work(pweb, conn)
+    shelf = db.shelf_for_user(conn, 1)
+    jid = db.open_jobs(conn, shelf.id)[0]["id"]
+    page = pweb.client.get("/android").text
+    assert "Взять из RuStore" in page and "a" * 64 in page and "Подпись будет показана после скачивания" in page
+    endpoint = f"/android/jobs/{jid}/alternative"
+    assert pweb.client.post(endpoint, data={"source": "apkpure"}).status_code == 404
+    uid, _ = google_only(conn, clock)
+    foreign = TestClient(pweb.app, base_url=f"https://{HOST}")
+    sign_in(foreign, cfg, conn, clock, uid)
+    assert foreign.post(endpoint, data={"source": "rustore"}).status_code == 404
+    assert foreign.post(f"/android/public/jobs/{jid}/alternative", data={"source": "rustore"}).status_code == 403
+    del pweb.sources.fail[package]
+    pweb.sources.apks[package] = make_apk(tmp_path / "alternative.apk", package=package)
+    response = pweb.client.post(endpoint, data={"source": "rustore"}, follow_redirects=False)
+    assert response.status_code == 303
+    work(pweb, conn)
+    assert db.has_current(conn, shelf.id, package) and db.get_app(conn, shelf.id, package)["source"] == "rustore"
+    assert conn.execute("SELECT status FROM android_jobs WHERE id=?", (jid,)).fetchone()[0] == "dismissed"
 
 
 def test_expired_banner_and_play_card(pweb, conn, clock, tmp_path):

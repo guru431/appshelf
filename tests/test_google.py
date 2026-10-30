@@ -30,7 +30,8 @@ class FakeHttp:
     def __init__(self, answer):
         self.answer, self.calls = answer, []
 
-    def form(self, url, data, *, headers=None):
+    def form(self, url, data, *, headers=None, follow=True):
+        assert not follow, "секрет клиента не должен уходить на адрес редиректа"
         self.calls.append((url, data))
         if isinstance(self.answer, Exception):
             raise self.answer

@@ -50,7 +50,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                               + (f" (им пришли ещё {others}: для новых участников создайте другое)" if others else "")}
         return w.page(request, "confirm.html", "admin", status_code,
                       question=f"Удалить участника «{user.name}» ({emails})? Полки, история, вход этих аккаунтов "
-                               "на сервере и доступ к панели удалятся.",
+                               "на сервере, Android-полка и доступ к панели удалятся.",
                       action=f"/admin/users/{uid}/delete", button="Удалить", cancel="/admin", error=error,
                       refused=refused, option=option)
 

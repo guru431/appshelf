@@ -226,11 +226,11 @@ class Http:
         finally:
             _close(resp, conn)
 
-    def form(self, url: str, data: dict, *, headers: dict | None = None) -> object:
+    def form(self, url: str, data: dict, *, headers: dict | None = None, follow: bool = True) -> object:
         """POST application/x-www-form-urlencoded, ответ — JSON; у статуса 400 тело тоже читается: OAuth кладёт в
         него error (вход через Google)."""
         hdrs = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
-        resp, conn, final = self._request("POST", url, hdrs, urllib.parse.urlencode(data).encode())
+        resp, conn, final = self._request("POST", url, hdrs, urllib.parse.urlencode(data).encode(), follow=follow)
         try:
             if resp.status not in (200, 400):
                 raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
@@ -239,10 +239,10 @@ class Http:
             _close(resp, conn)
 
     def request(self, method: str, url: str, *, headers: dict | None = None, body: bytes | None = None,
-                max_bytes: int = MAX_JSON) -> tuple[int, dict[str, str], bytes]:
+                max_bytes: int = MAX_JSON, follow: bool = True) -> tuple[int, dict[str, str], bytes]:
         """Ответ как есть — статус (любой), заголовки (имена в нижнем регистре), тело не больше max_bytes: для
         протоколов не на JSON (Google Play)."""
-        resp, conn, _ = self._request(method, url, headers or {}, body)
+        resp, conn, _ = self._request(method, url, headers or {}, body, follow=follow)
         try:
             data = _read(resp, max_bytes + 1)
             if len(data) > max_bytes:
@@ -296,7 +296,7 @@ class Http:
             raise BlockedAddress(BLOCKED)
         return addrs[0]
 
-    def _request(self, method: str, url: str, headers: dict, body: bytes | None = None):
+    def _request(self, method: str, url: str, headers: dict, body: bytes | None = None, *, follow: bool = True):
         """(ответ, соединение, адрес после редиректов). Каждый шаг — check_url и проверка адресов."""
         for _ in range(MAX_REDIRECTS + 1):
             u = check_url(url)
@@ -313,10 +313,13 @@ class Http:
                 conn.close()
                 raise FetchError(f"{u.hostname}: {e.__class__.__name__}: {e}") from None
             location = resp.getheader("Location")
-            if resp.status not in REDIRECTS or not location:
+            if not follow or resp.status not in REDIRECTS or not location:
                 return resp, conn, url
             _close(resp, conn)
             url = urllib.parse.urljoin(url, location)
+            redirected = check_url(url)
+            if (u.hostname, u.port or 443) != (redirected.hostname, redirected.port or 443):
+                headers = {k: v for k, v in headers.items() if k.lower() not in ("authorization", "cookie")}
             if resp.status in (301, 302, 303) and method == "POST":
                 method, body = "GET", None
         raise FetchError(f"слишком много переадресаций (больше {MAX_REDIRECTS})")
