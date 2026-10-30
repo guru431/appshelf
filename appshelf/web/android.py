@@ -2,7 +2,7 @@
 (RuStore, Google Play, ссылка, свой файл), действия карточки. Две области с одними обработчиками (Scope): своя полка — активного
 участника раздела (request.state.who, выбор — /who/<id>), публичная — одна на сервер: читают все вошедшие, меняет и задаёт PIN только
 владелец. Пакет ищется только на полке области, чужой — 404. Скачивает обработчик заданий (android.fetch.run_job),
-страница только ставит задания."""
+страница проверяет доступ и состав доставки Google Play перед постановкой задания."""
 from __future__ import annotations
 
 import json
@@ -17,7 +17,7 @@ from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
 from .. import apk, jobs, notify, people, store
-from ..android import db, fdroid_index, fetch, github, links, net, pin
+from ..android import db, fdroid_index, fetch, github, links, net, pin, play
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
@@ -386,17 +386,36 @@ def _register_scope(app, w, scope: Scope):
         return add_page(request, q)
 
     def add_package(request: Request, source: str, package: str, name: str, payload: dict,
-                    account: int | None = None, ref: str | None = None):
+                    account: int | None = None, ref: str | None = None, paid: bool = False):
         """Карточка пакета и задание add (payload — к source и ref); пакет уже на полке — второго не ставим."""
         with w.conn() as c:
             shelf = ensure(c, request)
             with store.tx(c):
                 if db.get_app(c, shelf.id, package) is None:
                     db.put_app(c, shelf.id, package, name or package, source, ref or package, w.now(),
-                               google_account_id=account)
+                               google_account_id=account, paid=paid)
                     db.enqueue(c, shelf.id, "add", w.now(), package=package,
                                payload={"source": source, "ref": ref or package, **payload})
         return back(p)
+
+    def add_checked_play(request: Request, package: str, acct, link_url: str = ""):
+        """Все способы добавления из Play проверяют доступ и состав APK до записи карточки и задания."""
+        with w.conn() as c:
+            _, existing = own(c, request, package)
+        if existing is not None:
+            return back(p)
+        try:
+            checked = w.env.sources.play_app(package, account=acct,
+                                             allow_paid=not scope.public and acct.user_id == request.state.who.id)
+        except play.PlayAuthError as e:
+            with w.conn() as c:
+                people.set_play(c, acct.id, "expired", w.now())
+            return add_page(request, status_code=400, error=str(e), link_url=link_url)
+        except net.SourceError as e:
+            return add_page(request, status_code=400, error=str(e), link_url=link_url)
+        except net.FetchError as e:
+            return add_page(request, status_code=502, error=str(e), link_url=link_url)
+        return add_package(request, "play", package, checked.name, {"account": acct.id}, acct.id, paid=checked.paid)
 
     @app.post(f"{p}/add/source", response_class=HTMLResponse, dependencies=deps)
     def add_source(request: Request, source: str = Form(""), ref: str = Form(""), package: str = Form(""),
@@ -440,7 +459,7 @@ def _register_scope(app, w, scope: Scope):
 
     @app.post(f"{p}/add/play", response_class=HTMLResponse, dependencies=deps)
     def add_play(request: Request, package: str = Form(""), account: int = Form(0)):
-        """Из Google Play подключённым аккаунтом области; купленное и набор файлов отсеет обработчик (sources)."""
+        """Из Google Play подключённым аккаунтом области, после проверки доступности и доставки."""
         package = play_package(package)
         if not package:
             return add_page(request, status_code=400, error=PLAY_PACKAGE)
@@ -448,7 +467,7 @@ def _register_scope(app, w, scope: Scope):
             acct = next((g for g in google_accounts(c, request) if g.id == account and g.play == "ok"), None)
         if acct is None:
             return add_page(request, status_code=400, error=NEED_PLAY)
-        return add_package(request, "play", package, "", {"account": acct.id}, acct.id)
+        return add_checked_play(request, package, acct)
 
     @app.post(f"{p}/add/link", response_class=HTMLResponse, dependencies=deps)
     def add_link(request: Request, url: str = Form(""), name: str = Form(""), ack: str = Form("")):
@@ -467,7 +486,7 @@ def _register_scope(app, w, scope: Scope):
                 acct = next((g for g in google_accounts(c, request) if g.play == "ok"), None)
             if acct is None:
                 return add_page(request, status_code=400, error=NEED_PLAY, link_url=url)
-            return add_package(request, "play", ref, "", {"account": acct.id}, acct.id)
+            return add_checked_play(request, ref, acct, link_url=url)
         if source in ("fdroid", "fdroid_archive") and "@" in ref:
             package, _ = fdroid_index.split_ref(ref)
             return add_package(request, source, package, name, {"name": name}, ref=ref)

@@ -88,9 +88,9 @@
   {% if play_accounts | length > 1 %}<label>Каким аккаунтом<select name="account">
     {%- for g in play_accounts %}<option value="{{ g.id }}">{{ g.email }}</option>{% endfor %}</select></label>
   {%- else %}<input type="hidden" name="account" value="{{ play_accounts[0].id }}">{% endif %}
-  <button>Добавить</button></form>
-<p class="hint">Одним файлом Google Play отдаёт немногие приложения: большинство приходит набором (split APK) — такое из
-  браузера не ставится, и полка подскажет, если пакет есть в RuStore, AppGallery или F-Droid. {% if public %}Купленное на публичную полку не
+  <button>Проверить и добавить</button></form>
+<p class="hint">До добавления проверяются доступность приложения и доставка одним APK. Набор файлов (split APK) или
+  некупленное платное приложение не добавится: причина появится здесь. {% if public %}Купленное на публичную полку не
   добавляется.{% else %}Купленное — только на свою полку; без Play Store на телефоне оно может не пройти проверку
   лицензии.{% endif %}</p>
 {% elif has_google %}

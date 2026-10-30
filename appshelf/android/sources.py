@@ -302,7 +302,11 @@ class Sources:
             raise SourceError("Google Play на этом сервере не настроен")
         return self.play.client(account)
 
-    def _fetch_play(self, package: str, dest: Path, account, allow_paid: bool) -> Got:
+    def play_app(self, package: str, *, account=None, allow_paid: bool = False):
+        """До создания карточки: приложение доступно аккаунту и полке, доставка — одним APK. Файл не скачивается."""
+        return self._play_delivery(package, account, allow_paid)[1]
+
+    def _play_delivery(self, package: str, account, allow_paid: bool):
         client = self._play(account)
         self._wait()
         app = client.details(package)
@@ -313,7 +317,15 @@ class Sources:
         self._wait()
         delivery = client.delivery(app)
         if delivery.splits or delivery.extra_files:
-            raise self._split(package)
+            raise SplitOnly(SPLIT_TEXT)
+        return client, app, delivery
+
+    def _fetch_play(self, package: str, dest: Path, account, allow_paid: bool) -> Got:
+        # Повторная проверка при скачивании: версия и права могли измениться после добавления.
+        try:
+            client, app, delivery = self._play_delivery(package, account, allow_paid)
+        except SplitOnly:
+            raise self._split(package) from None
         self._wait()
         client.download(delivery, dest)
         return Got(app.name, "", self._icon(app.icon_url, dest), paid=app.paid)

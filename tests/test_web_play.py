@@ -9,6 +9,8 @@ from apk_factory import make_apk
 from appshelf import people
 from appshelf.android import db, fetch, play, sources
 from helpers import HOST, sign_in
+from play_fakes import FakePlay, FakePool
+from test_android_sources_play import FakeHttp
 from test_web_accounts_google import google_only
 
 OAUTH = "oauth2_4/0AVGzR1-very-secret-token"
@@ -98,6 +100,95 @@ def jobs_of(conn, shelf) -> list[dict]:
                                                            (shelf.id,))]
 
 
+@pytest.fixture
+def play_add(pweb, conn, clock):
+    """Настоящий Sources с подставным Play: проверяется путь от формы до доставки, без сети и скачивания."""
+    people.set_play(conn, pweb.gid, "ok", clock.iso())
+    package = "com.example.checked"
+    fake = FakePlay({package: play.PlayApp(package, "Проверенное", 1, "1.0", False, True, "")})
+    pweb.app.state.w.env.sources = sources.Sources(FakeHttp(), play=FakePool({pweb.gid: fake}),
+                                                  sleep=lambda seconds: None)
+    return package, fake
+
+
+def post_play(wb, package, route="play", prefix="/android"):
+    if route == "link":
+        data = {"url": f"https://play.google.com/store/apps/details?id={package}"}
+    elif route == "source":
+        data = {"source": "play", "ref": package, "package": package, "account": wb.gid}
+    else:
+        data = {"package": package, "account": wb.gid}
+    return wb.client.post(f"{prefix}/add/{route}", data=data, follow_redirects=False)
+
+
+@pytest.mark.parametrize("route", ["play", "source", "link"])
+@pytest.mark.parametrize("problem", ["split", "not_owned"])
+def test_play_rejected_before_card_or_job(pweb, play_add, conn, route, problem):
+    package, fake = play_add
+    if problem == "split":
+        fake.split.add(package)
+        error = sources.SPLIT_TEXT
+    else:
+        fake.apps[package] = replace(fake.apps[package], paid=True, owned=False)
+        error = sources.NOT_OWNED
+    r = post_play(pweb, package, route)
+    assert r.status_code == 400 and error in r.text
+    assert conn.execute("SELECT COUNT(*) FROM android_apps").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+    assert db.shelf_for_user(conn, 1) is None
+    assert fake.calls == [("details", package)] + ([("delivery", package)] if problem == "split" else [])
+
+
+def test_play_extra_files_refused_and_existing_shelf_untouched(pweb, play_add, conn, clock, monkeypatch):
+    package, fake = play_add
+    shelf = db.ensure_shelf(conn, 1, clock.iso())
+    db.put_app(conn, shelf.id, "com.example.kept", "Уже есть", "rustore", "com.example.kept", clock.iso())
+    monkeypatch.setattr(fake, "delivery", lambda app: play.Delivery("https://play.example/app", {}, 0, 1))
+    r = post_play(pweb, package)
+    assert r.status_code == 400 and sources.SPLIT_TEXT in r.text
+    assert [a.package for a in db.list_apps(conn, shelf.id)] == ["com.example.kept"]
+    assert jobs_of(conn, shelf) == []
+
+
+def test_owned_play_app_checked_for_target_shelf_before_enqueue(pweb, play_add, conn):
+    package, fake = play_add
+    fake.apps[package] = replace(fake.apps[package], paid=True)
+    r = post_play(pweb, package, prefix="/android/public")
+    assert r.status_code == 400 and sources.PAID_ELSEWHERE in r.text
+    assert db.public_shelf(conn) is None and fake.calls == [("details", package)]
+    r = post_play(pweb, package)
+    assert r.status_code == 303
+    shelf = db.shelf_for_user(conn, 1)
+    card = db.get_app(conn, shelf.id, package)
+    assert (card["name"], card["paid"], card["status"]) == ("Проверенное", 1, "queued")
+    assert [call[0] for call in fake.calls] == ["details", "details", "delivery"]
+    assert len(jobs_of(conn, shelf)) == 1
+    # Повторное нажатие уже добавленной карточки не обращается к Play и не создаёт второе задание.
+    fake.expired = True
+    assert post_play(pweb, package).status_code == 303
+    assert len(jobs_of(conn, shelf)) == 1 and len(fake.calls) == 3
+
+
+def test_play_precheck_auth_and_network_failure_leave_no_card(pweb, play_add, conn, clock, monkeypatch):
+    from appshelf.android import net
+    package, fake = play_add
+    fake.expired = True
+    r = post_play(pweb, package)
+    assert r.status_code == 400 and "подключ" in r.text
+    assert people.get_google(conn, pweb.gid).play == "expired"
+    people.set_play(conn, pweb.gid, "ok", clock.iso())
+
+    def unavailable(package):
+        raise net.FetchError("Google недоступен")
+
+    monkeypatch.setattr(fake, "details", unavailable)
+    r = post_play(pweb, package)
+    assert r.status_code == 502 and "Google недоступен" in r.text
+    assert people.get_google(conn, pweb.gid).play == "ok"
+    assert conn.execute("SELECT COUNT(*) FROM android_apps").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+
+
 def test_add_from_play_by_url_and_package(pweb, conn, clock):
     people.set_play(conn, pweb.gid, "ok", clock.iso())
     page = pweb.client.get("/android/add").text
@@ -170,9 +261,10 @@ def test_split_job_alternatives_download_same_package_and_check_access(pweb, con
     from test_web_android import work
     package = "ru.example.app"
     people.set_play(conn, pweb.gid, "ok", clock.iso())
+    pweb.client.post("/android/add/play", data={"package": package, "account": pweb.gid})
+    # Доставка стала набором файлов после предварительной проверки: обработчик по-прежнему защищён.
     pweb.sources.fail[package] = sources.SplitOnly(sources.SPLIT_TEXT, [
         {"source": "rustore", "signature": "a" * 64}, {"source": "fdroid", "signature": ""}])
-    pweb.client.post("/android/add/play", data={"package": package, "account": pweb.gid})
     work(pweb, conn)
     shelf = db.shelf_for_user(conn, 1)
     jid = db.open_jobs(conn, shelf.id)[0]["id"]

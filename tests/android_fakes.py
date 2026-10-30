@@ -73,6 +73,13 @@ class FakeSources:
         if package in self.fail:
             raise self.fail[package]
 
+    def play_app(self, package: str, *, account=None, allow_paid: bool = False):
+        from appshelf.android.play import PlayApp
+        self.calls.append(("play_app", package))
+        if package in self.fail:
+            raise self.fail[package]
+        return PlayApp(package, package, 1, "1", False, True, "")
+
     def search(self, query: str) -> list:
         self.calls.append(("search", query))
         return list(self.found)
