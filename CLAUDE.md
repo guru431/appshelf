@@ -18,7 +18,9 @@ Android-полки, вход Google, публичная полка — `docs/sup
 - `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
   (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
   Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `appgallery.py` (updateCheck по пакету),
-  `fdroid.py` (пакетный API, сборки по ABI), `apkpure.py` (app_version, protobuf), `links.py` (страница магазина →
+  `fdroid.py` (пакетный API, сборки по ABI), `fdroid_index.py` (основной и архивный каталоги, версии, SHA-256),
+  `github.py` (стабильные выпуски с APK), `search.py` (общий поиск), `discovery.py` (публичный поиск Play),
+  `apkpure.py` (app_version, protobuf), `links.py` (страница магазина →
   источник и пакет), `sources.py`, `fetch.py` (конвейер, задания, сверка подписи с RuStore), `pin.py` (PIN публичной
   полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
 - `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.

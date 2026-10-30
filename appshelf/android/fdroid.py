@@ -17,6 +17,10 @@ MAX_CANDIDATES = 4
 UNKNOWN = "F-Droid ответил в неизвестном формате"
 
 
+class MissingPackage(SourceError):
+    """Пакета нет в основном репозитории: можно проверить архив."""
+
+
 @dataclass(frozen=True)
 class FdPackage:
     package: str
@@ -27,7 +31,7 @@ class FdPackage:
 def info(http: Http, package: str) -> FdPackage:
     status, _, body = http.request("GET", API + urllib.parse.quote(package), headers={"Accept": "application/json"})
     if status == 404:
-        raise SourceError("нет в F-Droid")
+        raise MissingPackage("нет в F-Droid")
     if status != 200:
         raise FetchError(f"f-droid.org ответил {status}")
     try:

@@ -23,6 +23,7 @@
 <div class="card row">
   <div class="body"><b>{{ j.title }}</b>
     {% if j.status == 'error' %}<div class="err">не добавлено: {{ j.error }}</div>
+    {% if edit and j.query %}<a href="{{ prefix }}/add?q={{ j.query | urlencode }}">Найти в других источниках</a>{% endif %}
     {% elif j.status == 'running' %}<div class="meta busy">скачивается…</div>
     {% else %}<div class="meta">в очереди</div>{% endif %}</div>
   {% if j.status == 'error' and edit %}<form method="post" action="{{ prefix }}/jobs/{{ j.id }}/dismiss" class="act"><button class="sm secondary">Скрыть</button></form>{% endif %}

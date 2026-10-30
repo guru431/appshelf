@@ -194,7 +194,7 @@ def apps_to_check(c) -> list[sqlite3.Row]:
     """Ночная проверка: все полки; свой файл (upload) не проверяется, Google Play — только аккаунтом с действующим
     подключением."""
     return c.execute("SELECT * FROM android_apps WHERE status IN ('ok', 'error') AND (source IN ('rustore', 'link', "
-                     "'appgallery', 'fdroid', 'apkpure') "
+                     "'appgallery', 'fdroid', 'fdroid_archive', 'github', 'apkpure') "
                      f"OR source = 'play' AND google_account_id IN ({PLAY_OK})) ORDER BY shelf_id, package").fetchall()
 
 

@@ -257,8 +257,11 @@ Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/sup
 (stages 1–5 are done: RuStore, direct link, uploaded file, public shelf by PIN, Google sign-in and linking, Google
 Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
 
-- **Sources.** "Add" → RuStore search (a universal APK; the signature is checked against the one RuStore reports;
-  paid apps are unavailable), Google Play — with a connected Google account (below), "By link" — an app page on
+- **Sources.** "Add" searches by name, package or link across RuStore, F-Droid, the F-Droid archive, GitHub,
+  Google Play, AppGallery and APKPure. Choose a source and, for F-Droid, a version. AppGallery and APKPure are
+  checked for up to five matching package names from the catalogs and public Play search; these are not complete
+  store catalogs. A failed source is reported separately without hiding other results. Google Play uses a
+  connected Google account (below), "By link" accepts an app page on
   Google Play, AppGallery (or its ID like `C102312137`), F-Droid, APKPure, RuStore (the source and package are taken
   from the address) or a direct `https` link to an APK on a bank's or developer's site, "Own file" — an upload of up
   to 1 GB. The server never follows a link into an internal network: the name is resolved before every request and
@@ -281,7 +284,8 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   version as a file, remove from the shelf. Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
 - **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore, Google Play, AppGallery and
-  APKPure by `versionCode`, F-Droid by the suggested version, a link by `ETag`, `Last-Modified`, `Content-Length`;
+  APKPure by `versionCode`, F-Droid by the suggested version, GitHub by its latest stable release, the F-Droid
+  archive by the selected version (an exact version stays unchanged), a link by `ETag`, `Last-Modified`, `Content-Length`;
   uploaded files are not checked. The night's result ends with
   "Android: обновлено N, без изменений M, ошибок K".
 - **Russian CA certificates.** The RuStore CDN and the Sber and VTB sites use certificates of the Russian Ministry of
@@ -346,6 +350,14 @@ its package. The signature of every downloaded version is compared with RuStore.
   signature, as with a link. One version may have several builds per ABI, and the suggested one is not always ARM
   (VLC's is x86_64): the shelf takes a universal or `arm64-v8a` build, otherwise `armeabi-v7a`, otherwise "в F-Droid
   нет сборки для ARM". There are no banks in F-Droid.
+- **F-Droid archive** is a separate source for removed apps and older versions of active apps. A 404 from the
+  main package API automatically checks the archive. Both catalogs are cached in memory for six hours; indexed
+  APKs are checked against SHA-256 and the certificate. Selecting an exact version or an archive APK URL keeps
+  that version without updating it.
+- **GitHub** checks the latest stable release for a universal or ARM APK. F-Droid results automatically check
+  their upstream GitHub repository; general search also checks up to five matching repositories. Repository
+  links follow releases, while direct APK links retain the selected file. Package IDs and signatures may differ
+  between builds, so each source is offered separately.
 - **APKPure** — the APKPure client API without sign-in, single APKs only: an XAPK is refused as a bundle with a hint
   where the package comes as one APK. APKPure has distributed tampered APKs (2021 — a trojan in its client, 2025 —
   Telegram X with a backdoor), so: if the package is in RuStore the signature **must** match, otherwise "подпись не

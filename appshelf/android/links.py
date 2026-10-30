@@ -8,6 +8,7 @@ import urllib.parse
 
 from ..apk import PACKAGE_RE
 from .net import FetchError, check_url
+from . import github
 
 APPGALLERY_ID_RE = re.compile(r"^C\d{6,12}$")
 PLAY_HOSTS = ("play.google.com",)
@@ -18,7 +19,7 @@ RUSTORE_HOSTS = ("rustore.ru", "www.rustore.ru", "apps.rustore.ru")
 APPGALLERY_MARKS = ("app", "appdl", "outGoingApp")   # …/app/C…, /appdl/C…, /outGoingApp/C…
 APKPURE_TAILS = ("download", "versions")
 NAMES = {"play": "Google Play", "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure",
-         "rustore": "RuStore"}
+         "rustore": "RuStore", "fdroid_archive": "архива F-Droid", "github": "GitHub"}
 
 
 def parse(url: str) -> tuple[str, str]:
@@ -35,6 +36,18 @@ def parse(url: str) -> tuple[str, str]:
         check_url(text)
         return "link", text
     source, ref = page
+    if source == "github":
+        if not github.parse_ref(ref):
+            raise FetchError("не похоже на репозиторий GitHub")
+        return source, ref
+    if source in ("fdroid", "fdroid_archive") and "@" in ref:
+        from .fdroid_index import split_ref
+        from .net import SourceError
+        try:
+            split_ref(ref)
+        except SourceError:
+            raise FetchError(f"не похоже на страницу приложения {NAMES[source]}") from None
+        return source, ref
     if not (APPGALLERY_ID_RE if source == "appgallery" else PACKAGE_RE).match(ref):
         raise FetchError(f"не похоже на страницу приложения {NAMES[source]}: «{ref[:100]}» — не "
                          + ("ID приложения (C и цифры)" if source == "appgallery" else "имя пакета"))
@@ -45,6 +58,13 @@ def _page(u: urllib.parse.SplitResult) -> tuple[str, str] | None:
     """Адрес — страница приложения в магазине: (источник, то, что стоит на месте пакета или ID); нет — None."""
     host = (u.hostname or "").lower()
     parts = [urllib.parse.unquote(p) for p in u.path.split("/") if p]
+    if host == "github.com" and (len(parts) == 2 or len(parts) == 3 and parts[2] == "releases"
+                                 or len(parts) == 4 and parts[2:] == ["releases", "latest"]):
+        return "github", "/".join(parts[:2])
+    if host in FDROID_HOSTS and len(parts) == 2 and parts[0] == "archive":
+        match = re.fullmatch(r"(.+)_(\d+)\.apk", parts[1])
+        if match:
+            return "fdroid_archive", f"{match[1]}@{match[2]}"
     if host in PLAY_HOSTS and parts == ["store", "apps", "details"]:
         return "play", urllib.parse.parse_qs(u.query).get("id", [""])[0]
     if host in APPGALLERY_HOSTS:

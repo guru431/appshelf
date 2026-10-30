@@ -97,6 +97,38 @@ def test_add_rustore_rejects_bad_package(web, conn):
     assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
 
 
+def test_search_selects_exact_archive_version_and_github(web, conn, tmp_path):
+    from appshelf.android.search import Option
+    ref = PKG + "@7"
+    web.sources.found = [Option("fdroid_archive", PKG, PKG, "Telegram FOSS", "7.0",
+                                versions=(("7.0", ref),)),
+                         Option("github", "example/android", "", "Happ", "v4")]
+    page = web.client.get("/android/add", params={"q": "telegram"})
+    assert "Архив F-Droid" in page.text and ref in page.text and "GitHub" in page.text
+    web.sources.apks[ref] = make_apk(tmp_path / "archive.apk", version_code=7, version_name="7.0")
+    r = web.client.post("/android/add/source", data={"source": "fdroid_archive", "ref": ref,
+                                                    "package": PKG, "name": "Telegram FOSS"}, follow_redirects=False)
+    assert r.status_code == 303
+    work(web, conn)
+    app = db.get_app(conn, shelf(conn).id, PKG)
+    assert (app["source"], app["source_ref"]) == ("fdroid_archive", ref)
+    assert db.current_version(conn, shelf(conn).id, PKG)["version_code"] == 7
+    web.sources.apks["example/android"] = make_apk(tmp_path / "github.apk", package="com.example.happ")
+    web.client.post("/android/add/source", data={"source": "github", "ref": "example/android", "name": "Happ"})
+    work(web, conn)
+    assert db.get_app(conn, shelf(conn).id, "com.example.happ")["source"] == "github"
+
+
+def test_search_selection_validates_source_ref_and_package(web, conn):
+    for source, ref, package in (("fdroid_archive", PKG + "@1", "com.other.app"),
+                                 ("github", "https://127.0.0.1/private", ""),
+                                 ("link", "https://127.0.0.1/app.apk", ""),
+                                 ("rustore", "../x", "../x")):
+        r = web.client.post("/android/add/source", data={"source": source, "ref": ref, "package": package})
+        assert r.status_code == 400
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+
+
 def test_add_link_rejects_http_and_private(web, conn):
     for url in ("http://bank.example/x.apk", "https://10.0.0.1/x.apk", "https://[::1]/x.apk", "не ссылка"):
         r = web.client.post("/android/add/link", data={"url": url, "name": ""})

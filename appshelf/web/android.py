@@ -17,7 +17,7 @@ from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .. import apk, jobs, notify, people, store
-from ..android import db, fetch, links, net, pin
+from ..android import db, fdroid_index, fetch, github, links, net, pin
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
@@ -25,7 +25,8 @@ from .common import back
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
-           "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure"}
+           "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "Архив F-Droid",
+           "github": "GitHub", "apkpure": "APKPure"}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
@@ -35,7 +36,7 @@ PIN_BUSY = "Идёт скачивание — попробуйте через м
 NEED_PLAY = "Сначала подключите Google-аккаунт к Google Play на странице «Аккаунты»"
 PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя пакета"
 NO_PLAY_SOURCE = "Источником карточки Google Play не ставится — снимите её и добавьте приложение из Google Play"
-BY_PACKAGE = ("rustore", "appgallery", "fdroid", "apkpure")   # «Сменить источник» без адреса: ref — пакет карточки
+BY_PACKAGE = ("rustore", "appgallery", "fdroid", "fdroid_archive", "apkpure")
 NOTICES = {fetch.SIGNER_DIFFERS: "подпись не как в RuStore", fetch.NOT_VERIFIED: "подпись не сверена"}
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")   # токен каталога полки (db.ensure_shelf)
 
@@ -89,7 +90,8 @@ def nightly_part(result: str) -> str:
 def _job_view(j) -> dict:
     p = json.loads(j["payload"] or "{}")
     title = p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or "Свой файл"
-    return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title}
+    return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title,
+            "query": p.get("ref", "") if j["kind"] == "add" else ""}
 
 
 def _fresh(apps, now: str) -> set[str]:
@@ -274,19 +276,22 @@ def _register_scope(app, w, scope: Scope):
         return resp
 
     def add_page(request: Request, q: str = "", status_code: int = 200, error: str = "", link_url: str = ""):
-        found, search_error = [], ""
-        if q.strip():
-            try:
-                found = w.env.sources.search(q.strip())
-            except (net.FetchError, net.SourceError) as e:
-                search_error = f"Поиск в RuStore не удался: {e}"
+        found, search_errors = [], []
+        q = q.strip()[:200]
         with w.conn() as c:
             shelf = shelf_of(c, request)
             on_shelf = {a.package for a in db.list_apps(c, shelf.id)} if shelf is not None else set()
             accounts = google_accounts(c, request)
         play_accounts = [g for g in accounts if g.play == "ok"]
+        if q:
+            try:
+                result = w.env.sources.search_all(q, accounts=play_accounts)
+                found, search_errors = result.options, result.errors
+            except (net.FetchError, net.SourceError) as e:
+                search_errors = [str(e)]
         return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
-                      found=found, search_error=search_error, on_shelf=on_shelf, error=error, link_url=link_url,
+                      found=found, search_errors=search_errors, sources=SOURCES,
+                      on_shelf=on_shelf, error=error, link_url=link_url,
                       prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts))
 
     def save_upload(file: UploadFile | None) -> tuple[Path | None, tuple[int, str] | None]:
@@ -333,21 +338,54 @@ def _register_scope(app, w, scope: Scope):
     def android_catalog(request: Request):
         return catalog_page(request)
 
-    @app.get(f"{p}/add", response_class=HTMLResponse)
+    @app.get(f"{p}/add", response_class=HTMLResponse, dependencies=deps)
     def android_add(request: Request, q: str = ""):
         return add_page(request, q)
 
     def add_package(request: Request, source: str, package: str, name: str, payload: dict,
-                    account: int | None = None):
+                    account: int | None = None, ref: str | None = None):
         """Карточка пакета и задание add (payload — к source и ref); пакет уже на полке — второго не ставим."""
         with w.conn() as c:
             shelf = ensure(c, request)
             with store.tx(c):
                 if db.get_app(c, shelf.id, package) is None:
-                    db.put_app(c, shelf.id, package, name or package, source, package, w.now(),
+                    db.put_app(c, shelf.id, package, name or package, source, ref or package, w.now(),
                                google_account_id=account)
                     db.enqueue(c, shelf.id, "add", w.now(), package=package,
-                               payload={"source": source, "ref": package, **payload})
+                               payload={"source": source, "ref": ref or package, **payload})
+        return back(p)
+
+    @app.post(f"{p}/add/source", response_class=HTMLResponse, dependencies=deps)
+    def add_source(request: Request, source: str = Form(""), ref: str = Form(""), package: str = Form(""),
+                   name: str = Form(""), ack: str = Form(""), account: int = Form(0)):
+        """Выбранный результат поиска: поля проверяются независимо от формы."""
+        ref, name = ref.strip(), name.strip()[:200]
+        try:
+            if len(ref) > MAX_URL or package and not apk.PACKAGE_RE.fullmatch(package):
+                raise net.SourceError("не похоже на приложение Android")
+            if source in ("fdroid", "fdroid_archive"):
+                expected, _ = fdroid_index.split_ref(ref)
+                if package != expected:
+                    raise net.SourceError("пакет не совпал с выбранным результатом")
+            elif source == "github":
+                if not github.parse_ref(ref) or github.parse_ref(ref) != ref:
+                    raise net.SourceError("не похоже на репозиторий GitHub")
+            elif source in ("rustore", "appgallery", "apkpure", "play"):
+                if not apk.PACKAGE_RE.fullmatch(ref) or ref != package:
+                    raise net.SourceError("не похоже на имя пакета Android")
+            else:
+                raise net.SourceError("неизвестный источник")
+        except net.SourceError as e:
+            return add_page(request, status_code=400, error=str(e))
+        if source == "play":
+            return add_play(request, package, account)
+        payload = {"source": source, "ref": ref, "name": name}
+        if source == "apkpure":
+            payload["ack"] = ack == "1"
+        if package and source != "apkpure":
+            return add_package(request, source, package, name, payload, ref=ref)
+        with w.conn() as c:
+            db.enqueue(c, ensure(c, request).id, "add", w.now(), payload=payload)
         return back(p)
 
     @app.post(f"{p}/add/rustore", response_class=HTMLResponse, dependencies=deps)
@@ -387,7 +425,10 @@ def _register_scope(app, w, scope: Scope):
             if acct is None:
                 return add_page(request, status_code=400, error=NEED_PLAY, link_url=url)
             return add_package(request, "play", ref, "", {"account": acct.id}, acct.id)
-        if source not in ("link", "appgallery", "apkpure"):
+        if source in ("fdroid", "fdroid_archive") and "@" in ref:
+            package, _ = fdroid_index.split_ref(ref)
+            return add_package(request, source, package, name, {"name": name}, ref=ref)
+        if source not in ("link", "appgallery", "apkpure", "github"):
             return add_package(request, source, ref, name, {"name": name})
         payload = {"source": source, "ref": ref, "name": name}
         if source == "apkpure":
@@ -487,7 +528,8 @@ def _register_scope(app, w, scope: Scope):
                 return catalog_page(request, 400, f"{ref[:200]}: {e}")
             if source == "play":
                 return catalog_page(request, 400, NO_PLAY_SOURCE)
-            if source not in ("link", "appgallery") and ref != package:
+            want = fdroid_index.split_ref(ref)[0] if source in ("fdroid", "fdroid_archive") else ref
+            if source not in ("link", "appgallery", "github") and want != package:
                 return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
             return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")

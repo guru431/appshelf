@@ -77,6 +77,12 @@ class FakeSources:
         self.calls.append(("search", query))
         return list(self.found)
 
+    def search_all(self, query: str, *, accounts=()):
+        from appshelf.android.search import Option, Results
+        return Results(tuple(a if isinstance(a, Option) else Option("rustore", a.package, a.package, a.name,
+                       a.version_name, "платное — недоступно" if a.price > 0 else "")
+                       for a in self.search(query)), ())
+
     def latest(self, source: str, ref: str, stored_etag: str, **kw) -> Latest:
         self.calls.append(("latest", source, ref))
         if ref in self.fail:

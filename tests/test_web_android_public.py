@@ -40,6 +40,8 @@ def add_public(web, conn, tmp_path, url=URL, **apk):
 
 
 def test_member_sees_public_shelf_read_only(web, member, conn, tmp_path):
+    assert member.client.get("/android/public/add?q=example").status_code == 403
+    assert member.client.post("/android/public/add/source", data={"source": "github", "ref": "example/app"}).status_code == 403
     shelf = add_public(web, conn, tmp_path)
     r = member.client.get("/android/public")
     assert r.status_code == 200 and f"/d/{shelf.shelf}/{PKG}-1/{PKG}-1.0.apk" in r.text
@@ -59,7 +61,7 @@ def test_member_sees_public_shelf_read_only(web, member, conn, tmp_path):
 
 def test_owner_adds_to_public_and_worker_fills_it(web, conn, tmp_path):
     web.sources.found = [rustore.StoreApp(1, PKG, "Пример", "", 1, "", 0, "", 0)]
-    assert 'action="/android/public/add/rustore"' in web.client.get("/android/public/add", params={"q": "пример"}).text
+    assert 'action="/android/public/add/source"' in web.client.get("/android/public/add", params={"q": "пример"}).text
     web.sources.apks[PKG] = make_apk(tmp_path / "a.apk")
     r = web.client.post("/android/public/add/rustore", data={"package": PKG, "name": "Пример"}, follow_redirects=False)
     assert r.headers["location"] == "/android/public"

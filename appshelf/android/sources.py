@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import io
 import time
+from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
 
 from .. import apk
-from . import apkpure, appgallery, fdroid, links, rustore
+from . import apkpure, appgallery, fdroid, fdroid_index, github, links, rustore
 from .net import FetchError, Http, Meta, SourceError, StatusError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
@@ -61,10 +62,30 @@ class Sources:
         self.http, self.play, self.sleep, self.pause, self.clock = http, play, sleep, pause, clock
         self.appgallery_host = appgallery_host or appgallery.HOST
         self._last: float | None = None
+        self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock)
+        self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock)
 
     def search(self, query: str) -> list[rustore.StoreApp]:
         self._wait()
         return rustore.search(self.http, query)
+
+    def search_all(self, query: str, *, accounts=()):
+        from .search import search
+        # Обычное скачивание может ждать дольше; поиск должен вернуть хотя бы частичные
+        # результаты до тайм-аута веб-сервера. Настройки общего HTTP-клиента не меняются.
+        bounded = copy(self)
+        bounded.http = copy(self.http)
+        if isinstance(bounded.http, Http):
+            bounded.http.timeout = min(bounded.http.timeout, 10.0)
+        deadline = self.clock() + 90.0
+
+        def wait():
+            if self.clock() >= deadline:
+                raise FetchError("поиск занял слишком долго — повторите с именем пакета")
+            self._wait()
+
+        bounded._wait = wait
+        return search(bounded, query, accounts=accounts)
 
     def latest(self, source: str, ref: str, stored_etag: str, *, account=None) -> Latest:
         if source == "rustore":
@@ -80,10 +101,22 @@ class Sources:
             return Latest(client.details(ref).version_code, "", True)
         if source == "appgallery":
             return Latest(self._appgallery(ref).version_code, "", True)
-        if source == "fdroid":
-            # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
+        if source == "github":
             self._wait()
-            mark = _fdroid_mark(fdroid.info(self.http, ref))
+            mark = github.info(self.http, ref).mark
+            return Latest(None, mark, mark != stored_etag)
+        if source in ("fdroid", "fdroid_archive"):
+            # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
+            if source == "fdroid_archive" or "@" in ref:
+                _, build = self._fdroid_index(source).info(ref, self._wait)
+                mark = f"{source}:{build.code}"
+            else:
+                self._wait()
+                try:
+                    mark = _fdroid_mark(fdroid.info(self.http, ref))
+                except fdroid.MissingPackage:
+                    _, build = self.fdroid_archive.info(ref, self._wait)
+                    mark = f"fdroid_archive:{build.code}"
             return Latest(None, mark, mark != stored_etag)
         if source == "apkpure":
             self._wait()
@@ -116,8 +149,22 @@ class Sources:
             self._wait()
             appgallery.download(self.http, app, dest)
             return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
-        if source == "fdroid":
-            return self._fetch_fdroid(ref, dest)
+        if source in ("fdroid", "fdroid_archive"):
+            if source == "fdroid_archive" or "@" in ref:
+                return self._fetch_fdroid_index(source, ref, dest)
+            try:
+                return self._fetch_fdroid(ref, dest)
+            except fdroid.MissingPackage:
+                return self._fetch_fdroid_index("fdroid_archive", ref, dest)
+        if source == "github":
+            self._wait()
+            app = github.info(self.http, ref)
+            self._wait()
+            self.http.download(app.asset_url, dest)
+            info = apk.read_apk(dest)
+            if info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
+                raise SourceError("в GitHub нет сборки для ARM")
+            return Got(app.name, "", None, app.mark)
         if source == "apkpure":
             app = self.apkpure_app(ref)
             self._wait()
@@ -164,6 +211,20 @@ class Sources:
     def _hint(self, package: str) -> str:
         found = self.elsewhere(package)
         return f"; есть в {', '.join(found)} — смените источник" if found else ""
+
+    def _fdroid_index(self, source: str) -> fdroid_index.Catalog:
+        return self.fdroid_archive if source == "fdroid_archive" else self.fdroid_catalog
+
+    def _fetch_fdroid_index(self, source: str, ref: str, dest: Path) -> Got:
+        catalog = self._fdroid_index(source)
+        app, build = catalog.info(ref, self._wait)
+        catalog.download(build, dest, self._wait)
+        info = apk.read_apk(dest)
+        if info.package != app.package or info.version_code != build.code:
+            raise SourceError("APK из F-Droid не совпал с пакетом и версией в каталоге")
+        if info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
+            raise SourceError("в F-Droid нет сборки для ARM")
+        return Got(app.name, build.signer, None, f"{source}:{build.code}")
 
     def _fetch_fdroid(self, package: str, dest: Path) -> Got:
         """Сборки рекомендуемой версии по очереди, пока не найдётся универсальная или arm64-v8a; нет ни одной —

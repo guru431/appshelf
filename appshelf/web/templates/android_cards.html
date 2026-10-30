@@ -55,8 +55,8 @@
       {%- for x in (a.current, a.previous, a.kept) if x %}{# kept всегда закреплена #}
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/versions/{{ x['id'] }}/{{ 'unpin' if x['pinned'] else 'pin' }}"><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
       {%- endfor %}
-      {%- for s in ('rustore', 'appgallery', 'fdroid') if a.source != s %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="{{ s }}"><button class="secondary">Брать из {{ sources[s] }}</button></form>
+      {%- for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive') if a.source != s %}
+      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="{{ s }}"><button class="secondary">Брать {{ 'из архива F-Droid' if s == 'fdroid_archive' else 'из ' ~ sources[s] }}</button></form>
       {%- endfor %}
       {%- if a.source != 'apkpure' %}
       <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="apkpure">

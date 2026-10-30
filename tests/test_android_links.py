@@ -20,6 +20,9 @@ K9, VLC, VTB, SBER = "com.fsck.k9", "org.videolan.vlc", "C102312137", "ru.sberba
     ("https://f-droid.org/ru/packages/org.videolan.vlc", ("fdroid", VLC)),
     ("https://f-droid.org/app/org.videolan.vlc", ("fdroid", VLC)),   # «Поделиться» в клиенте F-Droid
     ("https://www.f-droid.org/packages/org.videolan.vlc/?locale=ru", ("fdroid", VLC)),
+    ("https://f-droid.org/archive/org.videolan.vlc_13070206.apk", ("fdroid_archive", VLC + "@13070206")),
+    ("https://github.com/Happ-proxy/happ-android", ("github", "Happ-proxy/happ-android")),
+    ("https://github.com/Happ-proxy/happ-android/releases/latest", ("github", "Happ-proxy/happ-android")),
     ("https://apkpure.com/k-9-mail/com.fsck.k9", ("apkpure", K9)),
     ("https://m.apkpure.com/k-9-mail/com.fsck.k9/download", ("apkpure", K9)),
     ("https://apkpure.com/ru/k-9-mail/com.fsck.k9/", ("apkpure", K9)),

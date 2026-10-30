@@ -67,8 +67,10 @@ def test_fdroid_no_arm_build_error(tmp_path):
 
 
 def test_fdroid_missing_package(tmp_path):
-    http = FakeHttp(raw={fdroid.API + "org.example.none": api(status=404)})
-    with pytest.raises(net.SourceError, match="нет в F-Droid"):
+    from test_android_fdroid_index import ARCHIVE, catalog
+    http = FakeHttp(raw={fdroid.API + "org.example.none": api(status=404),
+                         ARCHIVE + "index-v1.jar": (200, {}, catalog())})
+    with pytest.raises(net.SourceError, match="нет в .*F-Droid"):
         sources.Sources(http, sleep=lambda s: None).latest("fdroid", "org.example.none", "")
     http = FakeHttp(raw={fdroid.API + VLC: (503, {}, b"")})
     with pytest.raises(net.FetchError, match="503"):

@@ -120,6 +120,12 @@ h2:first-child { margin-top: 4px; }
 .row .body { flex: 1 1 150px; }
 .row.inactive { opacity: .45; }
 .act { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.source-results .body { overflow-wrap: anywhere; }
+.source-results .act { max-width: 100%; }
+.source-choice { width: min(100%, 360px); }
+.source-choice select { display: block; width: 100%; max-width: 100%; min-height: 44px; margin-bottom: 8px;
+                        padding: 8px; border: 0; border-radius: 10px; color: var(--fg); background: var(--fill); font: inherit; }
+.source-choice button { white-space: normal; max-width: 100%; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-bottom: 14px; }
 .card > .bar { margin: 12px 0 0; }
 
