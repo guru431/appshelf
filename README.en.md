@@ -267,8 +267,9 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
 - **Source limits.** One whole APK only, nothing paid except apps bought in Google Play. The terms of RuStore,
   AppGallery, APKPure and Google Play forbid automated downloads: requests go one at a time with a pause, the nightly
   check runs once a day; the server owner accepts the risk of losing access.
-- **Installing.** "Download APK" in Chrome on the phone; the first time Android asks to allow installs from the
-  browser. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
+- **Installing.** "Download APK" in Chrome on the phone → "Open" on Chrome's bar or in the download notification →
+  "Install"; the first time Android asks to allow installs from the browser. A site cannot install right away: the
+  browser only downloads the file, and the person opens the installer. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
   whole APK: bundles (split APK, XAPK, APKS) are refused when added. "Copy link" in the card's "⋯" gives a permanent address
   `<site address>/apk/<shelf token>/<package>.apk`: always the current version, opens without signing in (like the
   files themselves); changing the shelf token (`rotate-token`, a new PIN of the public shelf) disables it too.
