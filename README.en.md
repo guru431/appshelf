@@ -185,7 +185,9 @@ The owner creates the OAuth client once (free; `openid email profile` needs no G
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → a new project.
 2. "APIs & Services" → "OAuth consent screen": user type External, publishing status In production; scopes — only
-   `openid`, `email`, `profile` (none sensitive).
+   `openid`, `email`, `profile` (none sensitive). "Publish app" stays disabled without a home page (`<site address>`),
+   a privacy policy link (`<site address>/privacy` — an appshelf page that opens without signing in) and the site's
+   domain in Authorized domains. The Google account needs 2-step verification to use the Cloud Console.
 3. "Credentials" → "Create credentials" → "OAuth client ID": type Web application, Authorized redirect URI — exactly
    `<site address>/google/callback` (`APPSHELF_PUBLIC_BASE` + `/google/callback`).
 4. Client ID and Client secret go to `/etc/appshelf/appshelf.env` (`GOOGLE_CLIENT_ID=`, `GOOGLE_CLIENT_SECRET=`; the

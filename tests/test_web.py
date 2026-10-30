@@ -18,6 +18,13 @@ def test_healthz_without_login(web):
     assert r.status_code == 200 and r.text == "ok"
 
 
+def test_privacy_without_login(web):
+    """Политика конфиденциальности — ссылка с экрана входа Google: открывается без входа, без меню панели."""
+    r = TestClient(web.app, base_url=f"https://{HOST}").get("/privacy", follow_redirects=False)
+    assert r.status_code == 200 and "Google" in r.text and "openid" in r.text and "пароль" in r.text.lower()
+    assert "/admin" not in r.text and "Выйти" not in r.text
+
+
 def test_pwa_manifest_and_icons_without_login(web):
     # iOS «На экран „Домой“» и браузеры берут манифест и иконку без cookie
     anon = TestClient(web.app)

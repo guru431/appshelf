@@ -178,7 +178,9 @@ Apple ID» с Apple ID другого участника, приглашение
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → новый проект.
 2. «APIs & Services» → «OAuth consent screen»: тип External, статус In production; scope — только `openid`, `email`,
-   `profile` (чувствительных нет).
+   `profile` (чувствительных нет). Без домашней страницы (`<адрес сайта>`), ссылки на политику конфиденциальности
+   (`<адрес сайта>/privacy` — страница appshelf, открывается без входа) и домена сайта в Authorized domains
+   «Publish app» не включается. Учётке Google для Cloud Console нужна двухэтапная аутентификация.
 3. «Credentials» → «Create credentials» → «OAuth client ID»: тип Web application, Authorized redirect URI — ровно
    `<адрес сайта>/google/callback` (`APPSHELF_PUBLIC_BASE` + `/google/callback`).
 4. Client ID и Client secret — в `/etc/appshelf/appshelf.env` (`GOOGLE_CLIENT_ID=`, `GOOGLE_CLIENT_SECRET=`; секрет —

@@ -24,7 +24,7 @@ from .common import THEMES, WebCtx, back, back_to
 from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p",  # /p — гость публичной полки, по PIN
-          "/google/start", "/google/callback")
+          "/google/start", "/google/callback", "/privacy")  # /privacy — ссылка с экрана входа Google
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/", "/apk/")  # /apk/ — постоянная ссылка на APK, секрет — токен полки
 # страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
 APPLE_PATHS = ("/history", "/blocked", "/api/status")
@@ -132,6 +132,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             c.execute("SELECT 1")
         return PlainTextResponse("ok")
+
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy(request: Request):
+        return w.page(request, "privacy.html", "guest")
 
     @app.get("/pwa/manifest.webmanifest")
     def pwa_manifest():

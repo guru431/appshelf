@@ -80,10 +80,10 @@
 **Proposal:** у ошибки задания add с `SplitOnly` — кнопки «Взять из <источник>» (задание add с этим источником и пакетом); подпись источника — из RuStore (`signature`), у AppGallery и F-Droid её нет до скачивания — показывать после.
 **Status:** open
 
-## 2026-10-29 · Этап 4 выложен, но Google Play в панели недоступен: вход через Google на сервере не настроен [P3]
-**Context:** выкладка этапа 4 2026-10-29 (коммит `9bbaf8b`), проверка `/etc/appshelf/appshelf.env`: `GOOGLE_CLIENT_ID` и `GOOGLE_CLIENT_SECRET` пусты, строк `google_accounts` нет.
-**What:** подключение к Play висит на Google-аккаунте в «Аккаунтах», а без клиента OAuth Google-аккаунт не добавить; шаг 6 Task 7 (подключить аккаунт, проверить отсутствие токенов в базе и журнале, K-9 Mail на телефон, ночь) не сделан.
-**Proposal:** владелец заводит клиент OAuth (README, «Вход через Google»), кладёт ID и секрет в `appshelf.env`, перезапуск `appshelf-web`; затем «Добавить Google» → «Подключить к Google Play»; после — `grep -rE "aas_et/|oauth2_4/"` по `/var/lib/appshelf` и `journalctl -u appshelf-web`, K-9 Mail на телефон, `APPSHELF_PLAY_TEST_GID` в `.env` и `pytest -m integration tests/test_android_play_live.py`.
+## 2026-10-29 · Этап 4: Google Play на сервере не подключён и не проверен [P3]
+**Context:** выкладка этапа 4 2026-10-29 (коммит `9bbaf8b`); 2026-10-30 заведён клиент OAuth (проект Google Cloud `appshelf`, In production), ключи — в `/etc/appshelf/appshelf.env`, «Войти через Google» на странице входа есть.
+**What:** шаг 6 Task 7 не сделан: ни один Google-аккаунт не добавлен и не подключён к Play; не проверены отсутствие токенов в базе и журнале, K-9 Mail на телефон, ночная проверка.
+**Proposal:** «Аккаунты» → «Добавить Google» → «Подключить к Google Play»; после — `grep -rE "aas_et/|oauth2_4/"` по `/var/lib/appshelf` и `journalctl -u appshelf-web`, K-9 Mail на телефон, `APPSHELF_PLAY_TEST_GID` в `.env` и `pytest -m integration tests/test_android_play_live.py`.
 **Status:** open
 
 ## 2026-10-29 · Этап 4: покупки Google Play (G3) и «Мои покупки» не сделаны [P3]
