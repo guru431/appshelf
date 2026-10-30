@@ -1,7 +1,9 @@
+import io
 import json
 from dataclasses import replace
 
 import pytest
+from PIL import Image
 from starlette.testclient import TestClient
 
 from apk_factory import cert_sha, make_apk
@@ -108,6 +110,16 @@ def test_add_link_names_card_after_download(web, conn, tmp_path):
     assert "Банк по ссылке" in page and "сайт" in page
 
 
+def test_add_link_names_card_from_resources(web, conn, tmp_path, cfg):
+    """Название ссылкой на ресурс и сокращённые пути ресурсов (Aurora Store из F-Droid): карточка — с названием и
+    иконкой из resources.arsc, а не с именем пакета и заглушкой."""
+    from test_apk import ICON, LABEL, SHORT_FILES, SHORT_RES
+    add_link(web, conn, tmp_path, label=f"@{LABEL:#x}", icon_ref=ICON, resources=SHORT_RES, files=SHORT_FILES)
+    assert db.get_app(conn, shelf(conn).id, PKG)["name"] == "Aurora Store"
+    icon = (fetch.shelf_root(cfg, shelf(conn)) / f"{PKG}-1" / "icon.png").read_bytes()
+    assert Image.open(io.BytesIO(icon)).size == (192, 192)
+
+
 def test_add_link_routes_store_pages(web, conn):
     def post(url, name=""):
         return web.client.post("/android/add/link", data={"url": url, "name": name}, follow_redirects=False)
@@ -208,6 +220,27 @@ def test_upload_good_file_and_new_version(web, conn, tmp_path):
     work(web, conn)
     view = db.list_apps(conn, shelf(conn).id)[0]
     assert (view.current["version_code"], view.previous["version_code"]) == (2, 1)
+
+
+def test_app_link_follows_current_version(web, conn, tmp_path, make_web, cfg):
+    """«Скопировать ссылку» — постоянный адрес приложения: открывается без входа (как файлы /d/) и ведёт на текущую
+    версию; другой токен, неизвестный пакет, приложение без версии — 404."""
+    add_link(web, conn, tmp_path)
+    s = shelf(conn)
+    link = f"https://apps.example/apk/{s.shelf}/{PKG}.apk"
+    assert f'data-copy="{link}"' in web.client.get("/android").text
+    anon = make_web(cfg, conn).client
+    r = anon.get(f"/apk/{s.shelf}/{PKG}.apk", follow_redirects=False)
+    assert (r.status_code, r.headers["location"]) == (302, fetch.file_url(cfg, s, f"{PKG}-1", f"{PKG}-1.0.apk"))
+    files = {"file": ("b.apk", make_apk(tmp_path / "b.apk", version_code=2, version_name="2.0").read_bytes())}
+    web.client.post(f"/android/apps/{PKG}/upload", files=files)
+    work(web, conn)
+    r = anon.get(f"/apk/{s.shelf}/{PKG}.apk", follow_redirects=False)
+    assert r.headers["location"] == fetch.file_url(cfg, s, f"{PKG}-2", f"{PKG}-2.0.apk")
+    web.client.post("/android/add/rustore", data={"package": "ru.queued", "name": "В очереди"})
+    for path in (f"/apk/{'0' * 32}/{PKG}.apk", f"/apk/{s.shelf}/ru.other.apk", f"/apk/{s.shelf}/ru.queued.apk",
+                 f"/apk/{s.shelf}/{PKG}", f"/apk/{s.shelf[:-1]}/{PKG}.apk"):
+        assert anon.get(path, follow_redirects=False).status_code == 404, path
 
 
 def test_upload_too_big_and_empty(web, conn, cfg, monkeypatch):

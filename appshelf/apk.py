@@ -2,6 +2,8 @@
 
 Манифест — AXML (AOSP ResourceTypes.h): пул строк UTF-8/UTF-16, resource map, узлы start/end element; атрибуты
 android:* опознаются по id из resource map (имена в обфусцированных APK бывают пустыми), остальные — по имени.
+Название и иконка ссылкой (@string/app_name, @mipmap/ic_launcher) — через resources.arsc: при сокращённых путях
+ресурсов (res/-B.png, F-Droid, прямые ссылки) по имени ic_launcher иконку не найти.
 Подпись — блок «APK Sig Block 42» перед central directory (v3 раньше v2), иначе v1 — PKCS#7 из META-INF. Отпечаток —
 SHA-256 DER первого сертификата, как поле signature у RuStore."""
 from __future__ import annotations
@@ -17,8 +19,8 @@ from pathlib import Path
 
 from PIL import Image
 
-ATTRS = {0x01010001: "label", 0x0101020c: "minSdkVersion", 0x0101021b: "versionCode", 0x0101021c: "versionName",
-         0x01010270: "targetSdkVersion"}
+ATTRS = {0x01010001: "label", 0x01010002: "icon", 0x0101020c: "minSdkVersion", 0x0101021b: "versionCode",
+         0x0101021c: "versionName", 0x01010270: "targetSdkVersion"}
 ELEMENTS = ("manifest", "uses-sdk", "application")
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")  # имя пакета идёт в имена каталога и файла
 V1_RE = re.compile(r"^META-INF/[^/]+\.(RSA|DSA|EC)$", re.IGNORECASE)
@@ -31,6 +33,8 @@ ICON_MAX = 8 << 20  # «иконка» больше — не читается: z
 ICON_PIXELS = 4096 * 4096  # и картинка-бомба: мало байт, сотни Мпикс — размер из заголовка, до load()
 MAX_V1 = 1 << 20     # файл подписи v1 (META-INF/*.RSA) — килобайты; больше — бомба
 MAX_SIG_BLOCK = 64 << 20
+MAX_ARSC = 32 << 20  # resources.arsc больших приложений — единицы МБ; больше — без названия и иконки из ресурсов
+RASTER = (".png", ".webp")
 VERSIONS = {21: "5", 22: "5.1", 23: "6", 24: "7", 25: "7.1", 26: "8", 27: "8.1", 28: "9", 29: "10", 30: "11",
             31: "12", 32: "12L", 33: "13", 34: "14", 35: "15", 36: "16"}
 
@@ -40,13 +44,19 @@ class ApkError(ValueError):
 
 
 @dataclass(frozen=True)
+class Ref:
+    """Значение атрибута манифеста — ссылка на ресурс (@0x7f…)."""
+    id: int
+
+
+@dataclass(frozen=True)
 class ApkInfo:
     package: str
     version_code: int
     version_name: str
     min_sdk: int
     target_sdk: int
-    label: str                 # "" — в манифесте ссылка на ресурс: название берут из источника или пакета
+    label: str                 # "" — в манифесте ссылка на ресурс: название — из источника, resource_label или пакета
     abis: tuple[str, ...]      # каталоги lib/<abi>/; пусто — без нативного кода
     signer: str                # SHA-256 DER сертификата, 64 hex
 
@@ -106,24 +116,62 @@ def extract_icon(path: Path) -> bytes | None:
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
         for pattern in (MIPMAP_RE, DRAWABLE_RE):
-            best = None
-            for name in (n for n in names if pattern.match(n)):
-                if z.getinfo(name).file_size > ICON_MAX:
-                    continue
-                try:
-                    img = Image.open(io.BytesIO(z.read(name)))
-                    if img.width * img.height > ICON_PIXELS:
-                        continue
-                    img.load()
-                except Exception:  # битая или незнакомая картинка — следующая
-                    continue
-                if best is None or img.width * img.height > best.width * best.height:
-                    best = img
-            if best is not None:
-                out = io.BytesIO()
-                best.convert("RGBA").save(out, "PNG")
-                return out.getvalue()
+            icon = _largest(z, [n for n in names if pattern.match(n)])
+            if icon is not None:
+                return icon
     return None
+
+
+def resource_label(path: Path) -> str:
+    """Название из resources.arsc, если android:label — ссылка: русское, иначе без языка, иначе любое; не ссылка, нет
+    таблицы или она не разбирается — ""."""
+    with zipfile.ZipFile(path) as z:
+        values = _resolve(z, "label")
+    ranked = sorted(values, key=lambda v: (v[0] != "ru", v[0] != ""))
+    return next((s.strip()[:200] for _, _, s in ranked if s.strip()), "")
+
+
+def resource_icon(path: Path) -> bytes | None:
+    """Иконка по android:icon через resources.arsc: самая большая PNG/WebP из конфигураций; только XML (адаптивная
+    иконка), не ссылка, нет таблицы — None."""
+    with zipfile.ZipFile(path) as z:
+        return _largest(z, sorted({s for _, _, s in _resolve(z, "icon") if s.endswith(RASTER)}))
+
+
+def _largest(z: zipfile.ZipFile, names: list[str]) -> bytes | None:
+    """PNG самой большой по пикселям картинки из names; ни одна не читается — None."""
+    best = None
+    for name in names:
+        try:
+            if z.getinfo(name).file_size > ICON_MAX:
+                continue
+            img = Image.open(io.BytesIO(z.read(name)))
+            if img.width * img.height > ICON_PIXELS:
+                continue
+            img.load()
+        except Exception:  # нет файла, битая или незнакомая картинка — следующая
+            continue
+        if best is None or img.width * img.height > best.width * best.height:
+            best = img
+    if best is None:
+        return None
+    out = io.BytesIO()
+    best.convert("RGBA").save(out, "PNG")
+    return out.getvalue()
+
+
+def _resolve(z: zipfile.ZipFile, attr: str) -> list[tuple[str, int, str]]:
+    """Строковые значения ресурса, на который ссылается атрибут attr <application>: [(язык, плотность, строка)]."""
+    try:
+        if z.getinfo("AndroidManifest.xml").file_size > MAX_MANIFEST:
+            return []
+        ref = _manifest(z.read("AndroidManifest.xml")).get("application", {}).get(attr)
+        if not isinstance(ref, Ref) or z.getinfo("resources.arsc").file_size > MAX_ARSC:
+            return []
+        return _arsc(z.read("resources.arsc"), ref.id)
+    except (KeyError, struct.error, IndexError, ValueError, UnicodeDecodeError, zipfile.BadZipFile, zlib.error,
+            RuntimeError, NotImplementedError, EOFError):
+        return []
 
 
 def android_version(sdk: int) -> str:
@@ -183,24 +231,91 @@ def _value(strings: list[str], raw: int, dtype: int, value: int):
         return value != 0
     if 0x10 <= dtype <= 0x1f:
         return value
+    if dtype == 0x01:
+        return Ref(value)
     if raw != 0xFFFFFFFF:
         return strings[raw]
-    return None  # ссылка на ресурс (@0x7f…), атрибут темы, число с плавающей точкой
+    return None  # атрибут темы, число с плавающей точкой
 
 
 def _strings(chunk: bytes) -> list[str]:
+    (count,) = struct.unpack_from("<I", chunk, 8)
+    return [_string(chunk, i) for i in range(count)]
+
+
+def _string(chunk: bytes, i: int) -> str:
+    """Строка i пула строк (чанк целиком)."""
     _, header, _, count, _, flags, start, _ = struct.unpack_from("<HHIIIIII", chunk, 0)
-    out = []
-    for off in struct.unpack_from(f"<{count}I", chunk, header):
-        p = start + off
-        if flags & 0x100:  # UTF-8: длина в символах, затем в байтах
-            _, p = _len8(chunk, p)
-            n, p = _len8(chunk, p)
-            out.append(chunk[p:p + n].decode("utf-8", "replace"))
-        else:
-            n, p = _len16(chunk, p)
-            out.append(chunk[p:p + 2 * n].decode("utf-16-le", "replace"))
+    if i >= count:
+        raise IndexError("нет строки в пуле")
+    p = start + struct.unpack_from("<I", chunk, header + 4 * i)[0]
+    if flags & 0x100:  # UTF-8: длина в символах, затем в байтах
+        _, p = _len8(chunk, p)
+        n, p = _len8(chunk, p)
+        return chunk[p:p + n].decode("utf-8", "replace")
+    n, p = _len16(chunk, p)
+    return chunk[p:p + 2 * n].decode("utf-16-le", "replace")
+
+
+def _chunks(data: bytes, pos: int, end: int):
+    """Узлы подряд с pos до end: (тип, размер заголовка, начало, конец)."""
+    while pos + 8 <= end:
+        ctype, chead, size = struct.unpack_from("<HHI", data, pos)
+        if size < 8 or pos + size > end:
+            raise ValueError("узел таблицы ресурсов")
+        yield ctype, chead, pos, pos + size
+        pos += size
+
+
+def _arsc(data: bytes, res_id: int) -> list[tuple[str, int, str]]:
+    """Строковые значения ресурса res_id из resources.arsc (ResTable_package → ResTable_type по конфигурациям):
+    [(язык, плотность, строка)]; значение не строкой (ссылка, число) — мимо."""
+    typ, header = struct.unpack_from("<HH", data, 0)
+    if typ != 0x0002:
+        raise ValueError("не таблица ресурсов")
+    pool, out = None, []
+    for ctype, chead, start, end in _chunks(data, header, len(data)):
+        if ctype == 0x0001 and pool is None:  # пул значений — до пакетов
+            pool = data[start:end]
+        elif ctype == 0x0200 and pool is not None and struct.unpack_from("<I", data, start + 8)[0] == res_id >> 24:
+            for t, th, ts, te in _chunks(data, start + chead, end):
+                if t != 0x0201 or data[ts + 8] != (res_id >> 16) & 0xFF:
+                    continue
+                value = _type_entry(data[ts:te], th, res_id & 0xFFFF)
+                if value is not None and value[0] == 0x03:
+                    config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
+                    lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
+                    (density,) = struct.unpack_from("<H", data, config + 14)
+                    out.append((lang, density, _string(pool, value[1])))
     return out
+
+
+def _type_entry(t: bytes, header: int, index: int) -> tuple[int, int] | None:
+    """(тип, данные) записи index чанка ResTable_type; записи нет или она составная (стиль, массив) — None.
+    Смещения записей: u32, u16 ×4 (FLAG_OFFSET16) или пары (индекс, смещение ×4) (FLAG_SPARSE)."""
+    flags = t[9]
+    count, entries = struct.unpack_from("<II", t, 12)
+    if flags & 0x01:
+        pairs = (struct.unpack_from("<HH", t, header + 4 * i) for i in range(count))
+        off = next((o * 4 for i, o in pairs if i == index), None)
+    elif index >= count:
+        off = None
+    elif flags & 0x02:
+        (o,) = struct.unpack_from("<H", t, header + 2 * index)
+        off = None if o == 0xFFFF else o * 4
+    else:
+        (o,) = struct.unpack_from("<I", t, header + 4 * index)
+        off = None if o == 0xFFFFFFFF else o
+    if off is None:
+        return None
+    p = entries + off
+    size, eflags = struct.unpack_from("<HH", t, p)
+    if eflags & 0x08:  # FLAG_COMPACT: ключ, флаги (тип — в старшем байте), данные
+        return eflags >> 8, struct.unpack_from("<I", t, p + 4)[0]
+    if eflags & 0x01:  # FLAG_COMPLEX
+        return None
+    _, _, dtype, value = struct.unpack_from("<HBBI", t, p + size)
+    return dtype, value
 
 
 def _len8(b: bytes, p: int) -> tuple[int, int]:

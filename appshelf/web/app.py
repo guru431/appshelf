@@ -25,7 +25,7 @@ from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p",  # /p — гость публичной полки, по PIN
           "/google/start", "/google/callback")
-PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/")
+PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/", "/apk/")  # /apk/ — постоянная ссылка на APK, секрет — токен полки
 # страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
 APPLE_PATHS = ("/history", "/blocked", "/api/status")
 APPLE_PREFIXES = ("/apps/", "/history/", "/blocked/", "/acct/")

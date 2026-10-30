@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
-ATTR_IDS = {"label": 0x01010001, "minSdkVersion": 0x0101020c, "versionCode": 0x0101021b,
+ATTR_IDS = {"label": 0x01010001, "icon": 0x01010002, "minSdkVersion": 0x0101020c, "versionCode": 0x0101021b,
             "versionName": 0x0101021c, "targetSdkVersion": 0x01010270}
 T_REF, T_STRING, T_INT, T_BOOL = 0x01, 0x03, 0x10, 0x12
 V2_ID, V3_ID = 0x7109871a, 0xf05368c0
@@ -120,6 +120,39 @@ def _axml(manifest_attrs, children, utf8: bool) -> bytes:
     return struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
 
 
+# --- resources.arsc ----------------------------------------------------------
+
+def arsc(resources: dict[int, list[tuple[str, int, str]]]) -> bytes:
+    """Таблица ресурсов пакета 0x7f: {id: [(язык, плотность, строка)]} — строковые значения (название, путь к файлу)
+    по конфигурациям; один чанк типа на (тип, язык, плотность), смещения записей — u32."""
+    strings = sorted({s for values in resources.values() for _, _, s in values})
+    chunks = {}
+    for res_id, values in resources.items():
+        for lang, density, s in values:
+            chunks.setdefault(((res_id >> 16) & 0xFF, lang, density), {})[res_id & 0xFFFF] = strings.index(s)
+    body = _string_pool([], False) + _string_pool([], False)  # имена типов и ключей — разбору не нужны
+    for (type_id, lang, density), entries in sorted(chunks.items()):
+        count = max(entries) + 1
+        config = struct.pack("<IHH2s2sBBH", 64, 0, 0, lang.encode().ljust(2, b"\0"), b"\0\0", 0, 0, density)
+        config = config.ljust(64, b"\0")
+        offsets, data = [], b""
+        for i in range(count):
+            if i in entries:
+                offsets.append(len(data))
+                data += struct.pack("<HHI", 8, 0, 0) + struct.pack("<HBBI", 8, 0, T_STRING, entries[i])
+            else:
+                offsets.append(0xFFFFFFFF)
+        header = 20 + len(config)
+        start = header + 4 * count
+        body += struct.pack("<HHIBBHII", 0x0201, header, start + len(data), type_id, 0, 0, count, start) + config \
+            + b"".join(struct.pack("<I", o) for o in offsets) + data
+    pkg_header = 288
+    package = struct.pack("<HHII", 0x0200, pkg_header, pkg_header + len(body), 0x7f) + "x".encode("utf-16-le").ljust(256, b"\0") \
+        + struct.pack("<IIIII", 0, 0, 0, 0, 0) + body
+    table = _string_pool(strings, False) + package
+    return struct.pack("<HHII", 0x0002, 12, 12 + len(table), 1) + table
+
+
 # --- подпись -----------------------------------------------------------------
 
 def _lp(data: bytes) -> bytes:
@@ -158,8 +191,10 @@ def pkcs7(cert: bytes) -> bytes:
 def make_apk(path: Path, *, package="ru.example.app", version_code=1, version_name="1.0", min_sdk=26, target_sdk=34,
              label="Пример", cert=b"CERT-A", scheme="v2", v3_cert: bytes | None = None, split=None,
              required_splits=False, split_types="", abis=(), icon: bytes | None = None,
-             files: dict[str, bytes] | None = None, utf8=False) -> Path:
-    """scheme: "v1", "v2", "v3", "v2+v3" или None (без подписи); label "@0x…" — ссылка на ресурс."""
+             files: dict[str, bytes] | None = None, utf8=False, icon_ref: int | None = None,
+             resources: dict[int, list[tuple[str, int, str]]] | None = None) -> Path:
+    """scheme: "v1", "v2", "v3", "v2+v3" или None (без подписи); label "@0x…" — ссылка на ресурс; icon_ref —
+    android:icon ссылкой; resources — resources.arsc (см. arsc)."""
     manifest = [(False, "package", "str", package), (True, "versionCode", "int", version_code),
                 (True, "versionName", "str", version_name)]
     if split:
@@ -167,6 +202,8 @@ def make_apk(path: Path, *, package="ru.example.app", version_code=1, version_na
     if split_types:
         manifest.append((True, "requiredSplitTypes", "str", split_types))
     app = [(True, "label", "ref", int(label[1:], 16)) if label.startswith("@") else (True, "label", "str", label)]
+    if icon_ref is not None:
+        app.append((True, "icon", "ref", icon_ref))
     if required_splits:
         app.append((True, "isSplitRequired", "bool", True))
     children = [("uses-sdk", [(True, "minSdkVersion", "int", min_sdk), (True, "targetSdkVersion", "int", target_sdk)]),
@@ -181,6 +218,8 @@ def make_apk(path: Path, *, package="ru.example.app", version_code=1, version_na
             z.writestr("res/mipmap-xxhdpi-v4/ic_launcher.png", icon)
         for name, data in (files or {}).items():
             z.writestr(name, data)
+        if resources is not None:
+            z.writestr("resources.arsc", arsc(resources))
         if scheme == "v1":
             z.writestr("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n")
             z.writestr("META-INF/CERT.SF", b"Signature-Version: 1.0\r\n")

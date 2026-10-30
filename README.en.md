@@ -267,7 +267,9 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   check runs once a day; the server owner accepts the risk of losing access.
 - **Installing.** "Download APK" in Chrome on the phone; the first time Android asks to allow installs from the
   browser. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
-  whole APK: bundles (split APK, XAPK, APKS) are refused when added.
+  whole APK: bundles (split APK, XAPK, APKS) are refused when added. "Copy link" gives a permanent address
+  `<site address>/apk/<shelf token>/<package>.apk`: always the current version, opens without signing in (like the
+  files themselves); changing the shelf token (`rotate-token`, a new PIN of the public shelf) disables it too.
 - **Signature.** The first version sets the app's signature on the shelf. A new version signed with another
   certificate does not become current: the card shows "signature changed" and "Accept the new signature" — such a
   version will not install over the installed one, the app would have to be removed with its data. If the app came

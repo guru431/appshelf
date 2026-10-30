@@ -40,6 +40,11 @@ def file_url(cfg, shelf: db.Shelf, dir_name: str, file: str) -> str:
     return f"{cfg.public_base}/d/{shelf.shelf}/{dir_name}/{file}"
 
 
+def app_url(cfg, shelf: db.Shelf, package: str) -> str:
+    """Постоянная ссылка на приложение — всегда текущая версия (web/android.py, /apk/)."""
+    return f"{cfg.public_base}/apk/{shelf.shelf}/{package}.apk"
+
+
 def apk_name(package: str, version_name: str) -> str:
     return f"{package}-{SAFE_RE.sub('_', version_name) or 'v'}.apk"
 
@@ -89,8 +94,8 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     if app is None:
         if db.get_shelf(c, shelf.id) is None:  # участника удалили, пока качали: карточку в ничью полку не ставим
             raise store.AppGone(info.package)
-        db.put_app(c, shelf.id, info.package, info.label or name_hint.strip() or info.package, source, source_ref, now,
-                   google_account_id, paid)
+        title = info.label or name_hint.strip() or apk.resource_label(path) or info.package
+        db.put_app(c, shelf.id, info.package, title, source, source_ref, now, google_account_id, paid)
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)
     root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
@@ -101,7 +106,8 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         partial.mkdir(parents=True)
         apk_file = partial / apk_name(info.package, info.version_name)
         shutil.move(path, apk_file)  # tmp локально, архив на шаре: os.replace дал бы EXDEV
-        (partial / "icon.png").write_bytes(apk.extract_icon(apk_file) or icon or ipa.placeholder_png())
+        (partial / "icon.png").write_bytes(apk.extract_icon(apk_file) or icon or apk.resource_icon(apk_file)
+                                           or ipa.placeholder_png())
         for f in partial.iterdir():
             f.chmod(0o644)  # UMask служб 0077, а файлы отдаёт Apache (www-data)
         partial.chmod(0o755)

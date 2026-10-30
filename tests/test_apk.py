@@ -74,6 +74,34 @@ def test_icon_largest_launcher_png(tmp_path):
     assert apk.extract_icon(broken) is None
 
 
+LABEL, ICON = 0x7f0e0001, 0x7f0d0000
+SHORT_RES = {LABEL: [("", 0, "Aurora Store"), ("de", 0, "Aurora Laden")],
+             ICON: [("", 160, "res/-B.png"), ("", 640, "res/-x.png"), ("", 0xFFFF, "res/-a.xml")]}
+SHORT_FILES = {"res/-B.png": png_bytes(48), "res/-x.png": png_bytes(192), "res/-a.xml": b"\x03\x00\x08\x00"}
+
+
+def test_label_and_icon_from_resources(tmp_path):
+    """Название ссылкой @string и сокращённые пути ресурсов (res/-B.png) — как у Aurora Store из F-Droid: по имени
+    ic_launcher иконку не найти, название и файл иконки — через resources.arsc."""
+    path = make_apk(tmp_path / "a.apk", label=f"@{LABEL:#x}", icon_ref=ICON, resources=SHORT_RES, files=SHORT_FILES)
+    assert apk.read_apk(path).label == "" and apk.extract_icon(path) is None
+    assert apk.resource_label(path) == "Aurora Store"                       # без языка, а не немецкое
+    assert Image.open(io.BytesIO(apk.resource_icon(path))).size == (192, 192)  # самая большая, XML — мимо
+    ru = make_apk(tmp_path / "r.apk", label=f"@{LABEL:#x}", resources={LABEL: [("", 0, "Bank"), ("ru", 0, "Банк")]})
+    assert apk.resource_label(ru) == "Банк"
+    assert apk.resource_icon(ru) is None                                    # android:icon нет
+
+
+def test_resources_missing_or_broken(tmp_path):
+    no_arsc = make_apk(tmp_path / "n.apk", label=f"@{LABEL:#x}", icon_ref=ICON, files=SHORT_FILES)
+    assert (apk.resource_label(no_arsc), apk.resource_icon(no_arsc)) == ("", None)
+    broken = make_apk(tmp_path / "b.apk", label=f"@{LABEL:#x}", icon_ref=ICON,
+                      files={**SHORT_FILES, "resources.arsc": b"\x02\x00\x0c\x00\xff\xff\x00\x00garbage"})
+    assert (apk.resource_label(broken), apk.resource_icon(broken)) == ("", None)
+    literal = make_apk(tmp_path / "l.apk", label="Литерал", resources=SHORT_RES)
+    assert apk.resource_label(literal) == ""                                # не ссылка — read_apk уже дал название
+
+
 def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     huge = png_bytes(144) + b"\0" * (apk.ICON_MAX + 1)  # годный PNG с хвостом: без предела была бы выбрана она
     path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48),

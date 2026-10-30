@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import urllib.parse
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .. import apk, jobs, notify, people, store
 from ..android import db, fetch, links, net, pin
@@ -36,6 +37,7 @@ PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя п
 NO_PLAY_SOURCE = "Источником карточки Google Play не ставится — снимите её и добавьте приложение из Google Play"
 BY_PACKAGE = ("rustore", "appgallery", "fdroid", "apkpure")   # «Сменить источник» без адреса: ref — пакет карточки
 NOTICES = {fetch.SIGNER_DIFFERS: "подпись не как в RuStore", fetch.NOT_VERIFIED: "подпись не сверена"}
+TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")   # токен каталога полки (db.ensure_shelf)
 
 
 @dataclass(frozen=True)
@@ -150,7 +152,8 @@ def register_routes(app, w) -> None:
                       closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
                       sources=SOURCES, notices=NOTICES, android_version=apk.android_version,
                       apk_name=fetch.apk_name,
-                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f))
+                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
+                      app_url=lambda package: fetch.app_url(cfg, shelf, package))
 
     @app.get("/p", response_class=HTMLResponse)
     def guest(request: Request):
@@ -180,6 +183,21 @@ def register_routes(app, w) -> None:
             minutes = max(1, -(-int(left.total_seconds()) // 60))
             return guest_page(request, 429, f"Слишком много попыток с этого адреса, попробуйте через {minutes} мин")
         return guest_page(request, 429)  # closed: страница сама скажет «ввод временно закрыт»
+
+    @app.get("/apk/{token}/{file}")
+    def app_link(token: str, file: str):
+        """Постоянная ссылка на приложение («Скопировать ссылку»): переадресация на файл текущей версии. Без входа,
+        как сами файлы /d/: секрет — токен каталога полки, его смена (rotate-token, смена PIN) гасит и ссылку."""
+        package = file.removesuffix(".apk")
+        if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
+            return PlainTextResponse("not found", status_code=404)
+        with w.conn() as c:
+            shelf = db.shelf_by_token(c, token)
+            v = db.current_version(c, shelf.id, package) if shelf is not None else None
+        if v is None:
+            return PlainTextResponse("not found", status_code=404)
+        return RedirectResponse(fetch.file_url(cfg, shelf, v["dir"], fetch.apk_name(package, v["version_name"])),
+                                status_code=302)
 
     @app.get("/api/android/status")
     def api_status(request: Request, public: int = 0):
@@ -250,8 +268,9 @@ def _register_scope(app, w, scope: Scope):
                       status_url="/api/android/status" + ("?public=1" if scope.public else ""), sources=SOURCES,
                       notices=NOTICES,
                       android_version=apk.android_version, apk_name=fetch.apk_name,
-                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f), prefix=p, public=scope.public, edit=edit,
-                      guest=guest)
+                      url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
+                      app_url=lambda package: fetch.app_url(cfg, shelf, package), prefix=p, public=scope.public,
+                      edit=edit, guest=guest)
         set_section(w, resp, "android")
         return resp
 

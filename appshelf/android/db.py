@@ -110,6 +110,10 @@ def get_shelf(c, shelf_id: int) -> Shelf | None:
     return _shelf(c.execute("SELECT * FROM android_shelves WHERE id=?", (shelf_id,)).fetchone())
 
 
+def shelf_by_token(c, token: str) -> Shelf | None:
+    return _shelf(c.execute("SELECT * FROM android_shelves WHERE shelf=?", (token,)).fetchone())
+
+
 def all_shelves(c) -> list[Shelf]:
     return [_shelf(r) for r in c.execute("SELECT * FROM android_shelves ORDER BY id")]
 
@@ -178,8 +182,12 @@ def list_apps(c, shelf_id: int) -> list[AppView]:
 
 
 def has_current(c, shelf_id: int, package: str) -> bool:
-    return c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='current'",
-                     (shelf_id, package)).fetchone() is not None
+    return current_version(c, shelf_id, package) is not None
+
+
+def current_version(c, shelf_id: int, package: str):
+    return c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? AND role='current'",
+                     (shelf_id, package)).fetchone()
 
 
 def apps_to_check(c) -> list[sqlite3.Row]:
