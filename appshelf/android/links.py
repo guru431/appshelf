@@ -53,7 +53,7 @@ def _page(u: urllib.parse.SplitResult) -> tuple[str, str] | None:
             if mark in APPGALLERY_MARKS:
                 return "appgallery", value
         return None
-    if host in FDROID_HOSTS and len(parts) in (2, 3) and parts[-2] == "packages":
+    if host in FDROID_HOSTS and len(parts) in (2, 3) and parts[-2] in ("packages", "app"):  # /app/ — «Поделиться»
         return "fdroid", parts[-1]
     if host in APKPURE_HOSTS:
         if parts and parts[-1] in APKPURE_TAILS:

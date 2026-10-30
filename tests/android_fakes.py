@@ -67,6 +67,12 @@ class FakeSources:
             raise sig
         return sig
 
+    def apkpure_app(self, package: str) -> None:
+        """Проверка «APKPure отдаёт одним APK»: fail[пакет] — её отказ (SplitOnly)."""
+        self.calls.append(("apkpure_app", package))
+        if package in self.fail:
+            raise self.fail[package]
+
     def search(self, query: str) -> list:
         self.calls.append(("search", query))
         return list(self.found)

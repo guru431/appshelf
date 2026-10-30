@@ -119,14 +119,19 @@ class Sources:
         if source == "fdroid":
             return self._fetch_fdroid(ref, dest)
         if source == "apkpure":
-            self._wait()
-            app = apkpure.info(self.http, ref)
-            if app.kind != "apk":
-                raise SplitOnly(SPLIT_TEXT + self._hint(ref))
+            app = self.apkpure_app(ref)
             self._wait()
             apkpure.download(self.http, app, dest)
             return Got(app.name, "", self._icon(app.icon_url, dest))
         raise SourceError(f"источник «{source}» не скачивается")
+
+    def apkpure_app(self, package: str) -> apkpure.PureApp:
+        """Сведения APKPure; только набор файлов (XAPK) — SplitOnly с подсказкой, где пакет есть одним APK."""
+        self._wait()
+        app = apkpure.info(self.http, package)
+        if app.kind != "apk":
+            raise SplitOnly(SPLIT_TEXT + self._hint(package))
+        return app
 
     def rustore_signature(self, package: str) -> str | None:
         """Подпись пакета в RuStore — образец для AppGallery, F-Droid и APKPure. Пакета нет (404) — None; RuStore не

@@ -172,6 +172,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
         try:
             reference = env.sources.rustore_signature(ref) if source == "apkpure" else None  # не ответил — отказ
             if source == "apkpure" and reference is None and not ack and not db.has_current(c, shelf.id, ref):
+                env.sources.apkpure_app(ref)  # только XAPK — отказ сразу: галочка его не поставит
                 raise SourceError(NEED_ACK)
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
                                     allow_paid=_own_shelf(shelf, account))

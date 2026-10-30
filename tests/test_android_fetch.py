@@ -262,6 +262,14 @@ def test_apkpure_without_reference_needs_ack(ctx, conn, clock, tmp_path):
     assert (versions(conn, shelf)["current"], app["last_error"]) == (2, fetch.NOT_VERIFIED)
 
 
+def test_apkpure_split_refused_before_ack(ctx, conn, clock, tmp_path):
+    """XAPK галочка не спасёт: отказ «набором файлов» — сразу, а не просьба добавить ещё раз с галочкой."""
+    ctx.sources.fail[PKG] = SplitOnly(SPLIT_TEXT)
+    shelf, job = add_from(ctx, conn, clock, "apkpure", make_apk(tmp_path / "a.apk"), ack=False)
+    assert (job["status"], job["error"]) == ("error", SPLIT_TEXT)
+    assert not any(call[0] == "fetch" for call in ctx.sources.calls)
+
+
 @pytest.mark.parametrize("source", ["appgallery", "fdroid"])
 def test_appgallery_signer_differs_from_rustore_notice(ctx, conn, clock, tmp_path, source):
     ctx.sources.signatures[PKG] = cert_sha(b"CERT-B")
