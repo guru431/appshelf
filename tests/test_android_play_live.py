@@ -18,7 +18,7 @@ def test_details_of_known_free_app():
     if not gid.isdigit():
         pytest.skip("нет APPSHELF_PLAY_TEST_GID в .env — id подключённого к Play Google-аккаунта")
     r = remote("sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; "
-               f"/var/_sh/appshelf/.venv/bin/python -c \"{SCRIPT.format(gid=int(gid), pkg=PACKAGE)}\"'")
+               "/var/_sh/appshelf/.venv/bin/python -'", input=SCRIPT.format(gid=int(gid), pkg=PACKAGE))
     assert r.returncode == 0, r.stderr[-2000:]
     package, version_code, paid, owned = r.stdout.split()
     assert (package, paid, owned) == (PACKAGE, "0", "1") and int(version_code) > 0

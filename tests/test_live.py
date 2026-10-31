@@ -34,10 +34,10 @@ DEVICE_MAC = ("sudo -u appshelf /var/_sh/appshelf/.venv/bin/python -c \"import s
               "'SELECT device_mac FROM accounts WHERE id=1').fetchone()[0])\"")
 
 
-def remote(cmd: str) -> subprocess.CompletedProcess:
+def remote(cmd: str, *, input: str | None = None) -> subprocess.CompletedProcess:
     if not ENV.get("APPSHELF_SSH"):
         pytest.skip("нет APPSHELF_SSH в .env")
-    return subprocess.run([*SSH, cmd], capture_output=True, text=True, encoding="utf-8", timeout=200)
+    return subprocess.run([*SSH, cmd], input=input, capture_output=True, text=True, encoding="utf-8", timeout=200)
 
 
 def as_appshelf() -> str:

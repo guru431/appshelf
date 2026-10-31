@@ -320,6 +320,21 @@ def test_socks5h_sends_hostname_and_auth():
     assert sock.sent == b"\x05\x01\x00" + b"\x05\x01\x00\x03\x09a.example\x01\xbb"
 
 
+def test_socks5h_sends_idn_as_ascii():
+    sock = Sock(b"\x05\x00\x05\x00\x00\x01" + bytes(6))
+    net.tunnel("socks5h://proxy.example:1080", "пример.рф", 443, 5, dialer(sock, []))
+    name = b"xn--e1afmkfd.xn--p1ai"
+    assert sock.sent == b"\x05\x01\x00\x05\x01\x00\x03" + bytes([len(name)]) + name + b"\x01\xbb"
+
+
+@pytest.mark.parametrize("host", ["a" * 64 + ".example", "\ud800.example", ".".join(["a" * 63] * 4) + ".a"])
+def test_socks5h_invalid_hostname_is_fetch_error_and_closes_socket(host):
+    sock = Sock(b"\x05\x00")
+    with pytest.raises(net.FetchError, match="имя узла"):
+        net.tunnel("socks5h://user:secret@proxy.example:1080", host, 443, 5, dialer(sock, []), "de")
+    assert sock.closed
+
+
 def test_proxy_failure_no_direct_fallback():
     dialed, resolved = [], []
 

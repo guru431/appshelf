@@ -38,12 +38,12 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
     @app.get("/google/start")
     def start(request: Request, next: str = "/", add: int = 0):
         """Поток — в cookie, браузер — на страницу Google. add=1 — «Добавить Google» из панели: маршрут открыт без
-        входа, вошедших ищем сами; никого нет или ссылка пришла с чужого сайта (Sec-Fetch-Site ставит браузер) —
+        входа, вошедших ищем сами; никого нет или Sec-Fetch-Site не подтверждает свою навигацию —
         обычный вход: иначе чужая страница заводила бы участников от имени вошедшего."""
         if not cfg.google_enabled:
             return not_found()
         add_uid = None
-        if add and request.headers.get("sec-fetch-site") != "cross-site":
+        if add and request.headers.get("sec-fetch-site") in ("same-origin", "none"):
             found = w.person(request)
             add_uid = found[4].id if found is not None else None
         flow = google.new_flow(safe_next(next) if len(next) <= MAX_NEXT else "/", add_uid, w.epoch())

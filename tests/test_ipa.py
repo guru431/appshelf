@@ -27,6 +27,16 @@ def test_read_info_without_metadata_fails(tmp_path):
         ipa.read_info(make_ipa(tmp_path / "a.ipa", metadata=False))
 
 
+@pytest.mark.parametrize("families", ["1,2", [1, "2"], [True], {"phone": 1}])
+def test_read_info_rejects_invalid_device_family(tmp_path, families):
+    with pytest.raises(ipa.IpaError, match="UIDeviceFamily"):
+        ipa.read_info(make_ipa(tmp_path / "a.ipa", families=families))
+
+
+def test_read_info_accepts_integer_device_family(tmp_path):
+    assert ipa.read_info(make_ipa(tmp_path / "a.ipa", families=2)).device_family == "ipad"
+
+
 @pytest.mark.parametrize("missing, text", [
     ({"external_id": None}, "softwareVersionExternalIdentifier"),
     ({"item_id": None}, "itemId"),

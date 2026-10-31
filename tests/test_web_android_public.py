@@ -3,7 +3,7 @@ import json
 import pytest
 
 from apk_factory import make_apk
-from appshelf import store
+from appshelf import jobs, store
 from appshelf.android import db, fetch, pin, rustore
 from helpers import make_account, sign_in
 
@@ -119,6 +119,41 @@ def test_pin_change_refused_while_downloading(web, cfg, conn, clock, tmp_path):
     cfg.archive.rename(cfg.archive.with_name("gone"))                              # шара не смонтирована
     assert web.client.post("/android/public/pin", data={"pin": "111111"}).status_code == 503
     assert pin.epoch(conn) == 1
+
+
+def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, clock, tmp_path, make_web,
+                                                               monkeypatch):
+    shelf = add_public(web, conn, tmp_path)
+    web.client.post("/android/public/pin", data={"pin": "482913"})
+    guest = make_web(cfg, conn)
+    guest.client.post("/p", data={"pin": "482913"})
+    old_cookie = guest.client.cookies.get(pin.COOKIE)
+    real_replace = fetch.os.replace
+
+    def interrupted(src, dst):
+        if src == cfg.archive / shelf.shelf:
+            raise RuntimeError("interrupted before rename")
+        return real_replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fetch.os, "replace", interrupted)
+        with pytest.raises(RuntimeError, match="interrupted before rename"):
+            web.client.post("/android/public/pin", data={"pin": "111111"})
+    pending = db.public_shelf(conn)
+    assert pending.shelf == shelf.shelf and pending.shelf_next
+    assert pin.try_pin(conn, "ip:x", "111111", clock.iso()).result == "ok"
+    assert not pin.guest_ok(web.app.state.w.key, old_cookie, pin.epoch(conn), clock.iso())
+    assert guest.client.get("/p").status_code == 503
+    assert guest.client.post("/p", data={"pin": "111111"}).status_code == 503
+    old_link = f"/apk/{shelf.shelf}/{PKG}.apk"
+    assert guest.client.get(old_link).status_code == 404
+    jobs.move_shelves(cfg, conn)
+    new = db.public_shelf(conn)
+    assert new.shelf == pending.shelf_next and new.shelf_next == ""
+    assert not (cfg.archive / shelf.shelf).exists()
+    guest.client.post("/p", data={"pin": "111111"})
+    page = guest.client.get("/p").text
+    assert f"/d/{new.shelf}/" in page and f"/d/{shelf.shelf}/" not in page
 
 
 def test_bad_pin_format_on_owner_form(web, conn):

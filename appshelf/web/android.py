@@ -116,8 +116,8 @@ def register_routes(app, w) -> None:
 
     @app.post("/android/public/pin", response_class=HTMLResponse, dependencies=owner)
     def set_pin(request: Request, value: str = Form("", alias="pin")):
-        """Задать или сменить PIN. Смена — сначала новый токен каталога публичной полки (spec §8): пересланные раньше
-        ссылки на файлы перестают работать; не вышло — PIN прежний."""
+        """PIN и намерение сменить токен каталога — одной транзакцией; перенос файлов после COMMIT.
+        Занята полка или архив недоступен — PIN прежний, прерванный перенос доделает запуск службы."""
         if not pin.valid_pin(value):
             return public_page(request, 400, PIN_FORMAT)
         error = None
@@ -125,13 +125,13 @@ def register_routes(app, w) -> None:
             shelf = db.public_shelf(c)
             try:
                 if pin.is_set(c) and shelf is not None:
-                    fetch.rotate_shelf(cfg, c, shelf.id)
+                    fetch.rotate_shelf(cfg, c, shelf.id, transaction=pin.setting(c, value, w.now()))
+                else:
+                    pin.set_pin(c, value, w.now())
             except jobs.AccountBusy:
                 error = (409, PIN_BUSY)
             except jobs.ArchiveUnavailable:
                 error = (503, ARCHIVE_DOWN)
-            else:
-                pin.set_pin(c, value, w.now())
         return public_page(request, *error) if error else back(PUBLIC.prefix)
 
     @app.post("/android/public/pin/reopen", dependencies=owner)
@@ -147,6 +147,8 @@ def register_routes(app, w) -> None:
             shelf = db.public_shelf(c)
             if shelf is None or not pin.is_set(c):
                 return w.page(request, "guest.html", "guest", status_code, configured=False)
+            if shelf.shelf_next:
+                return PlainTextResponse("Полка временно недоступна, попробуйте позже", status_code=503)
             guest = pin.guest_ok(w.key, request.cookies.get(pin.COOKIE, ""), pin.epoch(c), w.now())
             closed = pin.closed_until(c, w.now())
             apps = [a for a in db.list_apps(c, shelf.id) if a.current is not None]
@@ -165,7 +167,8 @@ def register_routes(app, w) -> None:
     def guest_pin(request: Request, value: str = Form("", alias="pin")):
         key = pin.client_key(request.headers.get("x-forwarded-for"), request.client.host if request.client else None)
         with w.conn() as c:
-            if db.public_shelf(c) is None or not pin.is_set(c):
+            shelf = db.public_shelf(c)
+            if shelf is None or shelf.shelf_next or not pin.is_set(c):
                 return guest_page(request)
             epoch = pin.epoch(c)  # до проверки: PIN сменили посередине — cookie прежней эпохи, гость введёт заново
             a = pin.try_pin(c, key, value, w.now())
@@ -195,7 +198,7 @@ def register_routes(app, w) -> None:
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
-            v = db.current_version(c, shelf.id, package) if shelf is not None else None
+            v = db.current_version(c, shelf.id, package) if shelf is not None and not shelf.shelf_next else None
         if v is None:
             return PlainTextResponse("not found", status_code=404)
         return RedirectResponse(fetch.file_url(cfg, shelf, v["dir"], fetch.apk_name(package, v["version_name"])),

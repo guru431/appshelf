@@ -46,7 +46,7 @@ def make_ipa(path: Path, *, item_id=123, bundle_id="ru.example.app", version="1.
     """item_id, bundle_id, external_id = None — ключа нет вовсе."""
     info = {"CFBundleIdentifier": bundle_id, "CFBundleShortVersionString": version, "CFBundleVersion": build,
             "CFBundleDisplayName": display_name, "CFBundleName": "Example", "MinimumOSVersion": min_ios,
-            "UIDeviceFamily": list(families)}
+            "UIDeviceFamily": list(families) if isinstance(families, tuple) else families}
     meta = {"itemId": item_id, "softwareVersionExternalIdentifier": None if external_id is None else int(external_id),
             "itemName": display_name, "bundleShortVersionString": version}
     info = {k: v for k, v in info.items() if v is not None}

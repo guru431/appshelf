@@ -135,7 +135,12 @@ def _socks5(sock, host: str, port: int, user: str, password: str, fail) -> None:
         sock.sendall(bytes([1, len(u)]) + u + bytes([len(p)]) + p)
         if _recv_exact(sock, 2, fail)[1] != 0:
             raise fail("не принял логин и пароль")
-    name = host.encode("idna")
+    try:
+        name = host.encode("idna")
+    except UnicodeError:
+        raise fail("имя узла не кодируется IDNA") from None
+    if not 0 < len(name) <= 255:                       # SOCKS5 DOMAINNAME: длина в одном байте
+        raise fail("имя узла слишком длинное или пустое")
     sock.sendall(b"\x05\x01\x00\x03" + bytes([len(name)]) + name + port.to_bytes(2, "big"))
     ver, rep, _, atyp = _recv_exact(sock, 4, fail)
     if ver != 5 or rep != 0:

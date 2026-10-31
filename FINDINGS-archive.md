@@ -1,6 +1,70 @@
 # Findings archive — appshelf
 Отклонённые находки (`wontfix`, `deferred`) — чтобы ревью не заводило их заново. Новые записи сверху, отсюда ничего не удаляется.
 
+## 2026-10-31 · code-review role:review: Проксирование и исключение «!» заданы в разных <Location>-се... [P1]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/deploy/apache-appshelf.conf:31-36, 47-50, category=correctness
+**What:** Проксирование и исключение «!» заданы в разных <Location>-секциях, причём общая секция с ProxyPass идёт первой, а <Location /d/> с ProxyPass "!" — позже. По документации mod_proxy директивы ProxyPass внутри <Location>-секций обрабатываются в порядке появления в конфигурации, и побеждает первая совпавшая секция (в отличие от обычного слияния секций Apache, где поздняя переопределяет раннюю). Значит запросы к /d/... будут проксированы в приложение, а не отданы Alias-ом из архива: OTA-установка (itms-services на manifest.plist) и раздача IPA/APK сломаются. Комментарий в файле утверждает противоположное («более частные Location — после общего: они его переопределяют»), что для ProxyPass неверно.
+**Evidence:** `ProxyPass "unix:/run/appshelf/web.sock|http://localhost/" retry=1 timeout=180`
+**Proposal:** Перенести исключение выше общей секции: поставить <Location /d/> с ProxyPass "!" (и остальные частные Location) ДО <Location /> с рабочим ProxyPass, либо вынести ProxyPass на уровень VirtualHost с явным порядком (сначала ProxyPass /d/ !, затем общий ProxyPass /).
+**Status:** wontfix
+**Resolved:** 2026-10-31 — опровергнуто официальной документацией mod_proxy, раздел Ordering ProxyPass Directives in Locations: в отдельных Location действует последняя совпавшая секция, частные ставятся после общей. Правило first match относится к ProxyPass на уровне server/vhost. Текущий /d/ после / корректен; предложенная перестановка ломает исключение. https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxypass
+
+## 2026-10-31 · code-review role:review: Успешный ответ удаляет служебные cookie через w.set_cookie (... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/google_signin.py:128-131, category=inconsistency
+**What:** Успешный ответ удаляет служебные cookie через w.set_cookie (с samesite/secure/httponly по конфигу), а отказные пути удаляют google.COOKIE голым resp.delete_cookie(google.COOKIE, path="/") без secure/samesite/httponly атрибутов — атрибуты удаления должны совпадать с атрибутами установки, иначе некоторые браузеры не удалят cookie (несоответствие secure/domain/samesite).
+**Evidence:** `resp.delete_cookie(google.COOKIE, path="/")`
+**Proposal:** Удалять cookie через единый хелпер w.delete_cookie(resp, name), выставляющий те же secure/samesite/httponly, что и set_cookie.
+**Status:** wontfix
+**Resolved:** 2026-10-31 — предпосылка неверна: успешный и отказной callback используют одинаковый resp.delete_cookie с path=/; w.set_cookie на успешном пути устанавливает другую cookie WHO_COOKIE. Cookie заменяется по имени, домену и пути, а Secure/HttpOnly/SameSite не входят в её ключ (RFC 6265, 5.3). Домен/path совпадают с установкой; известный Google-вход уже проверяет исчезновение cookie потока. https://www.rfc-editor.org/rfc/rfc6265#section-5.3
+
+## 2026-10-31 · code-review role:review: Отсутствие поля 24 (asset) в записи обрабатывается как «неиз... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/apkpure.py:41-44, category=correctness
+**What:** Отсутствие поля 24 (asset) в записи обрабатывается как «неизвестный формат» (KeyError → SourceError(UNKNOWN)), хотя это легитимный ответ для пакета без APK-ассета; пользователь увидит вводящее в заблуждение «APKPure ответил в неизвестном формате» вместо «нет в APKPure».
+**Evidence:** `asset = pb.decode(app[24][0])`
+**Proposal:** Проверять наличие 24 в app и при отсутствии переходить к следующей записи (или отдавать отдельную ошибку «нет APK»).
+**Status:** wontfix
+**Resolved:** 2026-10-31 — легитимность version record без asset24 не подтверждена. Во всех сохранённых реальных ответах K-9, VLC, WhatsApp поле есть; свежий read-only запрос com.android.vending вернул 100 записей со 100 asset24. Известный ответ без версий уже даёт «нет в APKPure» (test_apkpure_missing_and_broken), повреждённая запись — UNKNOWN. Пропуск неизвестной записи замаскировал бы изменение формата и мог выбрать устаревшую версию.
+
+## 2026-10-31 · code-review role:review: В POST /google/{gid}/play пустое значение поля proxy обрабат... [P2]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/accounts.py:168-186, category=inconsistency
+**What:** В POST /google/{gid}/play пустое значение поля proxy обрабатывается по-разному для владельца и не-владельца. Не-владелец: пустой proxy заменяется прежним значением аккаунта (прокси сохраняется). Владелец: пустой proxy проходит валидацию (пустая строка не проверяется на вхождение в w.cfg.proxies) и затем безусловно записывается через people.set_proxy(c, g.id, proxy) — прежний прокси, выбранный владельцем ранее, молча сбрасывается в ''. Если форма не подставляет текущее значение в поле (шаблон play_connect.html не показан, но ветка не-владельца с комментарием «выбрал владелец раньше» явно рассчитана на пустое поле), повторное подключение с истёкшим токеном без намеренной смены прокси теряет настройку.
+**Evidence:** `proxy = proxy.strip() if proxy and proxy not in w.cfg.proxies: return connect_page(request, g, NO_PROXY, 400) elif proxy: return connect_page(request, g, OWNER_PROXY, 403) else: proxy = g.proxy # выбрал владелец раньше`
+**Proposal:** В ветке владельца при пустом proxy тоже подставлять прежнее значение: proxy = proxy.strip() or g.proxy (или явно различать «не менял» и «очистить»).
+**Status:** wontfix
+**Resolved:** 2026-10-31 — форма play_connect.html подставляет текущий прокси через selected; пустая option явно подписана «без прокси». Для владельца пустое значение — намеренное отключение прокси, для участника выбор скрыт и сохраняется решение владельца. Подстановка старого значения сделала бы отключение прокси невозможным. test_proxy_select_owner_only проверяет выбор владельца и сохранение у участника.
+
+## 2026-10-31 · code-review role:review: snapshot() вызывает list(NAMES).index(o.source) для сортиров... [P2]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/search.py:63-77, category=bug
+**What:** snapshot() вызывает list(NAMES).index(o.source) для сортировки. Если в options попадёт вариант с source, отсутствующим в NAMES (например, источник, добавленный в будущих версиях или подмена в тестах), поиск упадёт с ValueError посреди стрима, а не превратится в ошибку источника. Все текущие источники покрыты, но это хрупкая инварианта без защиты, в отличие от остальных мест, где источники фильтруются явно.
+**Evidence:** `ordered = sorted(options.values(), key=lambda o: (group_rank[o.package or o.related_package or o.ref], o.package or o.related_package or o.ref, list(NAMES).index(o.source)))`
+**Proposal:** Использовать словарь порядка с fallback: ORDER = {s: i for i, s in enumerate(NAMES)}; ключ — ORDER.get(o.source, len(ORDER)).
+**Status:** wontfix
+**Resolved:** 2026-10-31 — неизвестный source недостижим: options локален внутри events, add вызывается только с Option источников rustore/play/appgallery/apkpure/fdroid/fdroid_archive/github — все есть в NAMES. Внешние ответы source не задают; публичного ввода Option нет. Сценарий требует изменения кода или подмены инварианта тестом. test_android_search.py прошёл.
+
+## 2026-10-31 · code-review role:review: В catalog_page метка «новая версия» считается по x.current["... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/app.py:211-215, category=correctness
+**What:** В catalog_page метка «новая версия» считается по x.current["downloaded_at"], но условие требует лишь x.previous is not None. Если у приложения current отсутствует (например, статус error до первой успешной версии), а previous есть (маловероятно, но схема это не запрещает — ротация пишет previous и current атомарно, однако ручные состояния/миграции могут дать рассинхрон), обращение x.current["downloaded_at"] бросит TypeError и уронит выдачу каталога (500 на главной).
+**Evidence:** `fresh = {x.app_id for x in apps if x.previous is not None and datetime.fromisoformat(x.current["downloaded_at"]) >= since}`
+**Proposal:** Проверять оба: x.previous is not None and x.current is not None and datetime.fromisoformat(...) >= since.
+**Status:** wontfix
+**Resolved:** 2026-10-31 — повтор уже отклонённого 2026-10-26 довода. store.add_version атомарно переводит current в previous и вставляет новую current; unpublish удаляет все версии, _unpin удаляет только kept. Состояние previous без current требует ручного повреждения базы. Поведение метки проверяет test_catalog_marks_versions_downloaded_this_week; менять рабочую инварианту не требуется.
+
+## 2026-10-31 · code-review role:review: Вычисление «через N мин» при блокировке по IP: если a.until ... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/android.py:guest_pin, блок расчёта минут, category=correctness
+**What:** Вычисление «через N мин» при блокировке по IP: если a.until хранится без метки времени (наивная ISO-строка, как многие поля этой базы — created_at и т.п. пишутся через isoformat(timespec='seconds') без tz в ряде мест), вычитание наивного и aware datetime даст TypeError и 500 вместо страницы 429. Даже при согласованности формата отрицательный остаток после истечения срока даёт max(1, ...) — корректно, но само сравнение типов не гарантировано кодом в показанных файлах.
+**Evidence:** `left = datetime.fromisoformat(a.until) - datetime.fromisoformat(w.now())`
+**Proposal:** Привести оба значения к одному виду (например, срезать tzinfo или парсить через один хелпер) перед вычитанием, либо считать минуты на стороне pin.try_pin и возвращать готовое число.
+**Status:** wontfix
+**Resolved:** 2026-10-31 — смешение форматов не воспроизводится: production WebCtx.now использует jobs.now_iso с timezone.utc; pin.try_pin создаёт first_at/blocked_until из этого же now. created_at других таблиц в вычислении не участвует. Нормализация вручную повреждённых данных не нужна; тесты PIN используют внедрённые часы.
+
+## 2026-10-31 · code-review role:review: Разбор purchaseHistory берёт только первый элемент пути 1,1,... [P3]
+**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/play.py:purchases, category=correctness
+**What:** Разбор purchaseHistory берёт только первый элемент пути 1,1,2 ('pb.path(data, 1, 1, 2)[:1]') — если Play кладёт в ответ более одного контейнера на этом пути (например, при нескольких типах записей на странице), остальные молча теряются, и offset += len(page) затем сдвигает пагинацию неверно (пропуски покупок).
+**Evidence:** `page = [self._app(x, listed=True) for item in pb.path(data, 1, 1, 2)[:1]`
+**Proposal:** Проверить по живому ответу, сколько элементов приходит по пути 1,1,2; если больше одного — убрать [:1] и обрабатывать все, иначе оставить с комментарием-обоснованием из проверки.
+**Status:** wontfix
+**Resolved:** 2026-10-31 — в первичной схеме Aurora ListResponse.item (поле 2) optional, а не repeated; повторяются Item.subItem (11), их текущий код перебирает полностью. PurchaseHelper работает с singular item.subItemList. [:1] соответствует известному протоколу; изменение под синтетические несколько item необоснованно. test_purchases_fixture прошёл. Живая G3 остаётся за ранее принятым deferred решением. https://gitlab.com/AuroraOSS/gplayapi/-/raw/master/lib/src/main/proto/GooglePlay.proto
+
 ## 2026-10-29 · Ревью Android: «Добавить в публичную» показывает участникам адреса Google-аккаунтов владельца [P3]
 **Context:** ревью всей Android-работы, `appshelf/web/android.py` (`add_page` публичной области).
 **What:** GET `/android/public/add` открыт любому участнику; при нескольких подключённых к Play аккаунтах владельца форма Google Play показывает их адреса (выбор аккаунта), хотя добавлять на публичную может только владелец.

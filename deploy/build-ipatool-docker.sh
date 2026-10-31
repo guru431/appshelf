@@ -5,6 +5,7 @@
 # Пользователь appshelf в группу docker не входит (это равносильно root).
 # OpenSSL вшивается из образа на день сборки — после DSA на openssl пересобрать (ipatool/README.md).
 set -euo pipefail
+shopt -s nullglob  # пустой каталог патчей допустим и при вычислении отпечатка
 D="$(cd "$(dirname "$0")/.." && pwd)"
 . "$D/ipatool/UPSTREAM"                       # URL, COMMIT
 OUT="$D/bin/ipatool"
@@ -22,6 +23,7 @@ cp -r "$D/ipatool/patches" "$WORK/patches"
 # --network host и machine-id хоста — как при проверке 2026-10-05: тот же MAC (GUID запросов) и machine-id
 docker run --rm --network host -v /etc/machine-id:/etc/machine-id:ro -v "$WORK:/work" \
   -e URL="$URL" -e COMMIT="$COMMIT" debian:trixie bash -euo pipefail -c '
+  shopt -s nullglob
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
     ca-certificates git cmake build-essential perl pkg-config file \

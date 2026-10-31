@@ -21,7 +21,12 @@ fi
 R=/var/_sh/appshelf
 
 W="$("${BUILD[@]}" 'mktemp -d /tmp/appshelf-ipatool.XXXXXX')"
-trap '"${BUILD[@]}" "sudo -n rm -rf $W" || true' EXIT
+# stdout SSH не должен превратиться в произвольный путь или команду, в том числе в trap от root.
+if [[ ! "$W" =~ ^/tmp/appshelf-ipatool\.[[:alnum:]]{6}$ ]]; then
+  echo "ОШИБКА: хост сборки не вернул ожидаемый временный каталог" >&2
+  exit 1
+fi
+trap '"${BUILD[@]}" "sudo -n rm -rf -- $W" || true' EXIT
 "${SSH[@]}" "tar -C $R -cf - ipatool" | "${BUILD[@]}" "tar -xf - -C $W"
 "${BUILD[@]}" "mkdir $W/deploy && cat > $W/deploy/build-ipatool-docker.sh" < "$D/deploy/build-ipatool-docker.sh"
 "${BUILD[@]}" "sudo -n bash $W/deploy/build-ipatool-docker.sh"

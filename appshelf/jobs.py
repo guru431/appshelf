@@ -570,6 +570,7 @@ class Worker:
                  interval: float = 2.0, sleep: Callable[[float], None] = time.sleep):
         self.env, self.connect, self.purge = env, connect, purge
         self.interval, self.sleep = interval, sleep
+        self._unfinished = None
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.run_forever, name="appshelf-worker", daemon=True)
@@ -609,6 +610,7 @@ class Worker:
         self.purge()  # пароль шага входа живёт не дольше TTL, даже если страницу бросили
         c = self.connect()
         try:
+            self.retry_unfinished(c)
             if store.has_running(c, "update"):
                 with nightly_lock(self.env.cfg) as idle:
                     if idle:  # ночную проверку убили посреди скачивания — не ждать следующей ночи
@@ -618,16 +620,55 @@ class Worker:
                 job = android_db.take_job(c)
                 if job is None:
                     return False
+                self._unfinished = ("android_jobs", job["id"])
                 android_fetch.run_job(self.env, c, job)
+                self._unfinished = None
                 return True
+            self._unfinished = ("jobs", job["id"])
             acct = people.get_account(c, job["account_id"])
             if acct is None:  # Apple ID удалили между постановкой задания и его взятием
                 store.finish_job(c, job["id"], "cancelled", self.env.now(), ACCOUNT_GONE)
+                self._unfinished = None
                 return True
             self.run_job(c, job, acct)
+            self._unfinished = None
             return True
         finally:
             c.close()
+
+    def retry_unfinished(self, c) -> None:
+        """Запись итога могла не пройти из-за сбоя БД: повторяем только своё задание на следующем тике.
+        Ночь и другие обработчики не затрагиваются; при новой ошибке id остаётся до успешной транзакции."""
+        if self._unfinished is None:
+            return
+        table, job_id = self._unfinished
+        with store.tx(c):
+            job = c.execute(f"SELECT * FROM {table} WHERE id=? AND status IN ('queued', 'running')",
+                            (job_id,)).fetchone()
+            if job is not None:
+                if table == "jobs":
+                    store.requeue_job(c, job_id)
+                    if job["app_id"] is not None:
+                        store.set_app_status(c, job["account_id"], job["app_id"], "queued")
+                else:
+                    lost = False
+                    if job["kind"] == "upload":
+                        try:
+                            path = json.loads(job["payload"] or "{}").get("path", "")
+                            lost = not path or not Path(path).exists()
+                        except (ValueError, TypeError, AttributeError):
+                            lost = True
+                    if lost:
+                        android_db.finish_job(c, job_id, "error", self.env.now(), android_fetch.UPLOAD_LOST)
+                    else:
+                        android_db.requeue_job(c, job_id)
+                    if job["package"]:
+                        if lost:
+                            android_fetch.app_failed(c, job["shelf_id"], job["package"],
+                                                     android_fetch.SourceError(android_fetch.UPLOAD_LOST), self.env.now())
+                        else:
+                            android_db.set_status(c, job["shelf_id"], job["package"], "queued")
+        self._unfinished = None
 
     def run_job(self, c, job, acct) -> None:
         env, app_id = self.env, job["app_id"]

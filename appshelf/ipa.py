@@ -62,6 +62,8 @@ def read_info(path: Path) -> IpaInfo:
         raise IpaError("в iTunesMetadata.plist нет softwareVersionExternalIdentifier")
     fam = info.get("UIDeviceFamily", [1])
     fam = [fam] if isinstance(fam, int) else fam
+    if not isinstance(fam, list) or any(type(f) is not int for f in fam):
+        raise IpaError("в Info.plist UIDeviceFamily должен содержать целые номера устройств")
     return IpaInfo(
         item_id=item_id,
         bundle_id=bundle_id,

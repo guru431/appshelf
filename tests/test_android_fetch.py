@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,30 @@ def on_shelf(cfg, shelf) -> list[str]:
 def versions(conn, shelf) -> dict:
     return {r["role"]: r["version_code"] for r in conn.execute(
         "SELECT role, version_code FROM android_versions WHERE shelf_id=?", (shelf.id,))}
+
+
+def test_job_shelf_read_failure_finishes_job(ctx, conn, clock, monkeypatch):
+    shelf = shelf_of(conn, clock)
+    db.put_app(conn, shelf.id, PKG, "Пример", "rustore", PKG, clock.iso())
+    jid = db.enqueue(conn, shelf.id, "check", clock.iso(), package=PKG)
+    job = db.take_job(conn)
+
+    def failed_read(*args):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(db, "get_shelf", failed_read)
+    fetch.run_job(ctx.env, conn, job)
+    assert conn.execute("SELECT status FROM android_jobs WHERE id=?", (jid,)).fetchone()[0] == "error"
+    assert db.get_app(conn, shelf.id, PKG)["status"] == "error"
+
+
+def test_job_invalid_payload_finishes_job(ctx, conn, clock):
+    shelf = shelf_of(conn, clock)
+    jid = db.enqueue(conn, shelf.id, "add", clock.iso())
+    conn.execute("UPDATE android_jobs SET payload='{' WHERE id=?", (jid,))
+    fetch.run_job(ctx.env, conn, db.take_job(conn))
+    job = conn.execute("SELECT status, error FROM android_jobs WHERE id=?", (jid,)).fetchone()
+    assert job["status"] == "error" and "JSONDecodeError" in job["error"]
 
 
 def test_add_from_rustore_puts_current_version(ctx, cfg, conn, clock, tmp_path, monkeypatch):

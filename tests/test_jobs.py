@@ -114,6 +114,60 @@ def test_member_expiry_sends_no_mail(ctx, cfg, conn, clock):
     assert people.get_account(conn, petr.id).session == "expired" and ctx.sent == []
 
 
+def test_expired_job_recovers_on_next_tick_after_failed_requeue(ctx, cfg, conn, clock, monkeypatch):
+    published(conn, clock)
+    other = store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    assert other
+    conn.execute("UPDATE jobs SET status='running' WHERE kind='check_removed'")
+    ctx.tool.errors["download"] = SessionExpired("session_expired", "истёк")
+    w = worker(ctx, cfg)
+    real_requeue = store.requeue_job
+
+    def locked(*args):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "requeue_job", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        w.tick()
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "running"
+    with pytest.raises(sqlite3.OperationalError):
+        w.tick()
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "running"
+    monkeypatch.setattr(store, "requeue_job", real_requeue)
+    ctx.tool.errors["download"] = SessionExpired("session_expired", "истёк")
+    assert w.tick() is True
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "queued"
+    assert store.list_apps(conn, 1)[0].status == "queued"
+    assert people.get_account(conn, 1).session == "expired"
+    assert conn.execute("SELECT status FROM jobs WHERE kind='check_removed'").fetchone()[0] == "running"
+
+
+@pytest.mark.parametrize("invalid_payload", [False, True])
+def test_failed_android_upload_result_is_recovered_without_missing_file(ctx, cfg, conn, clock, monkeypatch,
+                                                                      invalid_payload):
+    shelf = android_db.ensure_shelf(conn, 1, clock.iso())
+    up = cfg.tmp_dir / "web" / "up.apk"
+    up.parent.mkdir(parents=True)
+    up.write_bytes(b"broken apk")
+    jid = android_db.enqueue(conn, shelf.id, "upload", clock.iso(), payload={"path": str(up)})
+    if invalid_payload:
+        conn.execute("UPDATE android_jobs SET payload='{' WHERE id=?", (jid,))
+    w = worker(ctx, cfg)
+    real_finish = android_db.finish_job
+
+    def locked(*args):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(android_db, "finish_job", locked)
+    with pytest.raises(sqlite3.OperationalError):
+        w.tick()
+    assert up.exists() == invalid_payload
+    monkeypatch.setattr(android_db, "finish_job", real_finish)
+    assert w.tick() is False
+    job = conn.execute("SELECT status, error FROM android_jobs WHERE id=?", (jid,)).fetchone()
+    assert job["status"] == "error" and job["error"] == jobs.android_fetch.UPLOAD_LOST
+
+
 def test_low_space_fails_job_and_mails_once(ctx, cfg, conn, clock, tmp_path):
     published(conn, clock, 1)
     published(conn, clock, 2)

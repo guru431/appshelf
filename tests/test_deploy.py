@@ -1,8 +1,15 @@
+import hashlib
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
 SRC_HASH = 'cat "$R/ipatool/UPSTREAM" "$R"/ipatool/patches/*.patch | sha256sum | cut -d\' \' -f1'
+BASH = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
 
 
 def test_only_committed_head_is_deployed():
@@ -67,6 +74,85 @@ def test_ipatool_source_hash_matches_between_build_and_deploy():
     assert SRC_HASH in install and SRC_HASH.replace("$R", "$D") in docker
     assert '"$OUT.src-sha256"' in docker
     assert '"$R/bin/ipatool.src-sha256"' in install and '"$R/bin/ipatool.src-sha256"' in build
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("patched", [False, True])
+@pytest.mark.parametrize("script", ["install.sh", "build-ipatool-docker.sh"])
+def test_ipatool_source_hash_accepts_empty_patch_directory(tmp_path, script, patched):
+    source = tmp_path / "ipatool"
+    patches = source / "patches"
+    patches.mkdir(parents=True)
+    upstream = b"URL=https://example.test/ipatool.git\nCOMMIT=123\n"
+    (source / "UPSTREAM").write_bytes(upstream)
+    content = upstream
+    if patched:
+        for name, data in (("02-b.patch", b"second\n"), ("01-a.patch", b"first\n")):
+            (patches / name).write_bytes(data)
+        content += b"first\nsecond\n"
+    text = (DEPLOY / script).read_text(encoding="utf-8")
+    options = "\n".join(line for line in text.splitlines() if line.startswith("shopt "))
+    command = next(line for line in text.splitlines() if SRC_HASH.replace("$R", "$D") in line
+                   or SRC_HASH in line)
+    if script == "install.sh":
+        command += '\nprintf "%s" "$want"'
+    else:
+        command += '\ncat "$OUT.src-sha256"'
+    env = {**os.environ, "R": tmp_path.as_posix(), "D": tmp_path.as_posix(),
+           "OUT": (tmp_path / "ipatool-bin").as_posix()}
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", options + "\n" + command],
+                            env=env, capture_output=True, text=True, encoding="utf-8", timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == hashlib.sha256(content).hexdigest()
+
+
+def run_mock_build(tmp_path, workdir, mktemp_status=0, other_status=0):
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    script = deploy / "build-ipatool.sh"
+    script.write_bytes((DEPLOY / script.name).read_bytes())
+    (deploy / "build-ipatool-docker.sh").write_text("# mocked build\n", encoding="utf-8")
+    log = tmp_path / "ssh.log"
+    env = {**os.environ, "APPSHELF_SSH": "deploy@example.test", "APPSHELF_BUILD_SSH": "",
+           "MOCK_WORKDIR": workdir, "MOCK_MKTEMP_STATUS": str(mktemp_status),
+           "MOCK_OTHER_STATUS": str(other_status), "MOCK_SSH_LOG": log.as_posix()}
+    wrapper = '''
+ssh() {
+  local command="${!#}"
+  printf '%s\\0' "$command" >> "$MOCK_SSH_LOG"
+  if [ "$command" = 'mktemp -d /tmp/appshelf-ipatool.XXXXXX' ]; then
+    printf '%s' "$MOCK_WORKDIR"
+    return "$MOCK_MKTEMP_STATUS"
+  fi
+  return "$MOCK_OTHER_STATUS"
+}
+source "$0"
+'''
+    result = subprocess.run([BASH, "-c", wrapper, script.as_posix()], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    return result, log.read_bytes().decode("utf-8").rstrip("\0").split("\0")
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("workdir, status", [
+    ("", 0), ("/", 0), ("/tmp/appshelf-ipatool.ABC", 0),
+    ("/tmp/appshelf-ipatool.ABCDEF;touch /tmp/unexpected", 0),
+    ("/tmp/appshelf-ipatool.ABCDEF\n/tmp/another", 0),
+    ("/tmp/appshelf-ipatool.ABCDEF", 1),
+])
+def test_build_refuses_invalid_or_failed_remote_temp_path(tmp_path, workdir, status):
+    result, commands = run_mock_build(tmp_path, workdir, mktemp_status=status)
+    assert result.returncode != 0
+    assert commands == ["mktemp -d /tmp/appshelf-ipatool.XXXXXX"]
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("other_status", [0, 17])
+def test_build_cleans_only_valid_remote_temp_path_on_success_and_failure(tmp_path, other_status):
+    result, commands = run_mock_build(tmp_path, "/tmp/appshelf-ipatool.aB3dE9\n",
+                                      other_status=other_status)
+    assert result.returncode == other_status, result.stderr
+    assert commands[-1] == "sudo -n rm -rf -- /tmp/appshelf-ipatool.aB3dE9"
 
 
 def test_ipatool_built_from_deployed_sources_and_checked_on_server_before_swap():

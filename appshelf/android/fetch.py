@@ -305,12 +305,14 @@ def run_job(env, c, job) -> None:
     """Задание обработчика: add (payload source, ref, name; play — и account, apkpure — и ack), upload (path, name,
     package?), check (package; после «Сменить источник» — payload previous: отказ нового источника возвращает
     прежний). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
-    shelf = db.get_shelf(c, job["shelf_id"])
-    payload = json.loads(job["payload"]) if job["payload"] else {}
-    package = job["package"] or payload.get("package", "")
+    shelf, payload = None, {}
+    package = job["package"] or ""
     work = env.cfg.tmp_dir / "web" / f"android-{job['id']}"
     gid = None
     try:
+        payload = json.loads(job["payload"]) if job["payload"] else {}
+        package = package or payload.get("package", "")
+        shelf = db.get_shelf(c, job["shelf_id"])
         if shelf is None:
             raise store.AppGone(package)
         card = db.get_app(c, shelf.id, package) if package else None
@@ -365,23 +367,24 @@ def run_job(env, c, job) -> None:
             jobs.low_space(env, c, e)
         db.finish_job(c, job["id"], "error", env.now(), describe(e))
         if package:
-            app_failed(c, shelf.id, package, e, env.now())
+            app_failed(c, job["shelf_id"], package, e, env.now())
     finally:
-        if job["kind"] == "upload":
+        if job["kind"] == "upload" and isinstance(payload, dict) and payload.get("path"):
             Path(payload["path"]).unlink(missing_ok=True)
         shutil.rmtree(work, ignore_errors=True)
 
 
-def rotate_shelf(cfg, c, shelf_id: int) -> db.Shelf | None:
+def rotate_shelf(cfg, c, shelf_id: int, *, transaction=None) -> db.Shelf | None:
     """Новый случайный токен каталога Android-полки: appshelf rotate-token и смена PIN публичной полки (spec §7, §8).
     Файлы внутри не меняются — ссылки на APK строятся на странице. Как jobs.move_shelf: новый токен сначала ложится
     в shelf_next, сбой посередине доделает jobs.move_shelves; под замком скачивания store_apk не пишет в прежний
     каталог. Идёт задание полки или чьё-то скачивание — AccountBusy, архив недоступен — ArchiveUnavailable; полку
-    удалили, пока ждали замок, — None."""
+    удалили, пока ждали замок, — None. transaction позволяет сменить PIN вместе с записью shelf_next:
+    после COMMIT незавершённый перенос доделывается уже с новым PIN."""
     jobs._archive(cfg)
     try:
         with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT):
-            with store.tx(c):
+            with transaction if transaction is not None else store.tx(c):
                 if c.execute("SELECT 1 FROM android_jobs WHERE shelf_id=? AND status='running'",
                              (shelf_id,)).fetchone() is not None:
                     raise jobs.AccountBusy(f"Android-полка №{shelf_id}")

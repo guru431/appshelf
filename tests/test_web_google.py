@@ -41,7 +41,8 @@ def gw(make_web, gcfg, conn, acct):
 
 
 def start(client, next_="/", add=0):
-    r = client.get("/google/start", params={"next": next_, "add": add}, follow_redirects=False)
+    r = client.get("/google/start", params={"next": next_, "add": add},
+                   headers={"Sec-Fetch-Site": "same-origin"}, follow_redirects=False)
     assert r.status_code == 303
     return parse_qs(urlsplit(r.headers["location"]).query)
 
@@ -149,14 +150,16 @@ def test_add_google_from_panel_creates_separate_person(gw, conn, cfg, clock):
     assert "добавлен из панели участника «Иван Петров» (owner@example)" in body
 
 
-def test_add_google_by_cross_site_link_is_plain_login(gw, conn, cfg, clock):
+@pytest.mark.parametrize("site", [None, "cross-site", "same-site"])
+def test_add_google_without_same_origin_navigation_is_plain_login(gw, conn, cfg, clock, site):
     sign_in(gw.client, cfg, conn, clock, 1)
-    r = gw.client.get("/google/start", params={"next": "/apple", "add": 1}, headers={"Sec-Fetch-Site": "cross-site"},
+    r = gw.client.get("/google/start", params={"next": "/apple", "add": 1},
+                      headers={"Sec-Fetch-Site": site} if site is not None else {},
                       follow_redirects=False)
     q = parse_qs(urlsplit(r.headers["location"]).query)
     gw.http.token = id_token(nonce=q["nonce"][0], sub="g-1", aud=CID)
     r = gw.client.get("/google/callback", params={"code": "c", "state": q["state"][0]}, follow_redirects=False)
-    assert r.status_code == 403 and "нужна ссылка-приглашение" in r.text      # ссылка чужого сайта — не «Добавить»
+    assert r.status_code == 403 and "нужна ссылка-приглашение" in r.text
     assert people.google_by_sub(conn, "g-1") is None
 
 

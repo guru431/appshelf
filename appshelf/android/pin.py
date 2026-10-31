@@ -12,6 +12,7 @@ import hmac
 import ipaddress
 import re
 import secrets
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -58,6 +59,13 @@ def epoch(c) -> int:
 
 def set_pin(c, pin: str, now: str) -> None:
     """Задать или сменить PIN: эпоха +1 (cookie гостей недействительны), счётчики и метка письма — сначала."""
+    with setting(c, pin, now):
+        pass
+
+
+@contextmanager
+def setting(c, pin: str, now: str):
+    """Смена PIN и подготовка нового токена каталога могут коммититься одной транзакцией."""
     if not valid_pin(pin):
         raise ValueError("PIN — 6 цифр")
     salt = secrets.token_hex(16)
@@ -69,6 +77,7 @@ def set_pin(c, pin: str, now: str) -> None:
         store.set_state(c, SET_AT_KEY, now)
         c.execute("DELETE FROM pin_attempts")
         notify.reset(c, MAIL_KEY)
+        yield
 
 
 def client_key(forwarded: str | None, peer: str | None) -> str:
