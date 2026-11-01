@@ -1,6 +1,6 @@
 {# Карточка Android-приложения: каталог участника, публичная полка, страница гостя. edit — действия «⋯», «Повторить»,
    «Принять новую подпись», «Скопировать ссылку»; prefix — адреса форм области. Из контекста: fresh, sources, notices,
-   android_version, apk_name, app_url (постоянная ссылка на приложение; нужна, только если edit). Метка сверки с
+   android_version, apk_name, app_url (постоянная ссылка на приложение; нужна при edit или qr). Метка сверки с
    RuStore (notices) живёт в last_error — это не ошибка. #}
 {% macro card(a, url, edit, prefix, qr=False) %}
 {% set v = a.current %}
@@ -43,20 +43,23 @@
     {% elif err %}<div class="meta">не удалось обновить: {{ err }}</div>
     {% endif %}
     {% if v and qr %}{% set link = app_url(a.package) %}
-    <a class="app-qr" href="{{ link }}" aria-label="Прямая ссылка на {{ a.name }}">
-      <img src="{{ link }}/qr.png" alt="QR-код для скачивания {{ a.name }}" width="196" height="196" loading="lazy">
-      <span class="meta">Прямая ссылка · QR-код</span>
-    </a>
-    {% endif %}
-    {% if v and can_publish %}
-      {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
-      {% elif not a.paid %}<form method="post" action="/android/public/add/from-shelf" class="install">
-        <input type="hidden" name="package" value="{{ a.package }}"><button class="sm tint">Добавить в публичную</button></form>{% endif %}
+    <details class="app-qr">
+      <summary class="btn sm secondary" aria-label="Показать QR-код для {{ a.name }}">QR</summary>
+      <a class="qr-code" href="{{ link }}" aria-label="Прямая ссылка на {{ a.name }}">
+        <img src="{{ link }}/qr.png" alt="QR-код для скачивания {{ a.name }}" width="196" height="196" loading="lazy">
+        <span class="meta">Прямая ссылка · QR-код</span>
+      </a>
+    </details>
     {% endif %}
   </div>
   {% if edit %}
   <details class="pop more"><summary aria-label="Действия">⋯</summary>
     <div class="sheet">
+      {%- if v and can_publish %}
+        {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
+        {% elif not a.paid %}<form method="post" action="/android/public/add/from-shelf">
+          <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form>{% endif %}
+      {%- endif %}
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
       {%- endif %}

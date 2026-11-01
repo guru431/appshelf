@@ -13,8 +13,10 @@
   <div class="body"><b>{{ a.name }}</b><div class="meta">{{ a.current['version_name'] }} · {{ a.package }} · {{ sources.get(a.source, a.source) }}</div></div>
   {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>
   {% elif a.paid %}<span class="meta">Купленное — только на своей полке</span>
-  {% else %}<form method="post" action="{{ prefix }}/add/from-shelf" class="act">
-    <input type="hidden" name="package" value="{{ a.package }}"><button class="sm tint">Добавить в публичную</button></form>{% endif %}
+  {% else %}<details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
+    <div class="sheet"><form method="post" action="{{ prefix }}/add/from-shelf">
+      <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form></div>
+  </details>{% endif %}
 </div>
 {% endfor %}
 </div>
