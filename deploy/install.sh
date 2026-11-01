@@ -39,7 +39,7 @@ for d in "$R/.venv" "$R/bin"; do
   if [ -e "$d" ]; then chmod -R go-w "$d"; fi
 done
 # зависимости и пакет — до подмены кода: упади pip, работать останется прежний код
-"$R/.venv/bin/pip" install --quiet --root-user-action=ignore "$NEW[fourpda]"
+"$R/.venv/bin/pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
 rm -rf "$OLD"
