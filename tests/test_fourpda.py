@@ -139,6 +139,40 @@ def test_import_checks_identity_and_does_not_expose_secrets(connected):
     assert client.post("/fourpda/1/import", files={"file": ("huge.json", b"x" * (fourpda.MAX_SESSION + 1))}).status_code == 400
 
 
+def test_clipboard_import_checks_browser_export_and_closes_pending_login(connected):
+    exported = json.dumps([{"domain": ".4pda.to", "name": k, "value": v, "httpOnly": True}
+                           for k, v in session().cookies.items()])
+    calls = []
+    connected.browser.call = lambda *a, **kw: calls.append(a)
+    result = connected.client.post("/fourpda/1/import", data={"session_json": exported},
+                                   headers={"User-Agent": "Firefox test browser"}, follow_redirects=False)
+    assert result.status_code == 303
+    saved = connected.sessions.load(1)
+    assert saved.name == "Личный аккаунт" and saved.cookies == session().cookies
+    assert saved.user_agent == "Firefox test browser"
+    assert connected.sessions.http.calls[-1][3] == saved.headers
+    assert calls == [(1, "", "revoke")]
+    assert COOKIE not in result.text
+
+
+def test_clipboard_import_rejects_invalid_input_without_replacing_session(connected):
+    client = connected.client
+    invalid = ["", "not-json-" + COOKIE, "x" * (fourpda.MAX_SESSION + 1),
+               json.dumps([{"domain": "other.example", "name": "pass_hash", "value": COOKIE}])]
+    for value in invalid:
+        result = client.post("/fourpda/1/import", data={"session_json": value})
+        assert result.status_code == 400 and COOKIE not in result.text
+    result = client.post("/fourpda/1/import", data={"session_json": raw_session().decode()},
+                         files={"file": ("session.json", raw_session())})
+    assert result.status_code == 400
+    assert connected.sessions.load(1) == session()
+    assert not connected.sessions.http.calls
+    assert client.post("/fourpda/999/import", data={"session_json": raw_session().decode()}).status_code == 404
+    result = client.post("/fourpda/1/import", data={"session_json": raw_session().decode()},
+                         headers={"Origin": "https://evil.example"})
+    assert result.status_code == 403
+
+
 def test_session_endpoints_are_bound_to_signed_in_person(connected, conn, clock):
     uid = people.create_user(conn, "Other", people.MEMBER, None, clock.iso())
     connected.sessions.save(uid, session())
@@ -354,6 +388,7 @@ def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connec
     connected.browser.call = lambda uid, token, action, **kw: "window-ticket" if action == "start" else None
     html = connected.client.post("/fourpda/1/login").text
     inputs = []
+    imported = []
 
     def route(request):
         path = urlsplit(request.request.url).path
@@ -364,6 +399,12 @@ def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connec
         elif path.endswith("/input"):
             inputs.append({k: v[0] for k, v in parse_qs(request.request.post_data).items()})
             request.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        elif path.endswith("/import"):
+            result = connected.client.post(path, data={k: v[0] for k, v in parse_qs(request.request.post_data).items()},
+                                           headers={"User-Agent": request.request.headers["user-agent"]},
+                                           follow_redirects=False)
+            imported.append(result.status_code)
+            request.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
         else:
             request.fulfill(status=200, body="")
 
@@ -388,6 +429,17 @@ def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connec
             with page.expect_response("**/input"):
                 keyboard.fill("example")
             assert inputs[-1] == {"action": "text", "text": "example"}
+            # Буфер Cookie-Editor можно вставить прямо на телефоне, без создания файла.
+            page.locator("summary", has_text="Как скопировать сессию").click()
+            field = page.locator('textarea[name="session_json"]')
+            exported = json.dumps([{"domain": ".4pda.to", "name": k, "value": v}
+                                   for k, v in session().cookies.items()])
+            field.fill(exported)
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            with page.expect_response("**/import"):
+                page.locator("form").filter(has=field).get_by_role("button").click()
+            assert imported == [303]
+            assert connected.sessions.load(1).cookies == session().cookies
         finally:
             browser.close()
 

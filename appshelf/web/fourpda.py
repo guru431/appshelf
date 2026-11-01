@@ -116,13 +116,18 @@ def register_routes(app, w, sessions, browser):
         return back(f"/fourpda/{uid}/connect")
 
     @app.post("/fourpda/{uid}/import")
-    def import_(request: Request, uid: int, file: UploadFile = File(...), user_agent: str = Form("")):
+    def import_(request: Request, uid: int, file: UploadFile | None = File(None),
+                session_json: str = Form(""), user_agent: str = Form("")):
         if owner(request, uid) is None:
             return missing()
         try:
-            raw = file.file.read(fourpda.MAX_SESSION + 1)
+            if file is not None and session_json.strip():
+                raise SourceError("Вставьте JSON или выберите файл сессии — что-то одно")
+            raw = file.file.read(fourpda.MAX_SESSION + 1) if file is not None else session_json.encode()
+            if not raw.strip():
+                raise SourceError("Вставьте JSON сессии или выберите файл")
             if len(raw) > fourpda.MAX_SESSION:
-                raise SourceError("Файл сессии слишком большой")
+                raise SourceError("Сессия слишком большая (не более 32 КБ)")
             data = json.loads(raw)
             if isinstance(data, list):
                 if any(not isinstance(c, dict) or c.get("domain", "").lstrip(".") != "4pda.to" for c in data):
@@ -135,7 +140,10 @@ def register_routes(app, w, sessions, browser):
         except (SourceError, FetchError, IpatoolError) as e:
             return connect_page(request, uid, str(e), 400)
         finally:
-            file.file.close()
+            if file is not None:
+                file.file.close()
+        with suppress(SourceError):
+            browser.call(uid, "", "revoke")
         return connected_response(uid)
 
     @app.post("/fourpda/{uid}/disconnect")
