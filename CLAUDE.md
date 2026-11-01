@@ -36,6 +36,8 @@ Android-полки, вход Google, публичная полка — `docs/sup
 
 ## Команды
 - Тесты (Windows): `.venv/Scripts/python -m pytest -q`; живые на сервере: `.venv/Scripts/python -m pytest -q -m integration`.
+- Проверка браузерного ввода 4PDA (Windows, локальный Chromium и extra `fourpda`, без внешней сети):
+  `.venv/Scripts/python -m pytest -q tests/test_fourpda.py -m integration`.
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email

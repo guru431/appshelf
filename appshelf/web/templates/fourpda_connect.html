@@ -5,7 +5,8 @@
 {% if connected %}<div class="card"><p>Подключён: <b>{{ connected }}</b></p>
 <form method="post" action="/fourpda/{{ person.id }}/disconnect"><button class="secondary">Отключить 4PDA</button></form></div>{% endif %}
 {% if token %}
-<p>Перед вами страница 4PDA. Нажмите на нужное поле, введите логин, пароль и код с картинки.
+<p>Окно ниже интерактивное: нажимайте прямо на кнопки и галку Cloudflare в изображении.
+Для ввода логина, пароля или кода сначала выберите поле в окне, затем нажмите на поле клавиатуры под ним.
 После успешного входа нажмите «Подключить аккаунт». Окно закроется через 10 минут.</p>
 <p id="browser-error" class="err" role="alert"></p>
 <div class="card" style="padding:0;overflow:hidden"><img id="fourpda-screen" width="1000" height="800" alt="Окно входа на 4PDA" style="display:block;width:100%;height:auto;cursor:pointer;touch-action:manipulation"></div>
@@ -38,7 +39,6 @@
     var r = screen.getBoundingClientRect();
     var width = screen.naturalWidth || 1000, height = screen.naturalHeight || 800;
     send({action:'click',x:Math.min(width-1,(e.clientX-r.left)*width/r.width),y:Math.min(height-1,(e.clientY-r.top)*height/r.height)});
-    keyboard.focus();
   });
   keyboard.addEventListener('input', function (e) {
     if (e.isComposing) return;

@@ -329,3 +329,59 @@ def test_browser_does_not_inherit_service_secrets(cfg, monkeypatch):
     finally:
         pool.close()
     assert not Path(home).exists()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [390, 1280])
+def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connected, width):
+    """Настоящие DOM-события: клик в окно передаёт координаты, ввод включается человеком."""
+    import shutil
+    from pathlib import Path
+    from urllib.parse import parse_qs, urlsplit
+
+    playwright = pytest.importorskip("playwright.sync_api")
+    executable = os.environ.get("APPSHELF_FOURPDA_BROWSER") or shutil.which("chromium") or shutil.which("google-chrome")
+    if not executable:
+        candidate = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe"
+        executable = str(candidate) if candidate.is_file() else None
+    if not executable:
+        pytest.skip("Не установлен Chromium для проверки интерфейса")
+    connected.browser.call = lambda uid, token, action, **kw: "window-ticket" if action == "start" else None
+    html = connected.client.post("/fourpda/1/login").text
+    inputs = []
+
+    def route(request):
+        path = urlsplit(request.request.url).path
+        if path.endswith("/login"):
+            request.fulfill(status=200, content_type="text/html", body=html)
+        elif path.endswith("/screen"):
+            request.fulfill(status=200, content_type="image/svg+xml", body='<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="white"/></svg>')
+        elif path.endswith("/input"):
+            inputs.append({k: v[0] for k, v in parse_qs(request.request.post_data).items()})
+            request.fulfill(status=200, content_type="application/json", body='{"ok":true}')
+        else:
+            request.fulfill(status=200, body="")
+
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844}, is_mobile=width == 390,
+                                    has_touch=width == 390)
+            page.route("https://apps.example/**", route)
+            page.goto("https://apps.example/fourpda/1/login")
+            page.wait_for_function("document.getElementById('fourpda-screen').naturalWidth === 1000")
+            screen = page.locator("#fourpda-screen")
+            box = screen.bounding_box()
+            with page.expect_response("**/input"):
+                screen.click(position={"x": box["width"] / 4, "y": box["height"] / 4})
+            assert page.evaluate("document.activeElement.id") != "fourpda-keyboard"
+            assert inputs[-1]["action"] == "click"
+            assert abs(float(inputs[-1]["x"]) - 250) < 3
+            assert abs(float(inputs[-1]["y"]) - 200) < 3
+            keyboard = page.locator("#fourpda-keyboard")
+            keyboard.click()
+            with page.expect_response("**/input"):
+                keyboard.fill("example")
+            assert inputs[-1] == {"action": "text", "text": "example"}
+        finally:
+            browser.close()
