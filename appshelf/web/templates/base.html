@@ -240,6 +240,21 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 [hidden] { display: none !important; }
 .shelf-filter select, dialog select { min-height: 44px; max-width: 100%; padding: 8px; border-radius: 10px;
                                     border: 1px solid var(--line); background: var(--raised); color: var(--fg); font: inherit; }
+.shelf-search { padding: 0; margin-bottom: 10px; border-radius: 14px; }
+.shelf-search > summary { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px;
+                          list-style: none; cursor: pointer; font-size: 15px; font-weight: 600; }
+.shelf-search > summary::-webkit-details-marker { display: none; }
+.shelf-search > summary::after { content: ""; flex: none; width: 7px; height: 7px; margin: -4px 2px 0;
+                                border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.shelf-search[open] > summary::after { margin-top: 4px; transform: rotate(225deg); }
+.shelf-search > summary .meta { margin-left: auto; white-space: nowrap; font-size: 13px; font-weight: 400; }
+.shelf-filter { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 0 12px 12px; }
+.shelf-filter .field { flex-wrap: nowrap; min-width: 0; margin: 0; }
+.shelf-filter .field input { min-height: 44px; padding-top: 8px; padding-bottom: 8px; font-size: 16px; }
+.shelf-filter .field button { flex: none; padding: 8px 12px; }
+.shelf-filter-options { display: grid; gap: 8px; }
+.shelf-filter select { width: 100%; min-width: 0; font-size: 14px; }
+@media (min-width: 600px) { .shelf-filter-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .theme-entry { max-width: 720px; margin: 12px auto 0; padding: 0 16px; text-align: right; }
 .theme-entry .pop { display: inline-block; text-align: left; }
 .desktop-transfer { margin-top: 8px; }

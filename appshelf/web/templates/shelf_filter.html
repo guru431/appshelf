@@ -1,14 +1,17 @@
-<form method="get" class="shelf-filter card">
+<details class="shelf-search card"{% if q or filter_mode != 'all' or source_filter %} open{% endif %}>
+<summary><span>Поиск и фильтры</span><span class="meta" role="status" aria-label="Найдено приложений: {{ apps | length }} из {{ total }}">{{ apps | length }} из {{ total }}</span></summary>
+<form method="get" class="shelf-filter" aria-label="Поиск по полке">
   {% if nav == 'catalog' %}<input type="hidden" name="os" value="apple">{% endif %}
   <div class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название или идентификатор" aria-label="Найти на полке">
   <button class="secondary">Найти</button></div>
-  <div class="bar">
+  <div class="shelf-filter-options">
   <select name="filter" aria-label="Состояние приложений" onchange="this.form.submit()">
   {% for value, label in [('all', 'Все'), ('recent', 'Недавно обновлены'), ('errors', 'Ошибки'), ('pending', 'Ожидают решения')] %}
     <option value="{{ value }}"{% if filter_mode == value %} selected{% endif %}>{{ label }}</option>
   {% endfor %}</select>
   {% if sources %}<select name="source" aria-label="Источник" onchange="this.form.submit()"><option value="">Все источники</option>
   {% for value, label in sources.items() %}<option value="{{ value }}"{% if source_filter == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endif %}
-  <span class="meta" role="status">Найдено: {{ apps | length }} из {{ total }}</span></div>
+  </div>
 </form>
+</details>
 {% if not apps and total %}<p class="empty">Нет совпадений. Измените запрос или <a href="{{ '?os=apple' if nav == 'catalog' else '?' }}">сбросьте фильтры</a>.</p>{% endif %}
