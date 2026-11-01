@@ -296,6 +296,7 @@ def test_login_browser_only_reaches_forum_and_challenge(url, allowed):
 def test_browser_does_not_inherit_service_secrets(cfg, monkeypatch):
     import sys
     from types import ModuleType
+    from appshelf import fourpda_login
     seen = {}
 
     def launch(**kwargs):
@@ -311,11 +312,20 @@ def test_browser_does_not_inherit_service_secrets(cfg, monkeypatch):
     monkeypatch.setenv("DISPLAY", ":99")
     monkeypatch.setenv("PUB_TOKEN", "private-pub-token")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "private-client-secret")
+    monkeypatch.setenv("HOME", "/readonly-code-directory")
+    monkeypatch.setattr(fourpda_login.sys, "platform", "linux")
     pool = BrowserLogin(cfg)
     try:
         pool._launch()
         assert seen["chromium_sandbox"] is True
         assert "PUB_TOKEN" not in seen["env"] and "GOOGLE_CLIENT_SECRET" not in seen["env"]
         assert seen["env"]["DISPLAY"] == ":99"
+        home = pool.home.name
+        from pathlib import Path
+        assert Path(home).parent == cfg.tmp_dir
+        assert seen["env"]["HOME"] == home and Path(home).is_dir()
+        assert seen["env"]["XDG_CONFIG_HOME"] == os.path.join(home, "config")
+        assert os.environ["HOME"] == "/readonly-code-directory"
     finally:
         pool.close()
+    assert not Path(home).exists()

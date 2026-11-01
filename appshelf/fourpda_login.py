@@ -12,6 +12,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -40,6 +41,7 @@ class BrowserLogin:
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="4pda-login")
         self.pending = {}
         self.runtime = self.browser = self.display = None
+        self.home = None
         atexit.register(self.close)
 
     def call(self, uid, token, action, **data):
@@ -62,6 +64,14 @@ class BrowserLogin:
                      "SYSTEMROOT", "WINDIR", "COMSPEC", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP",
                      "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA"}
             env = {k: v for k, v in os.environ.items() if k.upper() in names}
+            if sys.platform == "linux":
+                # HOME службы — каталог кода root. Chromium/Crashpad требует свой
+                # доступный для записи HOME, даже у непостоянных контекстов.
+                self.cfg.tmp_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                self.home = tempfile.TemporaryDirectory(prefix="fourpda-browser-", dir=self.cfg.tmp_dir)
+                env.update(HOME=self.home.name, XDG_CONFIG_HOME=os.path.join(self.home.name, "config"),
+                           XDG_CACHE_HOME=os.path.join(self.home.name, "cache"),
+                           XDG_DATA_HOME=os.path.join(self.home.name, "data"))
             if sys.platform == "linux" and not env.get("DISPLAY"):
                 xvfb = shutil.which("Xvfb")
                 if not xvfb:
@@ -69,7 +79,8 @@ class BrowserLogin:
                 read_fd, write_fd = os.pipe()
                 try:
                     self.display = subprocess.Popen([xvfb, "-displayfd", str(write_fd), "-screen", "0", "1024x900x24", "-nolisten", "tcp"],
-                                                    pass_fds=(write_fd,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                                    pass_fds=(write_fd,), env=env,
+                                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 finally:
                     os.close(write_fd)
                 import select
@@ -207,9 +218,12 @@ class BrowserLogin:
             with suppress(Exception):
                 self.display.wait(timeout=3)
             self.display = None
+        if self.home is not None:
+            self.home.cleanup()
+            self.home = None
 
     def close(self):
-        if self.runtime is None and self.browser is None and self.display is None and not self.pending:
+        if self.runtime is None and self.browser is None and self.display is None and self.home is None and not self.pending:
             self.executor.shutdown(wait=False, cancel_futures=True)
             return
         with suppress(Exception):
