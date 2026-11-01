@@ -301,8 +301,43 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
         db.set_status(c, shelf_id, package, "error", describe(e))
 
 
+def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work: Path) -> None:
+    """Текущий APK полки владельца — независимой копией, без обращения к магазину."""
+    with jobs.hold(env.cfg.download_lock):
+        shelf = db.get_shelf(c, shelf.id)
+        if shelf is None:
+            raise store.AppGone(package)
+        _space(env, c)
+        source = db.get_shelf(c, source_id)
+        user = people.get_user(c, source.user_id) if source is not None and source.user_id is not None else None
+        original = db.get_app(c, source_id, package)
+        version = db.current_version(c, source_id, package)
+        if shelf.user_id is not None or user is None or user.role != people.OWNER:
+            raise SourceError("Копировать в публичную можно только с полки владельца")
+        if original is None or version is None:
+            raise SourceError("Приложение больше не доступно на полке владельца")
+        if original["paid"]:
+            raise SourceError("Купленное в Google Play нельзя добавлять на публичную полку")
+        if db.get_app(c, shelf.id, package) is None:
+            raise store.AppGone(package)
+        folder = shelf_root(env.cfg, source) / version["dir"]
+        work.mkdir(parents=True, exist_ok=True)
+        path = work / "app.apk"
+        shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+        if ipa.sha256(path) != version["sha256"]:
+            raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
+        icon = (folder / "icon.png").read_bytes()
+        db.set_source(c, shelf.id, package, original["source"], original["source_ref"])
+        c.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=? AND package=?",
+                  (original["google_account_id"], shelf.id, package))
+        store_apk(env, c, shelf, path, source=original["source"], source_ref=original["source_ref"],
+                  expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon)
+        db.set_etag(c, shelf.id, package, original["source_etag"])
+        db.set_status(c, shelf.id, package, "ok", original["last_error"] if original["last_error"] in NOTICES else "")
+
+
 def run_job(env, c, job) -> None:
-    """Задание обработчика: add (payload source, ref, name; play — и account, apkpure — и ack), upload (path, name,
+    """Задание обработчика: add (payload source, ref, name; play — и account, apkpure — и ack), copy (from_shelf), upload (path, name,
     package?), check (package; после «Сменить источник» — payload previous: отказ нового источника возвращает
     прежний). Google Play не принял токен — задание снова в очереди, подключение истекло (ждёт нового)."""
     shelf, payload = None, {}
@@ -325,6 +360,8 @@ def run_job(env, c, job) -> None:
             _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
                       name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid),
                       ack=payload.get("ack") is True)
+        elif job["kind"] == "copy":
+            _copy_to_public(env, c, shelf, package, payload["from_shelf"], work)
         elif job["kind"] == "upload":
             with jobs.hold(env.cfg.download_lock):
                 _space(env, c)

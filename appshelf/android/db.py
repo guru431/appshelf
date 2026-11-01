@@ -22,7 +22,7 @@ JOB_ACCOUNT = """COALESCE(CASE WHEN json_valid(j.payload) AND json_extract(j.pay
                                THEN json_extract(j.payload, '$.account') END,
                           (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
                                AND a.package = j.package AND a.source = 'play'))"""
-RUNNABLE = f"NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok')"
+RUNNABLE = f"(j.kind = 'copy' OR NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok'))"
 
 
 @dataclass(frozen=True)
@@ -371,7 +371,7 @@ def requeue_running(c) -> None:
 
 def open_jobs(c, shelf_id: int) -> list[sqlite3.Row]:
     """Задания добавления, которые видны на странице: ждут, идут или упали (до «Скрыть»)."""
-    return c.execute("SELECT * FROM android_jobs WHERE shelf_id=? AND kind IN ('add', 'upload') "
+    return c.execute("SELECT * FROM android_jobs WHERE shelf_id=? AND kind IN ('add', 'upload', 'copy') "
                      "AND status IN ('queued', 'running', 'error') ORDER BY id", (shelf_id,)).fetchall()
 
 

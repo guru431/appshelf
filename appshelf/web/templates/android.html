@@ -39,7 +39,7 @@
 {% endfor %}
 {% if not apps and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
   {%- if edit %} <a href="{{ prefix }}/add">Добавьте приложение</a> — из RuStore, по ссылке с сайта или своим файлом.{% endif %}</p>{% endif %}
-{% for a in apps %}{{ card(a, url, edit, prefix) }}{% endfor %}
+{% for a in apps %}{{ card(a, url, edit, prefix, qr=public) }}{% endfor %}
 <div class="hint">
   {% if public %}<p>Публичная полка — одна на сервер: её видят все участники и гости по PIN, наполняет владелец.</p>{% endif %}
   {{ install_hints() }}

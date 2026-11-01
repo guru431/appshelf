@@ -1,12 +1,56 @@
+import io
+
 import pytest
+import zxingcpp
+from PIL import Image
 
 from apk_factory import make_apk
 from appshelf.android import db, fetch, pin
+from appshelf.android.sources import Latest
 from helpers import HOST, make_account, sign_in
 
 PKG = "ru.example.app"
 URL = "https://bank.example/app.apk"
 PIN = "482913"
+
+
+def test_public_qr_decodes_to_current_apk_link(web, anon, cfg, conn, shelf, tmp_path):
+    link = fetch.app_url(cfg, shelf, PKG)
+    qr_path = link + "/qr.png"
+    assert qr_path in web.client.get("/android/public").text
+    assert qr_path not in anon.client.get("/p").text
+    enter(anon.client, PIN)
+    assert qr_path in anon.client.get("/p").text
+    response = anon.client.get(qr_path)
+    assert response.status_code == 200 and response.headers["content-type"] == "image/png"
+    image = Image.open(io.BytesIO(response.content))
+    decoded = zxingcpp.read_barcode(image)
+    assert decoded is not None and decoded.text == link
+    redirect = anon.client.get(decoded.text, follow_redirects=False)
+    current = db.current_version(conn, shelf.id, PKG)
+    assert redirect.headers["location"] == fetch.file_url(cfg, shelf, current["dir"], fetch.apk_name(PKG, "1.0"))
+    # QR постоянный: после обновления тот же адрес выдаёт новый APK.
+    web.sources.apks[URL] = make_apk(tmp_path / "new.apk", version_code=2, version_name="2.0")
+    web.sources._latest[URL] = Latest(None, "v2", True)
+    web.client.post(f"/android/public/apps/{PKG}/check")
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    assert anon.client.get(qr_path).content == response.content
+    assert anon.client.get(link, follow_redirects=False).headers["location"].endswith(f"/{PKG}-2.0.apk")
+    web.client.post("/android/public/pin", data={"pin": "111111"})
+    assert anon.client.get(qr_path).status_code == 404
+    assert anon.client.get(link, follow_redirects=False).status_code == 404
+    new_shelf = db.public_shelf(conn)
+    assert anon.client.get(fetch.app_url(cfg, new_shelf, PKG) + "/qr.png").status_code == 200
+
+
+def test_qr_unavailable_for_private_missing_and_rotating_shelves(web, anon, cfg, conn, clock, shelf):
+    mine = db.ensure_shelf(conn, 1, clock.iso())
+    db.put_app(conn, shelf.id, "ru.queued", "Ожидает", "upload", "", clock.iso())
+    for token, package in ((mine.shelf, PKG), ("0" * 32, PKG), (shelf.shelf, "ru.missing"),
+                           (shelf.shelf, "ru.queued"), (shelf.shelf[:-1], PKG)):
+        assert anon.client.get(f"/apk/{token}/{package}.apk/qr.png").status_code == 404
+    db.set_shelf_next(conn, shelf.id, "1" * 32)
+    assert anon.client.get(fetch.app_url(cfg, shelf, PKG) + "/qr.png").status_code == 404
 
 
 @pytest.fixture(autouse=True)

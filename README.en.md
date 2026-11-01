@@ -380,6 +380,12 @@ One Android shelf per server for people without a panel sign-in. The owner fills
 actions, a guest opens `<site address>/p` and enters the PIN — and sees only the list with "Download APK" and the
 hints, no menu and no panel.
 
+- **From my shelf** — "Добавить в публичную" lets the owner select an app already downloaded on their personal
+  Android shelf; the same button is on each eligible personal card. It copies the current APK without downloading
+  it again and keeps its update source. Deleting the personal copy leaves the public copy intact. Paid apps cannot
+  be copied.
+- **QR code** — each downloaded public app has one, including on the guest page after entering the PIN. It links
+  directly to the current APK; updates keep the link, while changing the PIN or shelf token invalidates old codes.
 - **PIN** — 6 digits, set and changed by the owner in the "Гостевой доступ" block of the public tab. Until a PIN is
   set, `/p` shows guests nothing. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie

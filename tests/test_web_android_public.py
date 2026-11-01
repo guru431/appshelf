@@ -3,12 +3,23 @@ import json
 import pytest
 
 from apk_factory import make_apk
-from appshelf import jobs, store
+from appshelf import jobs, people, store
 from appshelf.android import db, fetch, pin, rustore
 from helpers import make_account, sign_in
 
 PKG = "ru.example.app"
 URL = "https://bank.example/app.apk"
+
+
+def add_personal(web, conn, tmp_path, source="link"):
+    path = make_apk(tmp_path / "mine.apk", label="Личное приложение")
+    if source == "upload":
+        web.client.post("/android/add/upload", files={"file": ("mine.apk", path.read_bytes())})
+    else:
+        web.sources.apks[URL] = path
+        web.client.post("/android/add/link", data={"url": URL})
+    work(web, conn)
+    return db.shelf_for_user(conn, 1)
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +100,97 @@ def test_personal_and_public_are_separate(web, conn, tmp_path):
     assert "Своё" in mine and "Публичное" not in mine and "Публичное" in public and "Своё" not in public
     assert web.client.post(f"/android/apps/{PKG}/remove").status_code == 404
     assert web.client.post("/android/public/apps/ru.mine/remove").status_code == 404
+
+
+@pytest.mark.parametrize("source", ["link", "upload"])
+def test_copy_personal_apk_to_public_without_download(web, cfg, conn, tmp_path, source):
+    mine = add_personal(web, conn, tmp_path, source)
+    current = db.current_version(conn, mine.id, PKG)
+    original_dir = fetch.shelf_root(cfg, mine) / current["dir"]
+    original_apk = original_dir / fetch.apk_name(PKG, current["version_name"])
+    calls = list(web.sources.calls)
+    assert "Добавить в публичную" in web.client.get("/android").text
+    choices = web.client.get("/android/public/add").text
+    assert "Из моей полки" in choices and "Личное приложение" in choices
+    response = web.client.post("/android/public/add/from-shelf", data={"package": PKG}, follow_redirects=False)
+    assert (response.status_code, response.headers["location"]) == (303, "/android/public")
+    public = db.public_shelf(conn)
+    # Повторная отправка не затирает карточку и не создаёт второго задания.
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='copy'").fetchone()[0] == 1
+    work(web, conn)
+    copied = db.current_version(conn, public.id, PKG)
+    folder = fetch.shelf_root(cfg, public) / copied["dir"]
+    assert (folder / fetch.apk_name(PKG, copied["version_name"])).read_bytes() == original_apk.read_bytes()
+    assert (folder / "icon.png").read_bytes() == (original_dir / "icon.png").read_bytes()
+    app = db.get_app(conn, public.id, PKG)
+    assert (app["source"], app["source_ref"], app["name"], app["status"]) == \
+        (source, URL if source == "link" else "", "Личное приложение", "ok")
+    assert web.sources.calls == calls
+    assert "Уже на публичной" in web.client.get("/android/public/add").text
+    # Удаление личной копии не ломает публичную.
+    web.client.post(f"/android/apps/{PKG}/remove")
+    assert (folder / fetch.apk_name(PKG, copied["version_name"])).is_file()
+    assert db.current_version(conn, public.id, PKG) is not None
+
+
+def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn, clock, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    uid = conn.execute("SELECT id FROM users WHERE role='member'").fetchone()[0]
+    foreign = db.ensure_shelf(conn, uid, clock.iso())
+    db.put_app(conn, foreign.id, "ru.foreign", "Чужое", "upload", "", clock.iso())
+    sign_in(web.client, cfg, conn, clock, uid)
+    web.client.get(f"/who/{uid}")
+    assert "Личное приложение" in web.client.get("/android/public/add").text
+    assert web.client.post("/android/public/add/from-shelf", data={"package": "ru.foreign"}).status_code == 404
+    assert member.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 403
+    assert web.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 200
+    job = db.take_job(conn)
+    assert json.loads(job["payload"])["from_shelf"] == mine.id
+
+
+def test_copy_refuses_paid_and_not_downloaded(web, conn, clock, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    db.set_paid(conn, mine.id, PKG, True)
+    response = web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    assert response.status_code == 400 and "Купленное" in response.text
+    assert 'action="/android/public/add/from-shelf"' not in web.client.get("/android/public/add").text
+    db.put_app(conn, mine.id, "ru.waiting", "Ждём", "rustore", "ru.waiting", clock.iso())
+    assert web.client.post("/android/public/add/from-shelf", data={"package": "ru.waiting"}).status_code == 409
+    assert db.public_shelf(conn) is None
+
+
+def test_copy_free_play_apk_with_expired_connection(web, conn, clock, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    gid = people.create_google(conn, 1, "owner-google", "owner@google.example", "Владелец", clock.iso())
+    people.set_play(conn, gid, "expired", clock.iso())
+    db.set_source(conn, mine.id, PKG, "play", PKG)
+    conn.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=?", (gid, mine.id))
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    work(web, conn)
+    public = db.public_shelf(conn)
+    assert db.current_version(conn, public.id, PKG) is not None
+    app = db.get_app(conn, public.id, PKG)
+    assert (app["source"], app["google_account_id"], app["status"]) == ("play", gid, "ok")
+
+
+@pytest.mark.parametrize("change", ["paid", "removed", "corrupt"])
+def test_copy_rechecks_source_when_worker_runs(web, cfg, conn, tmp_path, change):
+    mine = add_personal(web, conn, tmp_path)
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    if change == "paid":
+        db.set_paid(conn, mine.id, PKG, True)
+    elif change == "removed":
+        web.client.post(f"/android/apps/{PKG}/remove")
+    else:
+        version = db.current_version(conn, mine.id, PKG)
+        path = fetch.shelf_root(cfg, mine) / version["dir"] / fetch.apk_name(PKG, version["version_name"])
+        path.write_bytes(b"damaged")
+    work(web, conn)
+    public = db.public_shelf(conn)
+    assert db.current_version(conn, public.id, PKG) is None
+    assert db.get_app(conn, public.id, PKG)["status"] == "error"
+    assert not list(fetch.shelf_root(cfg, public).glob("*"))
 
 
 def test_owner_sets_pin_then_change_rotates_token(web, cfg, conn, clock, tmp_path):

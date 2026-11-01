@@ -23,7 +23,7 @@
 </div>
 {% else %}
 {% if not apps %}<p class="empty">На полке пока пусто.</p>{% endif %}
-{% for a in apps %}{{ card(a, url, False, '') }}{% endfor %}
+{% for a in apps %}{{ card(a, url, False, '', qr=True) }}{% endfor %}
 <div class="hint">{{ install_hints() }}</div>
 {% endif %}
 {% endblock %}

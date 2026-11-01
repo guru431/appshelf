@@ -2,6 +2,24 @@
 {% block main %}
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
+{% if public %}
+<h2>Из моей полки</h2>
+<p class="hint">Добавить уже скачанное приложение с полки администратора. На публичной полке будет отдельная копия
+  текущей версии с тем же источником обновлений.</p>
+{% if own_apps %}
+<div class="card list">
+{% for a in own_apps %}
+<div class="row">
+  <div class="body"><b>{{ a.name }}</b><div class="meta">{{ a.current['version_name'] }} · {{ a.package }} · {{ sources.get(a.source, a.source) }}</div></div>
+  {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>
+  {% elif a.paid %}<span class="meta">Купленное — только на своей полке</span>
+  {% else %}<form method="post" action="{{ prefix }}/add/from-shelf" class="act">
+    <input type="hidden" name="package" value="{{ a.package }}"><button class="sm tint">Добавить в публичную</button></form>{% endif %}
+</div>
+{% endfor %}
+</div>
+{% else %}<p class="empty">На вашей Android-полке пока нет скачанных приложений. <a href="/android">Открыть мою полку</a></p>{% endif %}
+{% endif %}
 <h2>Найти приложение</h2>
 <form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
 <p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure.

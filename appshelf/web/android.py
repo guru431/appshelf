@@ -5,16 +5,19 @@
 страница проверяет доступ и состав доставки Google Play перед постановкой задания."""
 from __future__ import annotations
 
+import io
 import json
 import re
 import secrets
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
+import qrcode
 from fastapi import Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
 from .. import apk, jobs, notify, people, store
 from ..android import db, fdroid_index, fetch, github, links, net, pin, play
@@ -54,6 +57,11 @@ PUBLIC = Scope("/android/public", "a_public", True)
 
 def is_owner(request: Request) -> bool:
     return any(u.role == people.OWNER for u in request.state.users)
+
+
+def _owner_shelf(c, request: Request):
+    owner = next((u for u in request.state.users if u.role == people.OWNER), None)
+    return db.shelf_for_user(c, owner.id) if owner is not None else None
 
 
 def default_section(user_agent: str, cookie: str | None, explicit: str | None) -> str:
@@ -109,10 +117,36 @@ def _lock_mail(until: str, base: str) -> str:
             f"PIN там же; если PIN мог утечь — смените его.")
 
 
+@lru_cache(maxsize=128)
+def _qr_png(url: str) -> bytes:
+    data = io.BytesIO()
+    qrcode.make(url, box_size=4, border=4).save(data, format="PNG")
+    return data.getvalue()
+
+
 def register_routes(app, w) -> None:
     _register_scope(app, w, MINE)
     public_page = _register_scope(app, w, PUBLIC)
     cfg, owner = w.cfg, [Depends(owner_only)]
+
+    @app.post("/android/public/add/from-shelf", dependencies=owner)
+    def add_from_shelf(request: Request, package: str = Form("")):
+        with w.conn() as c:
+            source = _owner_shelf(c, request)
+            original = db.get_app(c, source.id, package) if source is not None else None
+            if original is None:
+                return PlainTextResponse("not found", status_code=404)
+            if original["paid"]:
+                return public_page(request, 400, "Купленное в Google Play нельзя добавлять на публичную полку")
+            if db.current_version(c, source.id, package) is None:
+                return public_page(request, 409, "Сначала дождитесь скачивания приложения на свою полку")
+            target = db.ensure_public_shelf(c, w.now())
+            with store.tx(c):
+                if db.get_app(c, target.id, package) is None:
+                    db.put_app(c, target.id, package, original["name"], original["source"], original["source_ref"],
+                               w.now(), google_account_id=original["google_account_id"])
+                    db.enqueue(c, target.id, "copy", w.now(), package=package, payload={"from_shelf": source.id})
+        return back(PUBLIC.prefix)
 
     @app.post("/android/public/pin", response_class=HTMLResponse, dependencies=owner)
     def set_pin(request: Request, value: str = Form("", alias="pin")):
@@ -157,6 +191,7 @@ def register_routes(app, w) -> None:
                       closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
                       sources=SOURCES, notices=NOTICES, android_version=apk.android_version,
                       apk_name=fetch.apk_name,
+                      app_url=lambda package: fetch.app_url(cfg, shelf, package),
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f))
 
     @app.get("/p", response_class=HTMLResponse)
@@ -203,6 +238,19 @@ def register_routes(app, w) -> None:
             return PlainTextResponse("not found", status_code=404)
         return RedirectResponse(fetch.file_url(cfg, shelf, v["dir"], fetch.apk_name(package, v["version_name"])),
                                 status_code=302)
+
+    @app.get("/apk/{token}/{file}/qr.png")
+    def app_qr(token: str, file: str):
+        package = file.removesuffix(".apk")
+        if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
+            return PlainTextResponse("not found", status_code=404)
+        with w.conn() as c:
+            shelf = db.shelf_by_token(c, token)
+            if (shelf is None or shelf.user_id is not None or shelf.shelf_next
+                    or db.current_version(c, shelf.id, package) is None):
+                return PlainTextResponse("not found", status_code=404)
+        return Response(_qr_png(fetch.app_url(cfg, shelf, package)), media_type="image/png",
+                        headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/android/status")
     def api_status(request: Request, public: int = 0):
@@ -262,6 +310,9 @@ def _register_scope(app, w, scope: Scope):
                                            "AND source='play'", (shelf.id,))} if shelf else set()
             expired = [g.email for g in google_accounts(c, request)
                        if g.play == "expired" and (not scope.public or g.id in used)] if edit else []
+            can_publish = not scope.public and request.state.who.role == people.OWNER
+            public_shelf = db.public_shelf(c) if can_publish else None
+            public_packages = {a.package for a in db.list_apps(c, public_shelf.id)} if public_shelf else set()
         banners = [error] if error else []
         banners += [f"Подключение Google Play {email} истекло — подключите заново на странице «Аккаунты»"
                     for email in expired]
@@ -279,7 +330,7 @@ def _register_scope(app, w, scope: Scope):
                       android_version=apk.android_version, apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
                       app_url=lambda package: fetch.app_url(cfg, shelf, package), prefix=p, public=scope.public,
-                      edit=edit, guest=guest)
+                      edit=edit, guest=guest, can_publish=can_publish, public_packages=public_packages)
         set_section(w, resp, "android")
         return resp
 
@@ -290,11 +341,14 @@ def _register_scope(app, w, scope: Scope):
             shelf = shelf_of(c, request)
             on_shelf = {a.package for a in db.list_apps(c, shelf.id)} if shelf is not None else set()
             accounts = google_accounts(c, request)
+            mine = _owner_shelf(c, request) if scope.public else None
+            own_apps = [a for a in db.list_apps(c, mine.id) if a.current is not None] if mine else []
         play_accounts = [g for g in accounts if g.play == "ok"]
         return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
                       found=found, search_errors=search_errors, sources=SOURCES,
                       on_shelf=on_shelf, error=error, link_url=link_url,
-                      prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts))
+                      prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts),
+                      own_apps=own_apps)
 
     @app.get(f"{p}/search", dependencies=deps)
     def search_stream(request: Request, q: str = ""):
