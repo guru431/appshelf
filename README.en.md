@@ -384,9 +384,9 @@ hints, no menu and no panel.
   Android shelf; "Добавить в публичную" is in the app's "⋯" menu, including on eligible personal cards. It copies
   the current APK without downloading it again and keeps its update source. Deleting the personal copy leaves the
   public copy intact. Paid apps cannot be copied.
-- **QR code** — the small "QR" button reveals it on each downloaded public app, including on the guest page
-  after entering the PIN. It links directly to the current APK; updates keep the link, while changing the PIN or
-  shelf token invalidates old codes.
+- **QR code** — the QR icon button to the right of "Скачать APK" reveals it on each public app, including on the
+  guest page after entering the PIN. It links directly to the current APK; updates keep the link, while changing
+  the PIN or shelf token invalidates old codes.
 - **PIN** — 6 digits, set and changed by the owner in the "Гостевой доступ" block of the public tab. Until a PIN is
   set, `/p` shows guests nothing. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie

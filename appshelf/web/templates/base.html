@@ -110,10 +110,12 @@ h2:first-child { margin-top: 4px; }
                     box-shadow: 0 0 0 1px var(--line), 0 3px 10px rgba(0,0,0,.16); }
 .noicon { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 26px; font-weight: 700; }
 .body { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.download-actions { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.download-actions.with-qr > .pill { min-width: 0; padding-left: 12px; padding-right: 12px; }
+.download-actions > .qr-toggle { flex: none; width: 36px; padding: 0; }
+.qr-toggle svg { display: block; width: 22px; height: 22px; }
 .app-qr { margin-top: 12px; max-width: 100%; }
-.app-qr > summary { display: inline-flex; list-style: none; width: 36px; padding: 0; font-size: 13px; }
-.app-qr > summary::-webkit-details-marker { display: none; }
-.app-qr .qr-code { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 8px; max-width: 100%; }
+.app-qr .qr-code { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; max-width: 100%; }
 .app .app-qr img { width: 196px; height: auto; max-width: 100%; border-radius: 0; background: #fff; box-shadow: none; }
 .body b, .title { font-weight: 600; letter-spacing: -.01em; }
 .install { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 12px 0 0; }
@@ -274,6 +276,18 @@ label input { margin-top: 6px; font-weight: 400; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
+{% if nav in ('a_public', 'guest') %}
+<script>
+addEventListener('click', function (e) {
+  var button = e.target.closest && e.target.closest('[data-qr-toggle]');
+  if (!button) return;
+  var panel = document.getElementById(button.getAttribute('aria-controls'));
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  button.setAttribute('aria-expanded', String(!panel.hidden));
+});
+</script>
+{% endif %}
 {% if nav not in ('login', 'guest') %}
 <script>
 addEventListener('pointerdown', function (e) {   // меню закрывается касанием мимо него
@@ -315,7 +329,7 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
     }).catch(function () {});
   }, 3000);
   function editing() {
-    if (document.querySelector('details[open]')) return true;
+    if (document.querySelector('details[open], .qr-toggle[aria-expanded="true"]')) return true;
     return Array.prototype.some.call(document.querySelectorAll('input'), function (i) {
       return i === document.activeElement || i.value !== i.defaultValue;
     });

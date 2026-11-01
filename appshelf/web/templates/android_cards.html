@@ -21,10 +21,19 @@
       · {{ sources.get(a.source, a.source) }} · подпись {{ a.signer[:4] }}…{{ a.signer[-4:] }}
       {%- if v['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
     {% if v['target_sdk'] < 24 %}<div class="err">Android 15+ не поставит: приложение собрано под старые версии (targetSdk {{ v['target_sdk'] }}).</div>{% endif %}
-    <p class="install"><a class="btn pill" href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
+    <div class="install"><div class="download-actions{{ ' with-qr' if qr }}">
+      <a class="btn pill" href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
+      {% if qr %}<button type="button" class="sm secondary qr-toggle" data-qr-toggle aria-controls="qr-{{ a.package }}"
+        aria-expanded="false" aria-label="Показать QR-код для {{ a.name }}" title="Показать QR-код">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+          <path fill-rule="evenodd" d="M3 3h7v7H3zM5 5v3h3V5zM14 3h7v7h-7zM16 5v3h3V5zM3 14h7v7H3zM5 16v3h3v-3z"/>
+          <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
+        </svg>
+      </button>{% endif %}
+    </div>
       {% if a.previous %}{% set p = a.previous %}<span class="meta">предыдущая: <a href="{{ url(p['dir'], apk_name(a.package, p['version_name'])) }}" download>{{ p['version_name'] }}</a>
         {%- if p['signer'] != a.signer %} (другая подпись){% endif %}
-        {%- if p['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</p>
+        {%- if p['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</div>
     {% endif %}
     {% if a.kept %}{% set k = a.kept %}<div class="meta">сохранённая: <a href="{{ url(k['dir'], apk_name(a.package, k['version_name'])) }}" download>{{ k['version_name'] }}</a> · {{ (k['size'] / 1048576) | round | int }} МБ</div>{% endif %}
     {% if a.pending and edit %}{% set p = a.pending %}
@@ -43,13 +52,12 @@
     {% elif err %}<div class="meta">не удалось обновить: {{ err }}</div>
     {% endif %}
     {% if v and qr %}{% set link = app_url(a.package) %}
-    <details class="app-qr">
-      <summary class="btn sm secondary" aria-label="Показать QR-код для {{ a.name }}">QR</summary>
+    <div class="app-qr" id="qr-{{ a.package }}" hidden>
       <a class="qr-code" href="{{ link }}" aria-label="Прямая ссылка на {{ a.name }}">
         <img src="{{ link }}/qr.png" alt="QR-код для скачивания {{ a.name }}" width="196" height="196" loading="lazy">
         <span class="meta">Прямая ссылка · QR-код</span>
       </a>
-    </details>
+    </div>
     {% endif %}
   </div>
   {% if edit %}
