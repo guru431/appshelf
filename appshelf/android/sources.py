@@ -61,11 +61,12 @@ def _fdroid_mark(pkg: fdroid.FdPackage) -> str:
 
 class Sources:
     def __init__(self, http: Http, *, play=None, sleep=time.sleep, pause: float = 2.0, clock=time.monotonic,
-                 appgallery_host: str = ""):
+                 appgallery_host: str = "", fourpda=None):
         """play — android.play.PlayPool (или подмена): client(Google-аккаунт) → клиент Play; appgallery_host —
         APPSHELF_APPGALLERY_HOST ("" — appgallery.HOST)."""
         self.http, self.play, self.sleep, self.pause, self.clock = http, play, sleep, pause, clock
         self.appgallery_host = appgallery_host or appgallery.HOST
+        self.fourpda = fourpda
         self._last: float | None = None
         self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock)
         self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock)
@@ -114,6 +115,9 @@ class Sources:
             return app
 
     def latest(self, source: str, ref: str, stored_etag: str, *, account=None) -> Latest:
+        if source == "fourpda":
+            # Выбранное вложение закреплено; обновление выбирают в теме вручную.
+            return Latest(None, "fourpda:file", False)
         if source == "rustore":
             self._wait()
             return Latest(rustore.info(self.http, ref).version_code, "", True)
@@ -149,10 +153,19 @@ class Sources:
             return Latest(apkpure.info(self.http, ref).version_code, "", True)
         raise SourceError(f"источник «{source}» не проверяется")
 
-    def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False) -> Got:
+    def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False,
+              user_id: int | None = None) -> Got:
         """APK в dest. rustore, play — ref: пакет; link — ref: адрес; appgallery — пакет или ID со страницы (Got.ref —
         пакет). play — Google-аккаунтом account; купленное — только при allow_paid (полка того, чей аккаунт купил),
         отказ — до доставки."""
+        if source == "fourpda":
+            if not isinstance(user_id, int) or user_id <= 0:
+                raise SourceError("4PDA доступен только на личной полке")
+            if self.fourpda is None:
+                raise SourceError("Подключите свой аккаунт 4PDA")
+            self._wait()
+            self.fourpda.client(user_id).download(ref, dest)
+            return Got("", "", None, "fourpda:file")
         if source == "play":
             return self._fetch_play(ref, dest, account, allow_paid)
         if source == "rustore":

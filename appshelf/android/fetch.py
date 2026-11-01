@@ -20,7 +20,7 @@ from .sources import ACCOUNT_GONE, SplitOnly
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
                 "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "архивом F-Droid",
-                "github": "GitHub", "apkpure": "APKPure"}
+                "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
 SIGNER_DIFFERS = "подписан не так, как в RuStore: не встанет поверх версии оттуда"
@@ -177,8 +177,10 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             if source == "apkpure" and reference is None and not ack and not db.has_current(c, shelf.id, ref):
                 env.sources.apkpure_app(ref)  # только XAPK — отказ сразу: галочка его не поставит
                 raise SourceError(NEED_ACK)
+            # У 4PDA учётка определяется владельцем полки, не параметром формы/задания.
+            private = {"user_id": shelf.user_id} if source == "fourpda" else {}
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
-                                    allow_paid=_own_shelf(shelf, account))
+                                    allow_paid=_own_shelf(shelf, account), **private)
             want = got.ref or (ref if source in PACKAGE_REFS else "")
             if source in ("fdroid", "fdroid_archive"):
                 want = fdroid_index.split_ref(ref)[0]
@@ -203,6 +205,8 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             if notice and result != "same":
                 db.set_status(c, shelf.id, package, "ok", notice)
             app = db.get_app(c, shelf.id, package)
+            if source == "fourpda" and app is not None and app["source"] == "fourpda" and result != "same":
+                db.set_source(c, shelf.id, package, source, ref)
             if got.ref and got.ref != ref and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_source(c, shelf.id, package, source, got.ref)  # AppGallery: ID со страницы → пакет
             if got.etag and app is not None and (app["source"], app["source_ref"]) == (source, ref):

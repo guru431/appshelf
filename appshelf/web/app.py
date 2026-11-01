@@ -68,13 +68,19 @@ def parse_app_id(ref: str) -> int | None:
 
 
 def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=time.monotonic, send=notify.send_mail,
-               disk_free=jobs.free_bytes, start_worker: bool = True, sources=None, google_http=None) -> FastAPI:
+               disk_free=jobs.free_bytes, start_worker: bool = True, sources=None, google_http=None,
+               fourpda_sessions=None, fourpda_browser=None) -> FastAPI:
     """tools(acct) — ipatool Apple ID; new_tool(home, device_mac) — ipatool первого входа нового Apple ID;
     sources — источники APK (по умолчанию RuStore, ссылки и Google Play, с доп. корнями APPSHELF_SOURCES_CA);
     google_http — HTTP к token endpoint Google (по умолчанию android.net.Http: только https и глобальные адреса)."""
+    from ..android.fourpda import Sessions
+    from ..fourpda_login import BrowserLogin
+    from . import fourpda as fourpda_web
+    fourpda_sessions = fourpda_sessions or Sessions(cfg)
+    fourpda_browser = fourpda_browser or BrowserLogin(cfg, clock=clock)
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
                    sources=sources or Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg),
-                                              appgallery_host=cfg.appgallery_host))
+                                              appgallery_host=cfg.appgallery_host, fourpda=fourpda_sessions))
     flow = LoginFlow(clock=clock)
     w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
                webauth.load_key(cfg.cookie_key))
@@ -85,6 +91,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         if start_worker:
             worker.start()
         yield
+        fourpda_browser.close()
 
     app = FastAPI(title="appshelf", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.w, app.state.worker = w, worker
@@ -365,6 +372,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     # TLS-контекст Http — десятки мс: без настроек Google он не нужен, маршруты /google/* тогда отвечают 404
     google_signin.register_routes(app, w, google_http or (net.Http() if cfg.google_enabled else None))
     accounts.register_routes(app, w)
+    fourpda_web.register_routes(app, w, fourpda_sessions, fourpda_browser)
     admin.register_routes(app, w)
     android.register_routes(app, w)
     return app

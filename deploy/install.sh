@@ -39,7 +39,7 @@ for d in "$R/.venv" "$R/bin"; do
   if [ -e "$d" ]; then chmod -R go-w "$d"; fi
 done
 # зависимости и пакет — до подмены кода: упади pip, работать останется прежний код
-"$R/.venv/bin/pip" install --quiet --root-user-action=ignore "$NEW"
+"$R/.venv/bin/pip" install --quiet --root-user-action=ignore "$NEW[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
 rm -rf "$OLD"
@@ -64,7 +64,7 @@ else
   systemctl disable --quiet --now appshelf-backup.timer 2>/dev/null || true
 fi
 # spec 2026-10-08 §6: HOME ipatool на каждый Apple ID; 2026-10-28 §6.4: мастер-токены Google Play
-install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /etc/appshelf/google /var/lib/appshelf/locks
+install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /etc/appshelf/google /etc/appshelf/fourpda /var/lib/appshelf/locks
 install -d -o appshelf -g appshelf -m 0700 /var/lib/appshelf/tmp    # TMPDIR appshelf-web: загрузки APK
 if [ -d /etc/appshelf/.ipatool ] && [ ! -e /etc/appshelf/accounts/1 ]; then
   systemctl stop appshelf-web       # учётка ipatool переезжает — служба её в это время не трогает

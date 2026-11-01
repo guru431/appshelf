@@ -23,6 +23,7 @@
 {% else %}<p class="empty">На вашей Android-полке пока нет скачанных приложений. <a href="/android">Открыть мою полку</a></p>{% endif %}
 {% endif %}
 <h2>Найти приложение</h2>
+{% if not public %}<p><a class="btn secondary" href="/android/4pda">Найти на 4PDA</a></p>{% endif %}
 <form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
 <p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure.
   Выберите источник: сборки одного приложения могут отличаться подписью и функциями. AppGallery и APKPure

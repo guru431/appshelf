@@ -26,7 +26,7 @@ UMask=0077
 # /var открыт: архив (APPSHELF_PUB) бывает где угодно, а sendmail (exim4) пишет очередь в /var/spool.
 # NoNewPrivileges не ставим: с ним setuid-sendmail не отправит ни одного письма.
 ProtectSystem=full
-ReadWritePaths=/etc/appshelf/accounts /etc/appshelf/google
+ReadWritePaths=/etc/appshelf/accounts /etc/appshelf/google /etc/appshelf/fourpda
 PrivateTmp=yes
 # Загрузка своего APK (до 1 ГБ): multipart-разбор кладёт файл во временный каталог — на диск данных, не в /tmp
 # (tmpfs в Debian 13); каталог создаёт deploy/install.sh

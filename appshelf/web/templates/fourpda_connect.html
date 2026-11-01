@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block main %}
+<h2>Аккаунт 4PDA · {{ person.name }}</h2>
+{% if error %}<p class="banner" role="alert">{{ error }}</p>{% endif %}
+{% if connected %}<div class="card"><p>Подключён: <b>{{ connected }}</b></p>
+<form method="post" action="/fourpda/{{ person.id }}/disconnect"><button class="secondary">Отключить 4PDA</button></form></div>{% endif %}
+{% if token %}
+<p>Перед вами страница 4PDA. Нажмите на нужное поле, введите логин, пароль и код с картинки.
+После успешного входа нажмите «Подключить аккаунт». Окно закроется через 10 минут.</p>
+<p id="browser-error" class="err" role="alert"></p>
+<div class="card" style="padding:0;overflow:hidden"><img id="fourpda-screen" width="1000" height="800" alt="Окно входа на 4PDA" style="display:block;width:100%;height:auto;cursor:pointer;touch-action:manipulation"></div>
+<label>Клавиатура для выбранного поля<input id="fourpda-keyboard" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Ввод в выбранное поле 4PDA"></label>
+<div class="bar" id="fourpda-keys"><button type="button" class="secondary" data-key="Tab">Следующее поле</button><button type="button" class="secondary" data-key="Control+A">Выделить всё</button><button type="button" class="secondary" data-key="Backspace">⌫</button><button type="button" class="secondary" data-key="Enter">Ввод</button><button type="button" class="secondary" data-delta="-550">Вверх</button><button type="button" class="secondary" data-delta="550">Вниз</button></div>
+<div class="bar"><form id="fourpda-finish" method="post" action="/fourpda/{{ person.id }}/finish"><input type="hidden" name="token" value="{{ token }}"><button>Подключить аккаунт</button></form>
+<form method="post" action="/fourpda/{{ person.id }}/cancel"><input type="hidden" name="token" value="{{ token }}"><button class="secondary">Отмена</button></form></div>
+<script>
+(function () {
+  var base = {{ ('/fourpda/' ~ person.id) | tojson }}, token = {{ token | tojson }};
+  var screen = document.getElementById('fourpda-screen'), keyboard = document.getElementById('fourpda-keyboard');
+  var error = document.getElementById('browser-error'), queue = Promise.resolve(), stopped = false, blobUrl = null;
+  function send(data) {
+    queue = queue.then(async function () {
+      var response = await fetch(base + '/input', {method:'POST', headers:{'X-4PDA-Window':token}, body:new URLSearchParams(data)});
+      if (!response.ok) { var result = await response.json(); throw new Error(result.error || 'Не удалось передать ввод'); }
+    }).catch(function (e) { error.textContent = e.message; });
+    return queue;
+  }
+  async function frame() {
+    try {
+      var response = await fetch(base + '/screen', {headers:{'X-4PDA-Window':token}, cache:'no-store'});
+      if (!response.ok) { error.textContent = await response.text(); stopped = true; return; }
+      var next = URL.createObjectURL(await response.blob()), previous = blobUrl;
+      blobUrl = next; screen.src = next; if (previous) URL.revokeObjectURL(previous);
+    } catch (e) { error.textContent = 'Соединение прервалось. Обновите страницу подключения.'; stopped = true; }
+    if (!stopped) setTimeout(frame, 1000);
+  }
+  screen.addEventListener('click', function (e) {
+    var r = screen.getBoundingClientRect();
+    var width = screen.naturalWidth || 1000, height = screen.naturalHeight || 800;
+    send({action:'click',x:Math.min(width-1,(e.clientX-r.left)*width/r.width),y:Math.min(height-1,(e.clientY-r.top)*height/r.height)});
+    keyboard.focus();
+  });
+  keyboard.addEventListener('input', function (e) {
+    if (e.isComposing) return;
+    if (e.inputType === 'deleteContentBackward') send({action:'key',key:'Backspace'});
+    else if (keyboard.value) send({action:'text',text:keyboard.value});
+    keyboard.value = '';
+  });
+  keyboard.addEventListener('keydown', function (e) {
+    if (['Enter','Tab','Backspace','Delete','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) {
+      e.preventDefault(); send({action:'key',key:e.key === 'Tab' && e.shiftKey ? 'Shift+Tab' : e.key});
+    } else if (e.ctrlKey && e.key.toLowerCase() === 'a') { e.preventDefault(); send({action:'key',key:'Control+A'}); }
+  });
+  document.getElementById('fourpda-keys').addEventListener('click', function (e) {
+    if (e.target.dataset.key) send({action:'key',key:e.target.dataset.key});
+    if (e.target.dataset.delta) send({action:'scroll',delta:e.target.dataset.delta});
+  });
+  document.getElementById('fourpda-finish').addEventListener('submit', function (e) {
+    e.preventDefault(); var form = e.currentTarget; queue.then(function () { stopped = true; form.submit(); });
+  });
+  window.addEventListener('pagehide', function () { stopped = true; if (blobUrl) URL.revokeObjectURL(blobUrl); });
+  frame();
+}());
+</script>
+{% else %}
+<p>Войдите своим аккаунтом в отдельном окне 4PDA. Логин, пароль и капчу вводите самостоятельно.
+Пароль не сохраняется; подключение используется только для вашей личной полки.</p>
+<form method="post" action="/fourpda/{{ person.id }}/login"><button>{{ 'Войти заново' if connected else 'Войти в 4PDA' }}</button></form>
+<details class="card"><summary>Подключить сессию из обычного браузера</summary>
+<p>Если окно входа не открывается, войдите на <a href="https://4pda.to/forum/" target="_blank" rel="noopener noreferrer">4PDA</a>
+в своём браузере и загрузите JSON-файл cookies только для домена 4pda.to. Используйте тот же браузер, в котором выполнен вход.</p>
+<form method="post" action="/fourpda/{{ person.id }}/import" enctype="multipart/form-data"><label>Файл сессии<input type="file" name="file" accept=".json,application/json" required></label><button>Проверить и подключить</button></form>
+</details>
+{% endif %}
+<p class="hint">При отключении сохранённая сессия удаляется с сервера. Уже добавленные APK остаются на полке.</p>
+<p><a href="/android/4pda">Приложения 4PDA</a> · <a href="/apple">Аккаунты</a></p>
+{% endblock %}

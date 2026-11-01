@@ -44,6 +44,10 @@ Android-полки, вход Google, публичная полка — `docs/sup
   `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
 
 ## Правила
+- 4PDA: `android/fourpda.py`, `fourpda_login.py`, `web/fourpda.py`; только личная Android-полка.
+  Сессии — `ipatool_home/fourpda/<user_id>.json` (0600), не БД/логи/задания. Вход и капчу проходит человек;
+  окно изолировано, живёт 10 минут, требует Chromium + Xvfb и extra `fourpda` (README).
+  Выбранное вложение закреплено; новую версию выбирает участник. Ссылки dlsess не сохраняются.
 - Репозиторий публикуется на GitHub: внутренних имён, адресов, путей, почты и учётных данных в git нет нигде
   (код, тесты, документы, сообщения коммитов). Публикация — только `/github-push`.
 - Пароль Apple ID — только stdin ipatool и память appshelf-web (≤ 10 мин); не в файлы, логи, `jobs.error`, argv.

@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fourpda = ["playwright>=1.50"]
 test = ["pytest>=8", "pytest-timeout>=2.3", "pytest-xdist>=3.5", "httpx2", "zxing-cpp>=2.2"]
 
 [project.scripts]

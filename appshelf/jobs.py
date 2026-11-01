@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import ipa, notify, people, removed, store
-from .android import db as android_db, fetch as android_fetch, play, sources as android_sources
+from .android import db as android_db, fetch as android_fetch, fourpda, play, sources as android_sources
 from .config import GB, Config
 from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, try_lock
 
@@ -312,6 +312,9 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
             gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
         for shelf in gone:
             _drop_android_dirs(cfg, shelf)
+        for uid in uids:
+            if people.get_user(c, uid) is None:
+                fourpda.Sessions(cfg).forget(uid)
         for gid in gids:
             store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
             play.forget(gid)
@@ -392,6 +395,8 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
             gone = _drop_user_if_empty(c, g.user_id)
         if gone is not None:
             _drop_android_dirs(cfg, gone)
+        if last:
+            fourpda.Sessions(cfg).forget(g.user_id)
         store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
         play.forget(gid)
     return last
@@ -445,6 +450,10 @@ def _link(cfg: Config, c, keep_uid: int, gone_uid: int, moved: list) -> android_
         raise LinkRefused("участника уже нет")
     if people.has_apple(c, gone_uid):
         raise LinkRefused("у уходящего есть Apple ID")
+    sessions = fourpda.Sessions(cfg)
+    old_session, new_session = sessions.path(gone_uid), sessions.path(keep_uid)
+    if old_session.exists() and new_session.exists():
+        raise LinkRefused("У обоих участников подключён 4PDA — отключите один аккаунт перед связкой")
     src, dst = android_db.shelf_for_user(c, gone_uid), android_db.shelf_for_user(c, keep_uid)
     if src is not None and (_android_running(c, src.id) or src.shelf_next or (dst is not None and dst.shelf_next)):
         raise AccountBusy(f"Android-полка №{src.id}")
@@ -457,6 +466,9 @@ def _link(cfg: Config, c, keep_uid: int, gone_uid: int, moved: list) -> android_
         _merge_shelves(cfg, c, src, dst, moved)
         android_db.delete_shelf(c, src.id)  # остались совпавшие пакеты и задания — их строки прочь
         drop = src
+    if old_session.exists():
+        os.replace(old_session, new_session)
+        moved.append((old_session, new_session))
     people.delete_user_row(c, gone_uid)
     return drop
 

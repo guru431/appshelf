@@ -114,8 +114,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         try:
             with w.conn() as c:
                 jobs.link_users(w.cfg, c, keep.id, gone.id)
-        except jobs.LinkRefused:  # у уходящего появился Apple ID, пока шёл запрос
-            return link_page(request, keep, gone, BOTH_APPLE, 400, refused=True)
+        except jobs.LinkRefused as e:  # у уходящего появился Apple ID, пока шёл запрос
+            return link_page(request, keep, gone, str(e) if "4PDA" in str(e) else BOTH_APPLE, 400, refused=True)
         except jobs.ArchiveUnavailable:
             return link_page(request, keep, gone, LINK_ARCHIVE_DOWN, 503)
         except jobs.AccountBusy:

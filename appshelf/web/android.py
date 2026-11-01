@@ -29,7 +29,7 @@ from .common import TEMPLATES, back
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
            "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "Архив F-Droid",
-           "github": "GitHub", "apkpure": "APKPure"}
+           "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
