@@ -153,9 +153,20 @@ class BrowserLogin:
         if action == "click":
             x, y = float(data.get("x", -1)), float(data.get("y", -1))
             size = page.viewport_size
-            if not 0 <= x < size["width"] or not 0 <= y < size["height"]:
+            # JPEG — пиксели экрана, mouse.click — CSS-координаты layout viewport.
+            # Без meta viewport мобильный Chromium ужимает 980 CSS px до 390 px:
+            # прямой клик в точку JPEG тогда попадал в совершенно другой элемент.
+            visual = page.evaluate("""() => {
+                const v = window.visualViewport;
+                return {left: v ? v.offsetLeft : 0, top: v ? v.offsetTop : 0,
+                        width: v ? v.width : innerWidth, height: v ? v.height : innerHeight,
+                        dpr: devicePixelRatio || 1};
+            }""")
+            image_width, image_height = size["width"] * visual["dpr"], size["height"] * visual["dpr"]
+            if not 0 <= x < image_width or not 0 <= y < image_height:
                 raise SourceError("Точка вне окна")
-            page.mouse.click(x, y)
+            page.mouse.click(visual["left"] + x * visual["width"] / image_width,
+                             visual["top"] + y * visual["height"] / image_height)
         elif action == "text":
             text = str(data.get("text", ""))
             if len(text) > 256:

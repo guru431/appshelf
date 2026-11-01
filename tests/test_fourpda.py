@@ -331,14 +331,10 @@ def test_browser_does_not_inherit_service_secrets(cfg, monkeypatch):
     assert not Path(home).exists()
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("width", [390, 1280])
-def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connected, width):
-    """Настоящие DOM-события: клик в окно передаёт координаты, ввод включается человеком."""
+@pytest.fixture
+def local_chromium():
     import shutil
     from pathlib import Path
-    from urllib.parse import parse_qs, urlsplit
-
     playwright = pytest.importorskip("playwright.sync_api")
     executable = os.environ.get("APPSHELF_FOURPDA_BROWSER") or shutil.which("chromium") or shutil.which("google-chrome")
     if not executable:
@@ -346,6 +342,15 @@ def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connec
         executable = str(candidate) if candidate.is_file() else None
     if not executable:
         pytest.skip("Не установлен Chromium для проверки интерфейса")
+    return playwright, executable
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [390, 1280])
+def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connected, width, local_chromium):
+    """Настоящие DOM-события: клик в окно передаёт координаты, ввод включается человеком."""
+    from urllib.parse import parse_qs, urlsplit
+    playwright, executable = local_chromium
     connected.browser.call = lambda uid, token, action, **kw: "window-ticket" if action == "start" else None
     html = connected.client.post("/fourpda/1/login").text
     inputs = []
@@ -385,3 +390,39 @@ def test_login_screen_click_keeps_keyboard_closed_and_manual_typing_works(connec
             assert inputs[-1] == {"action": "text", "text": "example"}
         finally:
             browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("viewport_meta", [False, True])
+def test_browser_click_reaches_button_shown_in_mobile_jpeg(cfg, clock, local_chromium, viewport_meta):
+    """Координаты из настоящего JPEG должны попадать в DOM, в том числе без meta viewport."""
+    import io
+    from PIL import Image
+
+    playwright, executable = local_chromium
+    pool = BrowserLogin(cfg, clock=clock.monotonic)
+
+    def prepare():
+        pool.runtime = playwright.sync_playwright().start()
+        pool.browser = pool.runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        context = pool.browser.new_context(viewport={"width": 390, "height": 800}, is_mobile=True, has_touch=True)
+        page = context.new_page()
+        meta = '<meta name="viewport" content="width=device-width,initial-scale=1">' if viewport_meta else ""
+        left = 200 if viewport_meta else 600
+        page.set_content(meta + '<style>body{margin:0;background:white}button{position:absolute;left:' + str(left) + 'px;top:200px;width:100px;height:60px;background:rgb(0,200,0);border:0}</style><button onclick="this.dataset.clicked=\'yes\'"></button>')
+        pool.pending[1] = Pending(context, page, "ticket", clock.t + 60)
+
+    try:
+        pool.executor.submit(prepare).result(timeout=15)
+        image = Image.open(io.BytesIO(pool.call(1, "ticket", "frame"))).convert("RGB")
+        pixels = image.load()
+        green = [(x, y) for y in range(image.height) for x in range(image.width)
+                 if pixels[x, y][0] < 60 and pixels[x, y][1] > 140 and pixels[x, y][2] < 60]
+        assert green
+        x = (min(p[0] for p in green) + max(p[0] for p in green)) / 2
+        y = (min(p[1] for p in green) + max(p[1] for p in green)) / 2
+        pool.call(1, "ticket", "click", x=x, y=y)
+        clicked = pool.executor.submit(lambda: pool.pending[1].page.locator("button").get_attribute("data-clicked")).result(timeout=5)
+        assert clicked == "yes"
+    finally:
+        pool.close()
