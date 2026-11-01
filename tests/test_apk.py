@@ -7,6 +7,16 @@ from apk_factory import cert_sha, make_apk, png_bytes
 from appshelf import apk
 
 
+def test_reads_long_version_code(tmp_path):
+    path = make_apk(tmp_path / "long.apk", version_code=1, version_code_major=1)
+    assert apk.read_apk(path).version_code == (1 << 32) | 1
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        manifest = z.read("AndroidManifest.xml")
+    obfuscated = manifest.replace("versionCodeMajor".encode("utf-16-le"), "x".encode("utf-16-le") * 16)
+    assert apk._manifest(obfuscated)["manifest"]["versionCodeMajor"] == 1
+
+
 @pytest.mark.parametrize("utf8", [False, True])
 def test_reads_manifest_fields_and_v2_signer(tmp_path, utf8):
     info = apk.read_apk(make_apk(tmp_path / "a.apk", version_code=42, version_name="4.2", cert=b"C1", utf8=utf8,

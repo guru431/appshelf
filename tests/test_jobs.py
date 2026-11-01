@@ -81,6 +81,62 @@ def test_worker_waits_for_login_but_purges_password(ctx, cfg, conn, clock):
     assert conn.execute("SELECT status FROM jobs").fetchone()["status"] == "queued"
 
 
+def test_unpublish_after_token_rotation_uses_fresh_shelf(ctx, cfg, conn, clock):
+    stale = owner(conn, clock)
+    seed_app(conn, cfg, clock, versions=("1.0",), make_dirs=True)
+    jobs.move_shelf(cfg, conn, stale)
+    fresh = people.get_account(conn, stale.id)
+    jobs.unpublish(cfg, conn, stale, 123)
+    assert not store.has_app(conn, stale.id, 123)
+    assert not (cfg.shelf_root(fresh) / "123-1.0").exists()
+
+
+def test_worker_alternates_interactive_platforms(ctx, cfg, conn, clock, monkeypatch):
+    published(conn, clock, 1)
+    published(conn, clock, 2)
+    shelf = android_db.ensure_shelf(conn, 1, clock.iso())
+    for pkg in ("one.example", "two.example"):
+        android_db.enqueue(conn, shelf.id, "copy", clock.iso(), package=pkg)
+    seen = []
+
+    def apple(c, job, acct):
+        seen.append("apple")
+        store.finish_job(c, job["id"], "done", clock.iso())
+
+    def android(env, c, job):
+        seen.append("android")
+        android_db.finish_job(c, job["id"], "done", clock.iso())
+
+    w = worker(ctx, cfg)
+    monkeypatch.setattr(w, "run_job", apple)
+    monkeypatch.setattr(jobs.android_fetch, "run_job", android)
+    for _ in range(4):
+        assert w.tick()
+    assert seen == ["apple", "android", "apple", "android"]
+
+
+def test_background_check_advances_during_continuous_interactive_work(ctx, cfg, conn, clock, monkeypatch):
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 1, "name": "One"}, {"id": 2, "name": "Two"}])
+    ctx.tool.no_license.update({1, 2})
+    store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    shelf = android_db.ensure_shelf(conn, 1, clock.iso())
+    for i in range(jobs.INTERACTIVE_BATCH + 1):
+        android_db.enqueue(conn, shelf.id, "copy", clock.iso(), package=f"example.app{i}")
+    monkeypatch.setattr(jobs.android_fetch, "run_job",
+                        lambda env, c, j: android_db.finish_job(c, j["id"], "done", clock.iso()))
+    w = worker(ctx, cfg)
+    for _ in range(jobs.INTERACTIVE_BATCH):
+        w.tick()
+    assert ctx.tool.calls == []
+    w.tick()
+    assert [call[1] for call in ctx.tool.calls if call[0] == "latest_version_id"] == [1]
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "queued"
+    w.tick()
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE status='queued'").fetchone()[0] == 0
+
+
 def test_jobs_of_apple_id_without_login_wait_others_run(ctx, cfg, conn, clock, tmp_path):
     published(conn, clock)
     set_session(conn, 1, "expired")
@@ -290,11 +346,14 @@ def test_republish_while_unpublish_removes_dirs_keeps_new_version(ctx, cfg, conn
         if not paused:                                    # COMMIT снятия прошёл, каталоги ещё не удалены
             paused.append(names)
             store.publish(conn, 1, 123, clock.iso())
-            jobs.fetch_version(ctx.env, conn, acct, 123, cfg.tmp_dir / "web")
+            with pytest.raises(ipatool.IpatoolError):
+                with ipatool.hold(cfg.download_lock, 0):
+                    pass  # новая загрузка ждёт завершения удаления под общим замком
         real(root, names)
 
     monkeypatch.setattr(store, "remove_dirs", remove_dirs)
     jobs.unpublish(cfg, conn, acct, 123)
+    jobs.fetch_version(ctx.env, conn, acct, 123, cfg.tmp_dir / "web")
     cur = store.current_version(conn, 1, 123)
     assert paused == [["123-1.2.3"]] and cur is not None
     assert (cfg.shelf_root(acct) / cur["dir"] / "app.ipa").is_file()
@@ -512,14 +571,17 @@ def test_remove_google_drops_token_dir(ctx, cfg, conn, clock):
     petr = member(conn, clock)
     g3 = people.create_google(conn, petr.user_id, "sub-p", "petr@gmail.example", "", clock.iso())
     for gid in (g1, g2, g3):
-        (cfg.google_dir / str(gid)).mkdir(parents=True)
-        (cfg.google_dir / str(gid) / "aas").write_text("x")          # мастер-токен Play (spec 2026-10-28 §11)
+        for suffix in ("", ".old", ".new"):
+            d = cfg.google_dir / f"{gid}{suffix}"
+            d.mkdir(parents=True)
+            (d / "aas").write_text("x")  # незавершённые поколения токена также удаляются
     jobs.remove_google(cfg, conn, g1)
     assert not (cfg.google_dir / str(g1)).exists() and (cfg.google_dir / str(g2)).is_dir()
     jobs.remove_user(cfg, conn, petr.user_id)
     assert not (cfg.google_dir / str(g3)).exists() and (cfg.google_dir / str(g2)).is_dir()
     jobs.remove_user(cfg, conn, uid)
-    assert list(cfg.google_dir.iterdir()) == []
+    assert sorted(p.name for p in cfg.google_dir.iterdir()) == sorted(
+        f"{gid}.{suffix}" for gid in (g1, g2, g3) for suffix in ("lock", "wait"))
 
 
 def test_remove_google_refused_while_downloading(ctx, cfg, conn, clock, monkeypatch):

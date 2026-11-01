@@ -4,6 +4,7 @@ Google-аккаунтом, android/play.py), AppGallery, F-Droid, APKPure; св�
 from __future__ import annotations
 
 import io
+import hashlib
 import time
 import threading
 from copy import copy
@@ -61,15 +62,15 @@ def _fdroid_mark(pkg: fdroid.FdPackage) -> str:
 
 class Sources:
     def __init__(self, http: Http, *, play=None, sleep=time.sleep, pause: float = 2.0, clock=time.monotonic,
-                 appgallery_host: str = "", fourpda=None):
+                 appgallery_host: str = "", fourpda=None, cache_dir: Path | None = None):
         """play — android.play.PlayPool (или подмена): client(Google-аккаунт) → клиент Play; appgallery_host —
         APPSHELF_APPGALLERY_HOST ("" — appgallery.HOST)."""
         self.http, self.play, self.sleep, self.pause, self.clock = http, play, sleep, pause, clock
         self.appgallery_host = appgallery_host or appgallery.HOST
         self.fourpda = fourpda
         self._last: float | None = None
-        self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock)
-        self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock)
+        self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock, cache_dir=cache_dir)
+        self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock, cache_dir=cache_dir)
         self._github_cache = {}
         self._github_lock = threading.Lock()
 
@@ -277,17 +278,32 @@ class Sources:
         self._wait()
         pkg = fdroid.info(self.http, package)
         fallback = None
+        signer = ""
+        parts = []
         try:
             for code in fdroid.candidates(pkg):
                 part = dest.with_name(f"{dest.name}.{code}")
+                parts.append(part)
                 self._wait()
                 self.http.download(fdroid.apk_url(package, code), part)
                 abis = apk.read_apk(part).abis
+                app = self.fdroid_catalog.apps(self._wait).get(package)
+                trusted = next((b for b in app.builds if b.code == code), None) if app else None
+                if trusted is None:
+                    part.unlink(missing_ok=True)
+                    raise SourceError("сборки APK нет в проверенном каталоге F-Droid")
+                with part.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if digest != trusted.sha256:
+                    part.unlink(missing_ok=True)
+                    raise SourceError("APK из F-Droid не совпал с SHA-256 в каталоге")
                 if not abis or "arm64-v8a" in abis:
+                    signer = trusted.signer
                     part.replace(dest)
                     break
                 if "armeabi-v7a" in abis and fallback is None:
                     fallback = part
+                    signer = trusted.signer
                 else:
                     part.unlink()
             else:
@@ -296,9 +312,9 @@ class Sources:
                 fallback.replace(dest)
                 fallback = None
         finally:
-            if fallback is not None:
-                fallback.unlink(missing_ok=True)
-        return Got("", "", None, _fdroid_mark(pkg))
+            for part in parts:
+                part.unlink(missing_ok=True)
+        return Got("", signer, None, _fdroid_mark(pkg))
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""

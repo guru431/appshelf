@@ -45,6 +45,8 @@ class NewApk:
     size: int
     sha256: str
     dir: str
+    signature_verified: bool = False
+    rotation_min_sdk: int = 0
 
 
 @dataclass
@@ -123,6 +125,7 @@ def delete_shelf(c, shelf_id: int) -> None:
     for table in ("android_versions", "android_apps", "android_jobs"):
         c.execute(f"DELETE FROM {table} WHERE shelf_id=?", (shelf_id,))
     c.execute("DELETE FROM android_shelves WHERE id=?", (shelf_id,))
+    c.execute("DELETE FROM state WHERE key LIKE ?", (f"android_rejected:{shelf_id}:%",))
 
 
 # --- приложения --------------------------------------------------------------
@@ -209,6 +212,7 @@ def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
                                             (shelf_id, package))]
         c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=?", (shelf_id, package))
         c.execute("DELETE FROM android_apps WHERE shelf_id=? AND package=?", (shelf_id, package))
+        c.execute("DELETE FROM state WHERE key=?", (_rejected_key(shelf_id, package),))
         c.execute("UPDATE android_jobs SET status='cancelled', error='снято с полки' "
                   "WHERE shelf_id=? AND package=? AND status='queued'", (shelf_id, package))
     remove_dirs(root, dirs)
@@ -266,10 +270,10 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
             old += stale
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (v.signer, shelf_id, package))
         c.execute("""INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk,
-                         abis, signer, source, size, sha256, dir, downloaded_at, role)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                         abis, signer, source, size, sha256, dir, downloaded_at, role, signature_verified, rotation_min_sdk)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                   (shelf_id, package, v.version_name, v.version_code, v.min_sdk, v.target_sdk, v.abis, v.signer,
-                   v.source, v.size, v.sha256, v.dir, now, role))
+                   v.source, v.size, v.sha256, v.dir, now, role, int(v.signature_verified), v.rotation_min_sdk))
         set_status(c, shelf_id, package, "ok")
     remove_dirs(root, old)
     return role
@@ -286,6 +290,32 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
         c.execute("UPDATE android_versions SET role='current' WHERE id=?", (p["id"],))
         c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
     remove_dirs(root, old)
+    return True
+
+
+def _rejected_key(shelf_id: int, package: str) -> str:
+    return f"android_rejected:{shelf_id}:{package}"
+
+
+def rejected_apk(c, shelf_id: int, package: str, sha256: str) -> bool:
+    row = c.execute("SELECT value FROM state WHERE key=?", (_rejected_key(shelf_id, package),)).fetchone()
+    return row is not None and sha256 in json.loads(row["value"])
+
+
+def reject_pending(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
+    """Удалить только выбранную pending; отказ относится к хэшу файла, а не версии или ключу."""
+    with tx(c):
+        row = c.execute("SELECT dir, sha256 FROM android_versions WHERE id=? AND shelf_id=? AND package=? "
+                        "AND role='pending'", (version_id, shelf_id, package)).fetchone()
+        if row is None:
+            return False
+        key = _rejected_key(shelf_id, package)
+        previous = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+        hashes = set(json.loads(previous["value"])) if previous is not None else set()
+        hashes.add(row["sha256"])
+        c.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)", (key, json.dumps(sorted(hashes))))
+        c.execute("DELETE FROM android_versions WHERE id=?", (version_id,))
+    remove_dirs(root, [row["dir"]])
     return True
 
 

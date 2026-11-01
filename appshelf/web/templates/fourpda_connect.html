@@ -3,7 +3,7 @@
 <h2>Аккаунт 4PDA · {{ person.name }}</h2>
 {% if error %}<p class="banner" role="alert">{{ error }}</p>{% endif %}
 {% if connected %}<div class="card"><p>Подключён: <b>{{ connected }}</b></p>
-<form method="post" action="/fourpda/{{ person.id }}/disconnect"><button class="secondary">Отключить 4PDA</button></form></div>{% endif %}
+<form method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/disconnect') }}"><button class="secondary">Отключить 4PDA</button></form></div>{% endif %}
 {% if token %}
 <p>Окно ниже интерактивное: нажимайте прямо на кнопки и галку Cloudflare в изображении.
 Для ввода логина, пароля или кода сначала выберите поле в окне, затем нажмите на поле клавиатуры под ним.
@@ -14,8 +14,8 @@
 <div class="card" style="padding:0;overflow:hidden"><img id="fourpda-screen" width="1000" height="800" alt="Окно входа на 4PDA" style="display:block;width:100%;height:auto;cursor:pointer;touch-action:manipulation"></div>
 <label>Клавиатура для выбранного поля<input id="fourpda-keyboard" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Ввод в выбранное поле 4PDA"></label>
 <div class="bar" id="fourpda-keys"><button type="button" class="secondary" data-key="Tab">Следующее поле</button><button type="button" class="secondary" data-key="Control+A">Выделить всё</button><button type="button" class="secondary" data-key="Backspace">⌫</button><button type="button" class="secondary" data-key="Enter">Ввод</button><button type="button" class="secondary" data-delta="-550">Вверх</button><button type="button" class="secondary" data-delta="550">Вниз</button></div>
-<div class="bar"><form id="fourpda-finish" method="post" action="/fourpda/{{ person.id }}/finish"><input type="hidden" name="token" value="{{ token }}"><button>Подключить аккаунт</button></form>
-<form method="post" action="/fourpda/{{ person.id }}/cancel"><input type="hidden" name="token" value="{{ token }}"><button class="secondary">Отмена</button></form></div>
+<div class="bar"><form id="fourpda-finish" method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/finish') }}"><input type="hidden" name="token" value="{{ token }}"><button>Подключить аккаунт</button></form>
+<form method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/cancel') }}"><input type="hidden" name="token" value="{{ token }}"><button class="secondary">Отмена</button></form></div>
 <script>
 (function () {
   var base = {{ ('/fourpda/' ~ person.id) | tojson }}, token = {{ token | tojson }};
@@ -67,7 +67,7 @@
 {% else %}
 <p>Войдите своим аккаунтом в отдельном окне 4PDA. Логин, пароль и капчу вводите самостоятельно.
 Пароль не сохраняется; подключение используется только для вашей личной полки.</p>
-<form method="post" action="/fourpda/{{ person.id }}/login"><button>{{ 'Войти заново' if connected else 'Войти в 4PDA' }}</button></form>
+<form method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/login') }}"><button>{{ 'Войти заново' if connected else 'Войти в 4PDA' }}</button></form>
 <p class="hint">Если проверка Cloudflare повторяется по кругу, подключите сессию из своего браузера ниже.</p>
 {% endif %}
 <div class="card" id="fourpda-session"><h3>Подключить сессию из своего браузера</h3>
@@ -83,9 +83,9 @@
 </details>
 <p class="hint">Сессия даёт доступ к вашему аккаунту. Вставляйте её только здесь, в форму своей полки.
 Она хранится на сервере до отключения 4PDA; пароль не сохраняется.</p>
-<form method="post" action="/fourpda/{{ person.id }}/import"><label>JSON сессии<textarea name="session_json" rows="5" maxlength="32768" autocomplete="off" autocapitalize="off" spellcheck="false" required style="display:block;width:100%;margin-top:6px;padding:12px;font:16px/1.4 monospace;background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:12px"></textarea></label><button>Проверить и подключить</button></form>
+<form method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/import') }}"><label>JSON сессии<textarea name="session_json" rows="5" maxlength="32768" autocomplete="off" autocapitalize="off" spellcheck="false" required style="display:block;width:100%;margin-top:6px;padding:12px;font:16px/1.4 monospace;background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:12px"></textarea></label><button>Проверить и подключить</button></form>
 <details><summary>Загрузить JSON-файл</summary>
-<form method="post" action="/fourpda/{{ person.id }}/import" enctype="multipart/form-data"><label>Файл сессии<input type="file" name="file" accept=".json,application/json" required></label><button>Проверить и подключить</button></form>
+<form method="post" action="{{ post_url('/fourpda/' ~ person.id ~ '/import') }}" enctype="multipart/form-data"><label>Файл сессии<input type="file" name="file" accept=".json,application/json" required></label><button>Проверить и подключить</button></form>
 </details>
 </div>
 <p class="hint">При отключении сохранённая сессия удаляется с сервера. Уже добавленные APK остаются на полке.</p>

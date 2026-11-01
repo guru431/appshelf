@@ -32,6 +32,7 @@ REMOVE_LOCK_WAIT = 10.0  # идёт вызов ipatool этого Apple ID — �
 NOT_PURCHASED = "этого приложения нет в покупках Apple ID — проверьте ссылку или ID"
 ACCOUNT_GONE = "Apple ID удалён"
 FAILED_MAX = 50          # id с технической ошибкой в ходе проверки справочника — не больше
+INTERACTIVE_BATCH = 8   # после восьми действий — один шаг фоновой проверки, чтобы она тоже продвигалась
 
 
 class LowSpace(Exception):
@@ -247,10 +248,33 @@ def unpublish(cfg: Config, c, acct, app_id: int) -> None:
     """Снять с публикации. Архив недоступен — ArchiveUnavailable и ничего не тронуто: файлы остались бы на шаре без
     строк, и удалить их из панели было бы нечем. Добавленное по ссылке, лицензию на которое Apple не подтвердил,
     уходит и из «Истории»."""
-    _archive(cfg)
-    store.unpublish(c, acct.id, cfg.shelf_root(acct), app_id)
-    if stub(c, acct.id, app_id):
-        store.drop_purchase(c, acct.id, app_id)
+    with shelf_change(cfg, c, acct) as fresh:
+        if fresh is None:
+            return
+        store.unpublish(c, fresh.id, cfg.shelf_root(fresh), app_id)
+        if stub(c, fresh.id, app_id):
+            store.drop_purchase(c, fresh.id, app_id)
+
+
+@contextmanager
+def shelf_change(cfg: Config, c, acct):
+    """Файловое изменение полки — под общим замком скачивания/переноса, с её актуальным каталогом."""
+    try:
+        with hold(cfg.download_lock, REMOVE_LOCK_WAIT):
+            _archive(cfg)
+            yield people.get_account(c, acct.id)
+    except IpatoolError as e:
+        raise AccountBusy(acct.email) from e
+
+
+def pin_version(cfg: Config, c, acct, app_id: int, version_id: int) -> bool:
+    with shelf_change(cfg, c, acct) as fresh:
+        return fresh is not None and store.pin_version(c, fresh.id, cfg.shelf_root(fresh), app_id, version_id)
+
+
+def unpin_version(cfg: Config, c, acct, app_id: int, version_id: int) -> bool:
+    with shelf_change(cfg, c, acct) as fresh:
+        return fresh is not None and store.unpin_version(c, fresh.id, cfg.shelf_root(fresh), app_id, version_id)
 
 
 def remove_account(cfg: Config, c, acct) -> None:
@@ -316,8 +340,7 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
             if people.get_user(c, uid) is None:
                 fourpda.Sessions(cfg).forget(uid)
         for gid in gids:
-            store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
-            play.forget(gid)
+            play.disconnect(cfg, gid)  # вместе с незавершёнными поколениями токена, под замком подключения
         for a in fresh:
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога
@@ -397,8 +420,7 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
             _drop_android_dirs(cfg, gone)
         if last:
             fourpda.Sessions(cfg).forget(g.user_id)
-        store.rmtree_logged(cfg.google_dir / str(gid))  # мастер-токен Play (spec 2026-10-28 §11)
-        play.forget(gid)
+        play.disconnect(cfg, gid)
     return last
 
 
@@ -575,14 +597,16 @@ def merge_progress(prev: dict | None, cur: dict) -> dict:
 
 
 class Worker:
-    """Обработчик заданий publish, refresh_history, check_removed всех Apple ID и заданий Android-полок (когда
-    Apple-заданий нет) — один поток в appshelf-web."""
+    """Один поток: интерактивные Apple/Android задания чередуются, фоновая проверка уступает между приложениями."""
 
     def __init__(self, env: Env, connect: Callable, purge: Callable[[], None] = lambda: None,
                  interval: float = 2.0, sleep: Callable[[float], None] = time.sleep):
         self.env, self.connect, self.purge = env, connect, purge
         self.interval, self.sleep = interval, sleep
         self._unfinished = None
+        self._last_platform = "android"
+        self._interactive_count = 0
+        self._background_slice = False
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.run_forever, name="appshelf-worker", daemon=True)
@@ -627,11 +651,10 @@ class Worker:
                 with nightly_lock(self.env.cfg) as idle:
                     if idle:  # ночную проверку убили посреди скачивания — не ждать следующей ночи
                         store.fail_stale_updates(c, self.env.now())
-            job = store.take_job(c)
+            platform, job = self.take_job(c)
             if job is None:
-                job = android_db.take_job(c)
-                if job is None:
-                    return False
+                return False
+            if platform == "android":
                 self._unfinished = ("android_jobs", job["id"])
                 android_fetch.run_job(self.env, c, job)
                 self._unfinished = None
@@ -647,6 +670,32 @@ class Worker:
             return True
         finally:
             c.close()
+
+    def take_job(self, c):
+        """Приоритет человеку; платформы по очереди, фону — минимум один ID за ограниченный пакет действий."""
+        self._background_slice = False
+        if self._interactive_count >= INTERACTIVE_BATCH:
+            job = store.take_job(c, ("check_removed",))
+            if job is not None:
+                self._interactive_count = 0
+                self._background_slice = True
+                return "apple", job
+        order = ("android", "apple") if self._last_platform == "apple" else ("apple", "android")
+        for platform in order:
+            job = (store.take_job(c, ("publish", "refresh_history")) if platform == "apple"
+                   else android_db.take_job(c))
+            if job is not None:
+                self._last_platform = platform
+                self._interactive_count += 1
+                return platform, job
+        self._interactive_count = 0
+        return "apple", store.take_job(c, ("check_removed",))
+
+    @staticmethod
+    def interactive_waiting(c) -> bool:
+        return (store.has_runnable(c, "publish") or store.has_runnable(c, "refresh_history") or
+                c.execute(f"SELECT 1 FROM android_jobs j WHERE status='queued' AND {android_db.RUNNABLE} LIMIT 1"
+                          ).fetchone() is not None)
 
     def retry_unfinished(self, c) -> None:
         """Запись итога могла не пройти из-за сбоя БД: повторяем только своё задание на следующем тике.
@@ -689,8 +738,17 @@ class Worker:
                 refresh_history(env, c, acct)
             elif job["kind"] == "check_removed":
                 prev = json.loads(job["progress"]) if job["progress"] else None
+                first = True
+
+                def stop():
+                    nonlocal first
+                    if first and self._background_slice:
+                        first = False
+                        return False
+                    return self.interactive_waiting(c)
+
                 try:
-                    removed.check(env, c, acct, stop=lambda: store.has_runnable(c, "publish"),
+                    removed.check(env, c, acct, stop=stop, cursor=prev.get("cursor", 0) if prev else 0,
                                   progress=lambda p: store.set_progress(c, job["id"], merge_progress(prev, p)))
                 except removed.Interrupted:  # публикация вперёд, проверка — следом с того же места
                     store.requeue_job(c, job["id"])

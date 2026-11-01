@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import re
+import shutil
 import struct
+import subprocess
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -20,7 +23,7 @@ from pathlib import Path
 from PIL import Image
 
 ATTRS = {0x01010001: "label", 0x01010002: "icon", 0x0101020c: "minSdkVersion", 0x0101021b: "versionCode",
-         0x0101021c: "versionName", 0x01010270: "targetSdkVersion"}
+         0x0101021c: "versionName", 0x01010270: "targetSdkVersion", 0x01010576: "versionCodeMajor"}
 ELEMENTS = ("manifest", "uses-sdk", "application")
 PACKAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")  # имя пакета идёт в имена каталога и файла
 V1_RE = re.compile(r"^META-INF/[^/]+\.(RSA|DSA|EC)$", re.IGNORECASE)
@@ -62,6 +65,7 @@ class ApkInfo:
 
 
 def read_apk(path: Path) -> ApkInfo:
+    """Ограниченный разбор метаданных; доверие содержимому устанавливает только verify_apk перед публикацией."""
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
@@ -91,6 +95,10 @@ def read_apk(path: Path) -> ApkInfo:
     code = m.get("versionCode")
     if not isinstance(code, int) or isinstance(code, bool):
         raise ApkError("в манифесте нет versionCode")
+    major = m.get("versionCodeMajor", 0)
+    if not isinstance(major, int) or isinstance(major, bool) or not 0 <= major < (1 << 31):
+        raise ApkError("в манифесте неверный versionCodeMajor")
+    code = (major << 32) | (code & 0xFFFFFFFF)
     min_sdk = _int(sdk.get("minSdkVersion"), 1)
     try:
         signer = _signer(path, pkcs7)
@@ -109,6 +117,79 @@ def read_apk(path: Path) -> ApkInfo:
         abis=tuple(sorted({n.split("/")[1] for n in names if n.startswith("lib/") and n.count("/") >= 2} - {""})),
         signer=signer,
     )
+
+
+def verifier_command() -> list[str]:
+    """Системный AOSP verifier; .jar позволяет использовать SDK Build Tools и на Windows без shell."""
+    executable = os.environ.get("APPSHELF_APKSIGNER") or shutil.which("apksigner")
+    if not executable:
+        raise ApkError("проверка подписи APK недоступна: установите apksigner")
+    if executable.lower().endswith(".jar"):
+        java = shutil.which("java")
+        if not java:
+            raise ApkError("проверка подписи APK недоступна: установите Java для apksigner")
+        return [java, "-jar", executable]
+    return [executable]
+
+
+def _verify_process(args: list[str]):
+    try:
+        return subprocess.run([*verifier_command(), *args], stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
+                              timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ApkError("не удалось проверить подпись APK — рабочая версия сохранена") from None
+
+
+def _verified_signer(output: str) -> str:
+    signers = re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$", output, re.MULTILINE)
+    if len(signers) != 1:
+        raise ApkError("APK не содержит ровно одного проверенного подписанта")
+    return signers[0].lower()
+
+
+def verify_apk(path: Path) -> str:
+    """Проверить подпись и все подписанные данные по правилам Android; вернуть реального подписанта.
+
+    Никакого fallback к извлечению сертификата: отсутствие verifier, timeout и отказ проверки закрывают публикацию.
+    Набор нескольких подписантов нельзя представить одним SHA-256 в БД, поэтому такой APK тоже отклоняется.
+    """
+    result = _verify_process(["verify", "--print-certs", str(path.resolve())])
+    if result.returncode:
+        raise ApkError("криптографическая проверка APK не пройдена — файл повреждён или подпись недействительна")
+    return _verified_signer(result.stdout)
+
+
+def verified_rotation(path: Path, old_signer: str, new_signer: str) -> int:
+    """После verify_apk: проверенная AOSP цепочка с разрешённым переносом данных; минимальная API либо 0.
+
+    Наличие сертификата в блоке не считается цепочкой. apksigner проверяет подписи каждого перехода; дополнительно
+    проверяем конечный ключ и принятого предка с installed-data capability. При старом verifier/неизвестном формате
+    оставляем ручную смену. Результат — подсказка, автоматического принятия нового ключа нет.
+    """
+    if not old_signer or old_signer == new_signer:
+        return 0
+    try:
+        result = _verify_process(["lineage", "--in", str(path.resolve()), "--print-certs"])
+        if result.returncode:
+            return 0
+        entries = re.findall(r"^Signer #\d+ in lineage certificate SHA-256 digest: ([0-9a-fA-F]{64})$"
+                             r"([\s\S]*?)(?=^Signer #\d+ in lineage certificate DN:|\Z)",
+                             result.stdout, re.MULTILINE)
+        if len(entries) < 2 or entries[-1][0].lower() != new_signer:
+            return 0
+        if not any(cert.lower() == old_signer and re.search(r"^Has installed data capability:\s*true$", rest,
+                                                          re.MULTILINE) for cert, rest in entries[:-1]):
+            return 0
+        # v3.1 может менять используемый ключ только с API 33: проверяем фактического подписанта каждой платформы.
+        for sdk in (28, 33):
+            checked = _verify_process(["verify", "--print-certs", "--min-sdk-version", str(sdk),
+                                       "--max-sdk-version", str(sdk), str(path.resolve())])
+            if checked.returncode == 0 and _verified_signer(checked.stdout) == new_signer:
+                return sdk
+    except ApkError:
+        pass
+    return 0
 
 
 def extract_icon(path: Path) -> bytes | None:

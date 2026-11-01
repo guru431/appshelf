@@ -38,7 +38,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; padding-bottom: calc(72px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg);
        font: 17px/1.4 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
        -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
-h1 { margin: 0; font-size: 28px; line-height: 1.2; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+h1 { min-width: 0; margin: 0; font-size: 28px; line-height: 1.2; font-weight: 700; letter-spacing: -.02em; overflow-wrap: anywhere; }
 h2 { margin: 22px 4px 8px; font-size: 13px; line-height: 1.3; font-weight: 600; letter-spacing: .04em;
      text-transform: uppercase; color: var(--muted); }
 p { margin: 0 0 12px; }
@@ -165,12 +165,13 @@ code { display: block; margin-top: 8px; padding: 10px 12px; border-radius: 10px;
 /* кнопки: основная, .secondary, .tint, .danger; .sm — капсула в строке списка */
 button, .btn { -webkit-appearance: none; appearance: none; display: inline-flex; align-items: center; justify-content: center;
                min-height: 44px; max-width: 100%; margin: 0; padding: 9px 18px; border: 0; border-radius: 13px;
-               background: var(--accent) linear-gradient(rgba(255,255,255,.14), rgba(255,255,255,0)); color: #fff;
+               background: #005bb8; color: #fff;
                font: inherit; font-size: 16px; font-weight: 600; line-height: 1.25; text-align: center; text-decoration: none; cursor: pointer;
                box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 1px 2px rgba(0,0,0,.16); touch-action: manipulation;
                transition: transform .12s, filter .12s; -webkit-user-select: none; user-select: none; }
 button:active, .btn:active { transform: scale(.97); filter: brightness(.9); }
-@media (hover: hover) { button:hover, .btn:hover { filter: brightness(1.08); } }
+@media (hover: hover) { button:hover, .btn:hover { filter: brightness(1.06); } }
+button:disabled { cursor: default; background: #4b5665; color: #fff; filter: none; }
 .secondary, .tint, .danger { background-image: none; box-shadow: none; }
 .secondary { background-color: var(--fill); color: var(--fg); }
 .tint { background-color: var(--tint); color: var(--link); }
@@ -227,6 +228,28 @@ label input { margin-top: 6px; font-weight: 400; }
 .auth form button { width: 100%; min-height: 50px; }
 .auth form + form { margin-top: 10px; }
 .auth .card + .hint, .auth .hint + .hint { margin: 0 4px 12px; }
+dialog { width: min(580px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); padding: 20px; border: 1px solid var(--line);
+         border-radius: 18px; color: var(--fg); background: var(--card); overflow-y: auto; box-shadow: var(--pop); }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog h2 { margin-top: 0; color: var(--fg); font-size: 18px; text-transform: none; }
+dialog .close { float: right; margin: -8px -8px 8px 8px; }
+.action-list { width: 280px; max-height: min(70dvh, 520px); overflow-y: auto; }
+.action-list button { justify-content: flex-start; text-align: left; }
+.action-list > button { width: 100%; margin-top: 6px; }
+.action-list .danger { margin-top: 8px; border-top: 1px solid var(--line); }
+[hidden] { display: none !important; }
+.shelf-filter select, dialog select { min-height: 44px; max-width: 100%; padding: 8px; border-radius: 10px;
+                                    border: 1px solid var(--line); background: var(--raised); color: var(--fg); font: inherit; }
+.theme-entry { max-width: 720px; margin: 12px auto 0; padding: 0 16px; text-align: right; }
+.theme-entry .pop { display: inline-block; text-align: left; }
+.desktop-transfer { margin-top: 8px; }
+.menu-heading { margin: 10px 12px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
+@media (max-width: 460px) {
+  header { flex-wrap: wrap; gap: 8px; }
+  header h1 { flex: 1 1 100%; font-size: 26px; }
+  header .acct { flex: 1; }
+  header .acct .chip { justify-content: space-between; }
+}
 </style>
 </head>
 <body>
@@ -234,7 +257,7 @@ label input { margin-top: 6px; font-weight: 400; }
   <a href="{{ href }}" class="{{ 'on' if nav == key }}"><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
 {%- endmacro %}
 {% if nav not in ('login', 'guest') %}
-{% set android = nav.startswith('a_') %}
+{% set android = section == 'android' %}
 <header>
   <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Аккаунты', 'admin': 'Участники',
          'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная'}[nav] }}</h1>
@@ -244,7 +267,7 @@ label input { margin-top: 6px; font-weight: 400; }
     {# Android-раздел: полка одного из вошедших (/who/<id>) или публичная #}
     <summary><span class="chip"><span class="who">{{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
-      <div class="shelves">
+      <div class="menu-heading">Полка</div><div class="shelves">
         {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
         {%- if nav == 'a_public' %}<span class="on">Публичная</span>{% else %}<a href="/android/public">Публичная</a>{% endif -%}
       </div>
@@ -252,7 +275,7 @@ label input { margin-top: 6px; font-weight: 400; }
     <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
       {%- if accounts %}
-      <div class="shelves">
+      <div class="menu-heading">Полка</div><div class="shelves">
         {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
       </div>
       {%- endif %}
@@ -264,12 +287,14 @@ label input { margin-top: 6px; font-weight: 400; }
         {%- else %}нет входа{% endif -%}
       </div>
       {%- endif %}
-      <div class="seg">
+      <div class="menu-heading">Аккаунты и подключения</div>
+      <div class="shelves"><a href="/apple">Аккаунты</a>{% if android and who %}<a href="/fourpda/{{ who.id }}/connect">4PDA</a>{% endif %}</div>
+      <div class="menu-heading">Оформление</div><div class="seg" aria-label="Оформление">
         <a href="/theme?set=auto&amp;back={{ here | urlencode }}"{% if not theme %} class="on"{% endif %}>авто</a>
         <a href="/theme?set=light&amp;back={{ here | urlencode }}"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
         <a href="/theme?set=dark&amp;back={{ here | urlencode }}"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a>
       </div>
-      <form method="post" action="/logout"><button class="secondary">Выйти</button></form>
+      <div class="menu-heading">Выход</div><form method="post" action="{{ post_url('/logout') }}"><button class="secondary">Выйти из всех участников этого браузера</button></form>
     </div>
   </details>
 </header>
@@ -290,12 +315,18 @@ label input { margin-top: 6px; font-weight: 400; }
   {% if users and users | selectattr('role', 'equalto', 'owner') | first %}{{ tab('/admin', 'admin', 'Участники', '<circle cx="9" cy="9" r="3.1"/><path d="M3 19c.7-3 3-4.7 6-4.7s5.3 1.7 6 4.7"/><circle cx="17.2" cy="9.6" r="2.4"/><path d="M17 14.4c2.2.2 3.6 1.5 4.2 3.8"/>') }}{% endif %}
 </nav>
 {% endif %}
+{% if nav in ('login', 'guest') %}
+<div class="theme-entry"><details class="pop"><summary class="btn sm secondary">Оформление: {{ {'light': 'светлая', 'dark': 'тёмная'}.get(theme, 'как в системе') }}</summary>
+<div class="sheet"><nav class="shelves" aria-label="Оформление">
+{% for value, label in [('auto', 'Как в системе'), ('light', 'Светлая'), ('dark', 'Тёмная')] %}
+<a href="/theme?set={{ value }}&amp;back={{ here | urlencode }}"{% if theme == value or (not theme and value == 'auto') %} aria-current="true"{% endif %}>{{ label }}</a>
+{% endfor %}</nav></div></details></div>
+{% endif %}
 <main>
 {%- if acct and acct.session == 'expired' and nav in ('catalog', 'history', 'blocked') %}
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
-{% if nav in ('a_public', 'guest') %}
 <script>
 addEventListener('click', function (e) {
   var button = e.target.closest && e.target.closest('[data-qr-toggle]');
@@ -306,9 +337,29 @@ addEventListener('click', function (e) {
   button.setAttribute('aria-expanded', String(!panel.hidden));
 });
 </script>
-{% endif %}
-{% if nav not in ('login', 'guest') %}
 <script>
+var dialogOpener;
+addEventListener('click', function(e) {
+  if (e.target.closest && e.target.closest('[data-help]')) {
+    var help = document.getElementById('install-help'); if (help) help.open = true;
+  }
+  var opener = e.target.closest && e.target.closest('[data-dialog]');
+  if (opener) {
+    var dialog = document.getElementById(opener.dataset.dialog);
+    if (dialog) { var pop = opener.closest('details'); dialogOpener = pop ? pop.querySelector('summary') : opener; if (pop) pop.open = false; dialog.showModal(); }
+  }
+  var close = e.target.closest && e.target.closest('[data-close]');
+  if (close) close.closest('dialog').close();
+});
+document.querySelectorAll('dialog').forEach(function(d) { d.addEventListener('close', function() { if (dialogOpener) dialogOpener.focus(); }); });
+addEventListener('change', function(e) {
+  if (!e.target.matches('select[name="source"]')) return;
+  var warning = e.target.form.querySelector('[data-source-warning]');
+  if (warning) warning.hidden = e.target.value !== 'apkpure';
+});
+addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') document.querySelectorAll('details.pop[open]').forEach(function(d) { d.open = false; d.querySelector('summary').focus(); });
+});
 addEventListener('pointerdown', function (e) {   // меню закрывается касанием мимо него
   Array.prototype.forEach.call(document.querySelectorAll('details.pop[open]'), function (d) {
     if (!d.contains(e.target)) d.open = false;
@@ -326,10 +377,9 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
     b.after(code);
   }
   if (!navigator.clipboard) { show(); return; }
-  navigator.clipboard.writeText(link).then(function () { b.textContent = 'Ссылка скопирована'; }, show);
+  navigator.clipboard.writeText(link).then(function () { b.textContent = 'Скопировано'; }, show);
 });
 </script>
-{% endif %}
 {% if busy %}
 <script>
 (function () {
@@ -348,7 +398,7 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
     }).catch(function () {});
   }, 3000);
   function editing() {
-    if (document.querySelector('details[open], .qr-toggle[aria-expanded="true"]')) return true;
+    if (document.querySelector('details[open], dialog[open], .qr-toggle[aria-expanded="true"]')) return true;
     return Array.prototype.some.call(document.querySelectorAll('input'), function (i) {
       return i === document.activeElement || i.value !== i.defaultValue;
     });

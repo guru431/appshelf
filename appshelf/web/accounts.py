@@ -195,17 +195,20 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             proxy = g.proxy  # выбрал владелец раньше
         if not oauth_token.strip():
             return connect_page(request, g, NO_TOKEN, 400)
+
+        def connected(country):
+            with w.conn() as c, store.tx(c):
+                if people.get_google(c, g.id) is None:
+                    raise play.PlayAccountGone("Google-аккаунт удалён")
+                people.set_proxy(c, g.id, proxy)
+                people.set_play(c, g.id, "ok", w.now(), country)
         try:
-            country = play.connect(w.cfg, g.id, g.email, oauth_token.strip(), proxy)
+            play.connect(w.cfg, g.id, g.email, oauth_token.strip(), proxy, on_saved=connected)
         except play.PlayError as e:  # тексты без токенов (play.py)
             return connect_page(request, g, str(e), 400)
         except net.FetchError as e:
             print(f"appshelf: подключение Google-аккаунта #{g.id} к Play: {e}", file=sys.stderr)
             return connect_page(request, g, f"Google недоступен: {e}", 502)
-        with w.conn() as c:
-            with store.tx(c):
-                people.set_proxy(c, g.id, proxy)
-                people.set_play(c, g.id, "ok", w.now(), country)
         return back("/apple")
 
     @app.get("/google/{gid}/play/disconnect", response_class=HTMLResponse)
@@ -223,10 +226,10 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         g = own_google(request, gid)
         if g is None:
             return PlainTextResponse("not found", status_code=404)
-        with w.conn() as c:
-            people.set_play(c, g.id, "none", w.now())
-        store.rmtree_logged(play.token_dir(w.cfg, g.id))
-        play.forget(g.id)
+        def disconnected():
+            with w.conn() as c:
+                people.set_play(c, g.id, "none", w.now())
+        play.disconnect(w.cfg, g.id, on_removed=disconnected)
         return back("/apple")
 
     @app.get("/apple/add", response_class=HTMLResponse)

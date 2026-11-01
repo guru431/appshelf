@@ -47,8 +47,9 @@ def test_v1_shelf_becomes_owner_apple_id(tmp_path):
     a = people.get_account(c, 1)
     assert (a.user_id, a.email, a.name, a.storefront, a.session, a.session_since, a.legacy_pub, a.device_mac) == \
         (1, "owner@example", "Иван Петров", "RU", "ok", "t2", True, "")
-    for t in store.SHELF_TABLES:
+    for t in ("purchases", "apps", "versions", "jobs", "removed_checks"):
         assert {r[0] for r in c.execute(f"SELECT account_id FROM {t}")} == {1}, t
+    assert c.execute("SELECT COUNT(*) FROM removed_retries").fetchone()[0] == 0
     assert [(r["version"], r["source"]) for r in store.list_purchases(c, 1)] == [("12.15", "daap")]
     assert a.history_at == "t0"
     assert store.current_version(c, 1, 123)["id"] == 5 and store.no_license_ids(c, 1) == {564177498}
@@ -209,15 +210,16 @@ def test_v6_upgrades_to_v7(tmp_path):
 
 
 def v7_schema() -> str:
-    """Схема версии 7: нынешняя без столбцов версии 8 (Google Play)."""
+    """Схема версии 7: без новых столбцов Play/проверки подписи и без карантина Apple."""
     schema = store.SCHEMA
-    for _, column in store.V8_COLUMNS:
+    for _, column in (*store.V8_COLUMNS, *store.V9_COLUMNS):
         schema, n = re.subn(r",\s+" + re.escape(column), "", schema)
         assert n == 1, column
+    schema = re.sub(r"CREATE TABLE IF NOT EXISTS removed_retries \(.*?\);", "", schema, flags=re.S)
     return schema
 
 
-def test_v7_upgrades_to_v8(tmp_path):
+def test_v7_upgrades_to_current_schema(tmp_path):
     db = tmp_path / "appshelf.db"
     c = sqlite3.connect(db)
     c.executescript(v7_schema())
@@ -231,7 +233,7 @@ def test_v7_upgrades_to_v8(tmp_path):
     c.commit()
     c.close()
     c = store.connect(db)
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 8 == store.SCHEMA_VERSION
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
     g = people.get_google(c, 1)
     assert (g.email, g.play, g.play_since, g.play_country, g.proxy) == ("i@g", "none", "", "", "")
     assert tuple(c.execute("SELECT google_account_id, paid FROM android_apps").fetchone()) == (None, 0)
@@ -241,7 +243,8 @@ def test_v7_upgrades_to_v8(tmp_path):
     fresh.close()
     c.close()
     c = store.connect(db)                                     # повторное открытие ничего не меняет
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 8 and people.get_google(c, 1).play == "none"
+    assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+    assert people.get_google(c, 1).play == "none"
     c.close()
 
 

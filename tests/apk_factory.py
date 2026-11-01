@@ -13,9 +13,10 @@ from PIL import Image
 
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 ATTR_IDS = {"label": 0x01010001, "icon": 0x01010002, "minSdkVersion": 0x0101020c, "versionCode": 0x0101021b,
-            "versionName": 0x0101021c, "targetSdkVersion": 0x01010270}
+            "versionName": 0x0101021c, "targetSdkVersion": 0x01010270, "versionCodeMajor": 0x01010576}
 T_REF, T_STRING, T_INT, T_BOOL = 0x01, 0x03, 0x10, 0x12
 V2_ID, V3_ID = 0x7109871a, 0xf05368c0
+SYNTHETIC_SIGNATURES: dict[str, str] = {}
 
 
 def png_bytes(size: int, rgba=(0, 128, 0, 255)) -> bytes:
@@ -192,11 +193,13 @@ def make_apk(path: Path, *, package="ru.example.app", version_code=1, version_na
              label="Пример", cert=b"CERT-A", scheme="v2", v3_cert: bytes | None = None, split=None,
              required_splits=False, split_types="", abis=(), icon: bytes | None = None,
              files: dict[str, bytes] | None = None, utf8=False, icon_ref: int | None = None,
-             resources: dict[int, list[tuple[str, int, str]]] | None = None) -> Path:
+             resources: dict[int, list[tuple[str, int, str]]] | None = None, version_code_major=0) -> Path:
     """scheme: "v1", "v2", "v3", "v2+v3" или None (без подписи); label "@0x…" — ссылка на ресурс; icon_ref —
     android:icon ссылкой; resources — resources.arsc (см. arsc)."""
     manifest = [(False, "package", "str", package), (True, "versionCode", "int", version_code),
                 (True, "versionName", "str", version_name)]
+    if version_code_major:
+        manifest.append((True, "versionCodeMajor", "int", version_code_major))
     if split:
         manifest.append((False, "split", "str", split))
     if split_types:
@@ -233,4 +236,6 @@ def make_apk(path: Path, *, package="ru.example.app", version_code=1, version_na
     if pairs:
         raw = _insert_block(raw, _sig_block(pairs))
     path.write_bytes(raw)
+    if scheme:
+        SYNTHETIC_SIGNATURES[hashlib.sha256(raw).hexdigest()] = cert_sha(v3_cert or cert)
     return path

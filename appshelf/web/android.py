@@ -19,12 +19,12 @@ import qrcode
 from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
-from .. import apk, jobs, notify, people, store
+from .. import apk, ipatool, jobs, notify, people, store
 from ..android import db, fdroid_index, fetch, github, links, net, pin, play
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
-from .common import TEMPLATES, back
+from .common import TEMPLATES, back, filter_shelf, mutation_url
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
@@ -132,7 +132,7 @@ def register_routes(app, w) -> None:
     @app.post("/android/public/add/from-shelf", dependencies=owner)
     def add_from_shelf(request: Request, package: str = Form("")):
         with w.conn() as c:
-            source = _owner_shelf(c, request)
+            source = db.shelf_for_user(c, request.state.who.id) if request.state.who.role == people.OWNER else None
             original = db.get_app(c, source.id, package) if source is not None else None
             if original is None:
                 return PlainTextResponse("not found", status_code=404)
@@ -187,8 +187,10 @@ def register_routes(app, w) -> None:
             closed = pin.closed_until(c, w.now())
             apps = [a for a in db.list_apps(c, shelf.id) if a.current is not None]
         allowed = guest or w.person(request) is not None
-        return w.page(request, "guest.html", "guest", status_code, configured=True, allowed=allowed,
-                      closed=closed, error=error, apps=apps if allowed else [], fresh=_fresh(apps, w.now()),
+        fresh = _fresh(apps, w.now())
+        apps, filters = filter_shelf(apps, request, fresh, android=True)
+        return w.page(request, "guest.html", "guest", status_code, configured=True, allowed=allowed, **filters,
+                      closed=closed, error=error, apps=apps if allowed else [], fresh=fresh,
                       sources=SOURCES, notices=NOTICES, android_version=apk.android_version,
                       apk_name=fetch.apk_name,
                       app_url=lambda package: fetch.app_url(cfg, shelf, package),
@@ -246,7 +248,7 @@ def register_routes(app, w) -> None:
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
-            if (shelf is None or shelf.user_id is not None or shelf.shelf_next
+            if (shelf is None or shelf.shelf_next
                     or db.current_version(c, shelf.id, package) is None):
                 return PlainTextResponse("not found", status_code=404)
         return Response(_qr_png(fetch.app_url(cfg, shelf, package)), media_type="image/png",
@@ -302,6 +304,8 @@ def _register_scope(app, w, scope: Scope):
             pending = [_job_view(j) for j in db.open_jobs(c, shelf.id)
                        if j["package"] not in cards or json.loads(j["payload"] or "{}").get("split_only")] if shelf else []
             busy = shelf is not None and db.has_active(c, shelf.id)
+            waiting = {a.package: store.android_waiting_reason(c, shelf.id, a.package)
+                       for a in apps if a.status == "queued"} if shelf else {}
             nightly = (store.get_state(c, "nightly_last"), nightly_part(store.get_state(c, "nightly_result")))
             if scope.public and edit:  # блок «Гостевой доступ» — владельцу
                 guest = {"url": f"{cfg.public_base}/p", "closed": pin.closed_until(c, w.now()),
@@ -323,9 +327,12 @@ def _register_scope(app, w, scope: Scope):
         else:
             if free < jobs.BANNER_FREE:
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
-        resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners,
-                      busy=busy, nightly=nightly, fresh=_fresh(apps, w.now()), statuses=json.dumps({a.package: a.status for a in apps}),
-                      status_url="/api/android/status" + ("?public=1" if scope.public else ""), sources=SOURCES,
+        fresh = _fresh(apps, w.now())
+        statuses = json.dumps({a.package: a.status for a in apps})
+        apps, filters = filter_shelf(apps, request, fresh, android=True)
+        resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners, **filters,
+                      busy=busy, nightly=nightly, fresh=fresh, statuses=statuses, waiting=waiting,
+                      status_url=f"/api/android/status?person={request.state.who.id}" + ("&public=1" if scope.public else ""), sources=SOURCES,
                       notices=NOTICES,
                       android_version=apk.android_version, apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
@@ -383,7 +390,8 @@ def _register_scope(app, w, scope: Scope):
                         result = update.result
                         html = TEMPLATES.get_template("android_search_results.html").render(
                             found=result.options, search_errors=result.errors, on_shelf=on_shelf,
-                            sources=SOURCES, prefix=p, complete=update.kind == "done")
+                            sources=SOURCES, prefix=p, complete=update.kind == "done",
+                            post_url=lambda path: mutation_url(path, request.state.acct, request.state.who))
                         yield message(update.kind, {"html": html, "count": len(result.options),
                                                    "errors": len(result.errors)})
                         previous = result
@@ -595,13 +603,15 @@ def _register_scope(app, w, scope: Scope):
         """Действие, которое может удалить каталоги на полке: архив недоступен — 503 и ничего не тронуто.
         fn(c, root, shelf_id) → False — нет такой версии (404)."""
         try:
-            jobs._archive(cfg)
+            with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT), w.conn() as c:
+                jobs._archive(cfg)
+                shelf, app_row = own(c, request, package)
+                if app_row is None or not fn(c, fetch.shelf_root(cfg, shelf), shelf.id):
+                    return not_found()
         except jobs.ArchiveUnavailable:
             return catalog_page(request, 503, ARCHIVE_DOWN)
-        with w.conn() as c:
-            shelf, app_row = own(c, request, package)
-            if app_row is None or not fn(c, fetch.shelf_root(cfg, shelf), shelf.id):
-                return not_found()
+        except ipatool.IpatoolError:
+            return catalog_page(request, 409, "Полка занята скачиванием — повторите через минуту")
         return back(p)
 
     @app.post(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
@@ -612,11 +622,19 @@ def _register_scope(app, w, scope: Scope):
         return change(request, package, drop)
 
     @app.post(p + "/apps/{package}/accept-signer", response_class=HTMLResponse, dependencies=deps)
-    def accept_signer(request: Request, package: str):
+    def accept_signer(request: Request, package: str, version_id: int = Form(0), confirm: str = Form("")):
         def accept(c, root, sid):
+            pending = c.execute("SELECT id FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
+                                (sid, package)).fetchone()
+            if pending is None or pending["id"] != version_id or confirm != "1":
+                return False
             db.accept_pending(c, root, sid, package)  # принимать нечего (уже приняли) — просто назад
             return True
         return change(request, package, accept)
+
+    @app.post(p + "/apps/{package}/reject-signer", response_class=HTMLResponse, dependencies=deps)
+    def reject_signer(request: Request, package: str, version_id: int = Form(0)):
+        return change(request, package, lambda c, root, sid: db.reject_pending(c, root, sid, package, version_id))
 
     @app.post(p + "/apps/{package}/versions/{version_id}/pin", response_class=HTMLResponse, dependencies=deps)
     def pin_version(request: Request, package: str, version_id: int):

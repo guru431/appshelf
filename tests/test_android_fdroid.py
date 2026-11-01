@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import pytest
 
@@ -6,10 +7,22 @@ from android_fakes import FakeHttp
 from apk_factory import make_apk
 from appshelf import apk
 from appshelf.android import db, fdroid, net, sources
+from test_android_fdroid_index import catalog
 
 DATA = Path(__file__).parent / "data" / "fdroid"
 VLC = "org.videolan.vlc"
 JSON = {"content-type": "application/json; charset=utf-8"}
+
+
+def source(http):
+    """A catalog matching the downloaded fixtures; cryptographic verification has separate real-JAR tests."""
+    builds = []
+    for url, body in http.files.items():
+        code = int(url.rsplit("_", 1)[1].split(".")[0])
+        builds.append({"versionCode": code, "versionName": "3.7.2", "apkName": url.rsplit("/", 1)[1],
+                       "hashType": "sha256", "hash": hashlib.sha256(body).hexdigest()})
+    http.raw[fdroid.REPO + "entry.jar"] = (200, {}, catalog(builds, package=VLC))
+    return sources.Sources(http, sleep=lambda s: None)
 
 
 def api(name: str = "package.json", status: int = 200) -> tuple[int, dict, bytes]:
@@ -37,14 +50,14 @@ def test_fdroid_picks_universal_or_arm64(tmp_path):
     (tmp_path / "out").mkdir()
     http = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {
         13070208: ("x86_64",), 13070207: ("x86",), 13070206: ("arm64-v8a",), 13070205: ("armeabi-v7a",)}))
-    got = sources.Sources(http, sleep=lambda s: None).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
+    got = source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert apk.read_apk(tmp_path / "out" / "a.apk").abis == ("arm64-v8a",)
     assert [c[1] for c in http.calls if c[0] == "download"] == [fdroid.REPO + f"{VLC}_{c}.apk"
                                                               for c in (13070208, 13070207, 13070206)]
     assert (got.expected_signer, got.etag) == ("", "fd:13070208")
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["a.apk"]          # кандидаты не остались
     universal = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {13070208: ()}))
-    sources.Sources(universal, sleep=lambda s: None).fetch("fdroid", VLC, tmp_path / "out" / "b.apk")
+    source(universal).fetch("fdroid", VLC, tmp_path / "out" / "b.apk")
     assert [c[0] for c in universal.calls].count("download") == 1
 
 
@@ -52,7 +65,7 @@ def test_fdroid_armeabi_when_no_arm64(tmp_path):
     (tmp_path / "out").mkdir()
     http = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {
         13070208: ("x86_64",), 13070207: ("armeabi-v7a",), 13070206: ("x86",), 13070205: ("mips",)}))
-    sources.Sources(http, sleep=lambda s: None).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
+    source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert apk.read_apk(tmp_path / "out" / "a.apk").abis == ("armeabi-v7a",)
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["a.apk"]
 
@@ -62,14 +75,14 @@ def test_fdroid_no_arm_build_error(tmp_path):
     http = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {
         13070208: ("x86_64",), 13070207: ("x86",), 13070206: ("x86",), 13070205: ("x86_64",)}))
     with pytest.raises(net.SourceError, match="в F-Droid нет сборки для ARM"):
-        sources.Sources(http, sleep=lambda s: None).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
+        source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert list((tmp_path / "out").iterdir()) == []
 
 
 def test_fdroid_missing_package(tmp_path):
     from test_android_fdroid_index import ARCHIVE, catalog
     http = FakeHttp(raw={fdroid.API + "org.example.none": api(status=404),
-                         ARCHIVE + "index-v1.jar": (200, {}, catalog())})
+                         ARCHIVE + "entry.jar": (200, {}, catalog())})
     with pytest.raises(net.SourceError, match="нет в .*F-Droid"):
         sources.Sources(http, sleep=lambda s: None).latest("fdroid", "org.example.none", "")
     http = FakeHttp(raw={fdroid.API + VLC: (503, {}, b"")})

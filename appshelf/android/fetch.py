@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 from .. import apk, ipa, jobs, notify, people, store
@@ -72,6 +73,7 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     expected_signer, если не самого источника (APKPure сверяется с RuStore)."""
     cfg, now = env.cfg, env.now()
     info = apk.read_apk(path)
+    info = replace(info, signer=apk.verify_apk(path))
     if expected_package and info.package != expected_package:
         raise apk.ApkError(f"в файле приложение {info.package}, а на карточке — {expected_package}")
     if expected_signer and info.signer != expected_signer:
@@ -83,11 +85,14 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         "SELECT role, version_code FROM android_versions WHERE shelf_id=? AND package=?", (shelf.id, info.package))}
     if "current" in roles and info.version_code <= roles["current"]:
         return info.package, "same"
-    if app is not None and app["signer"] and info.signer != app["signer"] \
-            and info.version_code <= roles.get("pending", -1):
-        return info.package, "same"  # эта же версия с другой подписью уже ждёт «Принять»
     size = path.stat().st_size
     digest = ipa.sha256(path)  # по локальному файлу в tmp: с шары читать вдвое дольше
+    if db.rejected_apk(c, shelf.id, info.package, digest):
+        return info.package, "same"
+    if c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='pending' AND sha256=?",
+                 (shelf.id, info.package, digest)).fetchone():
+        return info.package, "same"
+    rotation = apk.verified_rotation(path, app["signer"], info.signer) if app is not None else 0
     free = env.disk_free(jobs._archive(cfg))
     if free - size < jobs.RESERVE:
         raise jobs.LowSpace(f"мало места в архиве: свободно {free / jobs.GB:.1f} ГБ, APK — {size / jobs.GB:.1f} ГБ, "
@@ -119,7 +124,7 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         role = db.add_version(c, root, shelf.id, info.package, db.NewApk(
             version_name=info.version_name, version_code=info.version_code, min_sdk=info.min_sdk,
             target_sdk=info.target_sdk, abis=",".join(info.abis), signer=info.signer, source=source, size=size,
-            sha256=digest, dir=name), now)
+            sha256=digest, dir=name, signature_verified=True, rotation_min_sdk=rotation), now)
     except BaseException:
         # обрыв шары, «database is locked», сняли с полки (AppGone): строки версии нет, а .partial или каталог
         # без строки потом не убрал бы никто
@@ -224,7 +229,7 @@ def _notice(error: str) -> str:
 
 def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, retry_split: bool = False) -> str:
     """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
-    AppGallery, APKPure: versionCode не больше известного (текущей или ждущей «Принять») — без скачивания; ссылка
+    AppGallery, APKPure: versionCode не больше текущего принятого — без скачивания; ссылка
     (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
     versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
     (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
@@ -234,8 +239,8 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, 
     pkg = app["package"]
     account = _account(c, app["source"], app["google_account_id"])
     latest = env.sources.latest(app["source"], app["source_ref"], app["source_etag"], account=account)
-    known = c.execute("SELECT MAX(version_code) AS v FROM android_versions WHERE shelf_id=? AND package=? "
-                      "AND role IN ('current', 'pending')", (shelf.id, pkg)).fetchone()["v"]
+    current = db.current_version(c, shelf.id, pkg)
+    known = current["version_code"] if current is not None else None
     split_mark = f"split:{latest.version_code}" if app["source"] == "play" else ""
     note = ""
     if not force and known is not None and (latest.version_code is not None and latest.version_code <= known

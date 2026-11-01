@@ -34,21 +34,21 @@
           <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
         </svg>
       </button>{% endif %}
-    </div>
+    </div><a class="meta" href="#install-help" data-help>Как установить</a>
       {% if a.previous %}{% set p = a.previous %}<span class="meta">предыдущая: <a href="{{ url(p['dir'], apk_name(a.package, p['version_name'])) }}" download>{{ p['version_name'] }}</a>
         {%- if p['signer'] != a.signer %} (другая подпись){% endif %}
         {%- if p['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</div>
     {% endif %}
     {% if a.kept %}{% set k = a.kept %}<div class="meta">сохранённая: <a href="{{ url(k['dir'], apk_name(a.package, k['version_name'])) }}" download>{{ k['version_name'] }}</a> · {{ (k['size'] / 1048576) | round | int }} МБ</div>{% endif %}
     {% if a.pending and edit %}{% set p = a.pending %}
-    <p class="err">Новая версия {{ p['version_name'] }} подписана другим ключом (подпись {{ p['signer'][:4] }}…{{ p['signer'][-4:] }}):
-      поверх установленной она не встанет — приложение придётся удалить вместе с данными. Пока не примете, ставится прежняя.</p>
-    <form method="post" action="{{ prefix }}/apps/{{ a.package }}/accept-signer" class="install"><button class="sm tint">Принять новую подпись</button></form>
+    {% if p['rotation_min_sdk'] %}<p class="meta">Ключ обновлён разработчиком. Обновление с сохранением данных поддерживается начиная с Android {{ android_version(p['rotation_min_sdk']) }}; на старых системах совместимость не подтверждена.</p>
+    {% else %}<p class="err">Новая версия {{ p['version_name'] }} подписана другим ключом. Совместимость обновления не подтверждена: может потребоваться удаление приложения вместе с данными. Пока решение не принято, доступна прежняя версия.</p>{% endif %}
+    <p class="install"><button type="button" class="sm tint" data-dialog="signer-{{ a.package }}">Сравнить версии и решить</button></p>
     {% endif %}
-    {% if a.status == 'queued' %}<div class="meta">в очереди</div>
+    {% if a.status == 'queued' %}<div class="meta">в очереди{% if waiting %} · {{ waiting.get(a.package, '') }}{% endif %}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
-    {% if a.source != 'upload' and edit %}<form method="post" action="{{ prefix }}/apps/{{ a.package }}/retry" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
+    {% if a.source != 'upload' and edit %}<form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
     {% elif v and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия
       {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% elif err %} {{ err }}
@@ -65,52 +65,92 @@
     {% endif %}
   </div>
   {% if edit %}
-  <details class="pop more"><summary aria-label="Действия">⋯</summary>
-    <div class="sheet">
+  <details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
+    <div class="sheet action-list">
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
-        {% elif not a.paid %}<form method="post" action="/android/public/add/from-shelf">
+        {% elif not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
           <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form>{% endif %}
       {%- endif %}
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
       {%- endif %}
       {%- if v and a.status in ('ok', 'error') and a.source != 'upload' %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/check"><button>Проверить обновление</button></form>
+      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button>Проверить обновление</button></form>
       {%- endif %}
-      {%- for x in (a.current, a.previous, a.kept) if x %}{# kept всегда закреплена #}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/versions/{{ x['id'] }}/{{ 'unpin' if x['pinned'] else 'pin' }}"><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
-      {%- endfor %}
-      {%- for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive') if a.source != s %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="{{ s }}"><button class="secondary">Брать {{ 'из архива F-Droid' if s == 'fdroid_archive' else 'из ' ~ sources[s] }}</button></form>
-      {%- endfor %}
-      {%- if a.source != 'apkpure' %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source"><input type="hidden" name="source" value="apkpure">
-        <label class="meta"><input type="checkbox" name="ack" value="1"> APKPure распространял подменённые APK — понимаю</label>
-        <button class="secondary">Брать из APKPure</button></form>
-      {%- endif %}
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/source" class="field"><input type="hidden" name="source" value="link">
-        <input name="ref" type="url" placeholder="страница магазина или https://…/app.apk" value="{{ a.source_ref if a.source == 'link' }}" required><button class="secondary">Брать по ссылке</button></form>
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/upload" enctype="multipart/form-data" class="field">
-        <input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required><button class="secondary">Загрузить новую версию</button></form>
-      <form method="post" action="{{ prefix }}/apps/{{ a.package }}/remove"><button class="danger">Снять с полки</button></form></div>
+      {% if v %}<button type="button" class="secondary" data-dialog="versions-{{ a.package }}">Версии и закрепления</button>{% endif %}
+      <button type="button" class="secondary" data-dialog="source-{{ a.package }}">Сменить источник</button>
+      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/remove') }}"><button class="danger">Снять с полки</button></form></div>
   </details>
+  {% if v %}<dialog id="versions-{{ a.package }}" aria-labelledby="versions-title-{{ a.package }}">
+    <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
+    <h2 id="versions-title-{{ a.package }}">Версии · {{ a.name }}</h2>
+    {% for x in (a.current, a.previous, a.kept) if x %}
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/' ~ ('unpin' if x['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ x['version_name'] }}{% if x['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
+    {% endfor %}<p class="hint">При откате приложения могут быть несовместимы с данными более новой версии.</p>
+  </dialog>{% endif %}
+  <dialog id="source-{{ a.package }}" aria-labelledby="source-title-{{ a.package }}">
+    <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
+    <h2 id="source-title-{{ a.package }}">Источник · {{ a.name }}</h2>
+    <p class="meta">Текущий: {{ sources.get(a.source, a.source) }}. Версии и закрепления сохранятся; другой ключ потребует отдельного решения.</p>
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/source') }}">
+      <label>Новый источник<select name="source" aria-label="Новый источник">
+      {% for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive', 'apkpure', 'link') %}<option value="{{ s }}"{% if a.source == s %} selected{% endif %}>{{ sources[s] }}</option>{% endfor %}</select></label>
+      <label>Для сайта: страница магазина или ссылка на APK<input name="ref" type="url" placeholder="https://…" value="{{ a.source_ref if a.source == 'link' }}"></label>
+      <label class="check" data-source-warning{% if a.source != 'apkpure' %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск APKPure: без сверки с RuStore подлинность источника не подтверждена</label>
+      <p class="install"><button>Сменить источник</button></p>
+    </form>
+    <h3>Загрузить новую версию своим файлом</h3>
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/upload') }}" enctype="multipart/form-data">
+      <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label><button>Загрузить</button>
+    </form>
+  </dialog>
+  {% if a.pending %}
+  <dialog id="signer-{{ a.package }}" aria-labelledby="signer-title-{{ a.package }}">
+    <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
+    <h2 id="signer-title-{{ a.package }}">Сравнить версии · {{ a.name }}</h2>
+    {% for version, label in [(a.current, 'Текущая'), (a.pending, 'Ожидающая')] if version %}
+    <h3>{{ label }} · {{ version['version_name'] }} ({{ version['version_code'] }})</h3>
+    <p class="meta">{{ sources.get(version['source'], version['source']) }} · получена {{ version['downloaded_at'][:16] | replace('T', ' ') }} UTC</p>
+    <p class="meta">{{ 'Криптографическая подпись APK проверена' if version['signature_verified'] else 'Криптографическая проверка этой сохранённой версии не подтверждена' }}</p>
+    <code>{{ version['signer'] }}</code><button type="button" class="sm secondary" data-copy="{{ version['signer'] }}">Скопировать отпечаток</button>
+    {% endfor %}
+    {% if a.pending['rotation_min_sdk'] %}<p>Ключ обновлён разработчиком: подписанная цепочка проверена. Обновление с сохранением данных поддерживается начиная с Android {{ android_version(a.pending['rotation_min_sdk']) }}. На более старых системах совместимость не подтверждена; удаление приложения стирает данные.</p>
+    {% else %}<p class="err">Цепочка ротации ключа не подтверждена. Новая подпись может потребовать удаления приложения вместе с данными. Сохраните нужные данные до установки.</p>{% endif %}
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/accept-signer') }}">
+      <input type="hidden" name="version_id" value="{{ a.pending['id'] }}">
+      <label class="check"><input type="checkbox" name="confirm" value="1" required>Принять новую подпись {{ a.name }}; понимаю риск потери данных</label>
+      <p class="install"><button class="danger">Принять новую подпись</button></p>
+    </form>
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/reject-signer') }}">
+      <input type="hidden" name="version_id" value="{{ a.pending['id'] }}"><button class="secondary">Отклонить эту версию</button>
+    </form>
+    <p class="hint">Отклонённый файл больше не предлагается; другие новые сборки проверяются обычным образом.</p>
+  </dialog>
+  {% endif %}
   {% endif %}
 </div>
 {% endmacro %}
 
 {# Подсказки по установке: каталог участника и страница гостя #}
 {% macro install_hints() %}
+  {% if device == 'desktop' %}<p>На компьютере: откройте QR-код у приложения или скопируйте ссылку на телефон.</p>
+  {% else %}<p>«Скачать APK» → «Открыть» в уведомлении загрузки → «Установить».</p>{% endif %}
+  <p>При другой подписи может потребоваться удаление приложения: его данные будут потеряны. Проверьте предупреждения на карточке.</p>
+  <details id="install-help"><summary>Как установить</summary><details><summary>Первый раз</summary>
   <p>Открывайте страницу в Chrome на телефоне. «Скачать APK» → когда файл скачается, нажмите «Открыть» на плашке внизу
     экрана (или уведомление «Загрузка завершена») → «Установить». В «Загрузки» заходить не нужно.</p>
   <p>В первый раз Android попросит разрешить установку из браузера («Установка неизвестных приложений» для Chrome) —
     разрешите и вернитесь к установке.</p>
+  </details><details><summary>Обновить</summary>
   <p>Обновление — тот же «Скачать APK» поверх установленного: данные приложения остаются.</p>
   <p>Поверх встаёт только APK с той же подписью. Стояло из Google Play или другого магазина с другой подписью —
     сначала удалите приложение (данные удалятся), затем ставьте отсюда. Отпечаток подписи — у карточки.</p>
+  </details><details><summary>Если не устанавливается</summary>
   <p>Samsung: «Настройки → Безопасность и конфиденциальность → Auto Blocker» не даёт ставить не из Galaxy Store и Play —
     выключите его на время установки. Huawei: выключите «Режим без угроз» (Pure Mode) в настройках безопасности.</p>
   <p>Play Protect может предупредить о неизвестном приложении — «Подробнее» → «Всё равно установить».</p>
-  <p>С 2027 года Google требует проверку разработчика и для установки не из магазина; приложения непроверенных
-    разработчиков — только через <a href="https://developer.android.com/developer-verification">«advanced flow»</a>.</p>
+  <p>Проверьте минимальную версию Android на карточке и сообщение системы. Требования установки могут зависеть от устройства и региона:
+    <a href="https://developer.android.com/developer-verification">проверка разработчиков Android</a>.</p>
+  </details></details>
 {% endmacro %}

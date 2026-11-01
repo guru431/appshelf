@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-<form method="post" action="/history/refresh" class="bar">
+<form method="post" action="{{ post_url('/history/refresh') }}" class="bar">
   <button>Обновить историю</button>
   <span class="meta">{% if refreshing and acct.session != 'ok' %}ждёт входа в Apple ID
     {%- elif refreshing == 'refresh_history' %}обновляется…
@@ -26,7 +26,7 @@
     {%- if r['bundle_id'] %}{{ r['bundle_id'] }}{% if r['purchase_date'] %} · {{ r['purchase_date'][:10] }}{% endif %}
     {%- else %}<span class="tag">{{ 'по ссылке, не подтверждено' if r['source'] == 'manual' else 'удалено из App Store' }}</span> ID {{ r['app_id'] }}{% endif %}</div></div>
   <div class="act">{% if r['published'] %}<span class="meta done">в каталоге</span>{% else %}
-    <form method="post" action="/apps/{{ r['app_id'] }}/publish"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>
+    <form method="post" action="{{ post_url('/apps/' ~ r['app_id'] ~ '/publish') }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>
 </div>
 {% else %}
 <div class="row hint">{% if q %}Ничего не найдено{% elif refreshing %}Загружаю историю…{% elif refreshed %}История загружена — покупок в ней нет.{% else %}История ещё не загружалась — нажмите «Обновить историю» (нужен вход в Apple ID).{% endif %}</div>

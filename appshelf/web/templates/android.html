@@ -10,8 +10,8 @@
   {% else %}<p class="meta">PIN задан {{ guest.set_at[:16] | replace('T', ' ') }} UTC.</p>{% endif %}
   {% if guest.closed %}<p class="err">Ввод PIN закрыт до {{ guest.closed[:16] | replace('T', ' ') }} UTC: за сутки слишком
     много неверных PIN. Гости, уже вводившие PIN, полку видят.</p>
-  <form method="post" action="/android/public/pin/reopen"><button class="tint">Открыть ввод PIN</button></form>{% endif %}
-  <form method="post" action="/android/public/pin" class="field">
+  <form method="post" action="{{ post_url('/android/public/pin/reopen') }}"><button class="tint">Открыть ввод PIN</button></form>{% endif %}
+  <form method="post" action="{{ post_url('/android/public/pin') }}" class="field">
     <input name="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="6 цифр" aria-label="PIN" required>
     <button>{{ 'Сменить PIN' if guest.set_at else 'Задать PIN' }}</button></form>
   {% if guest.set_at %}<p class="hint">Смена PIN: гостям придётся ввести новый, а прежние ссылки на файлы перестанут
@@ -26,7 +26,7 @@
     {% if edit and j.query %}<a href="{{ prefix }}/add?q={{ j.query | urlencode }}">Найти в других источниках</a>{% endif %}
     {% if edit and j.split_only %}
       {% for a in j.alternatives %}
-      <form method="post" action="{{ prefix }}/jobs/{{ j.id }}/alternative" class="install">
+      <form method="post" action="{{ post_url(prefix ~ '/jobs/' ~ j.id ~ '/alternative') }}" class="install">
         <input type="hidden" name="source" value="{{ a.source }}"><button class="sm tint">Взять из {{ sources[a.source] }}</button>
         <span class="meta">{% if a.signature %}SHA-256 подписи: {{ a.signature }}{% else %}Подпись будет показана после скачивания{% endif %}</span>
       </form>
@@ -34,12 +34,13 @@
     {% endif %}
     {% elif j.status == 'running' %}<div class="meta busy">скачивается…</div>
     {% else %}<div class="meta">в очереди</div>{% endif %}</div>
-  {% if j.status == 'error' and edit %}<form method="post" action="{{ prefix }}/jobs/{{ j.id }}/dismiss" class="act"><button class="sm secondary">Скрыть</button></form>{% endif %}
+  {% if j.status == 'error' and edit %}<form method="post" action="{{ post_url(prefix ~ '/jobs/' ~ j.id ~ '/dismiss') }}" class="act"><button class="sm secondary">Скрыть</button></form>{% endif %}
 </div>
 {% endfor %}
-{% if not apps and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
+{% include 'shelf_filter.html' %}
+{% if not apps and not total and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
   {%- if edit %} <a href="{{ prefix }}/add">Добавьте приложение</a> — из RuStore, по ссылке с сайта или своим файлом.{% endif %}</p>{% endif %}
-{% for a in apps %}{{ card(a, url, edit, prefix, qr=public) }}{% endfor %}
+{% for a in apps %}{{ card(a, url, edit, prefix, qr=public or device == 'desktop') }}{% endfor %}
 <div class="hint">
   {% if public %}<p>Публичная полка — одна на сервер: её видят все участники и гости по PIN, наполняет владелец.</p>{% endif %}
   {{ install_hints() }}

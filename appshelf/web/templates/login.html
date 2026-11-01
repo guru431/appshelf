@@ -16,19 +16,19 @@
     <button>Войти как {{ link }}</button>
   </form>
   {% elif step == 2 %}
-  <form method="post" action="/login/code">
+  <form method="post" action="{{ post_url('/login/code') }}">
     <p>Apple отправила код на ваши устройства ({{ email }}). Apple покажет запрос входа с картой — на ней город сервера,
       а не ваш. Нажмите «Разрешить» и введите код. Шаг действует 10 минут.</p>
     <label>Код 2FA<input class="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" autofocus></label>
     <input type="hidden" name="next" value="{{ next }}">
     <button>Войти</button>
   </form>
-  <form method="post" action="/login/cancel">
+  <form method="post" action="{{ post_url('/login/cancel') }}">
     <input type="hidden" name="next" value="{{ next }}">
     <button class="secondary">Начать заново</button>
   </form>
   {% else %}
-  <form method="post" action="{{ action }}">
+  <form method="post" action="{{ post_url(action) }}">
     <label>Apple ID<input name="email" type="email" value="{{ email }}" autocomplete="username" autocapitalize="off"></label>
     <label>Пароль<input name="password" type="password" autocomplete="current-password"></label>
     <input type="hidden" name="next" value="{{ next }}">

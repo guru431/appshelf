@@ -27,7 +27,7 @@ appshelf = "appshelf.cli:main"
 include = ["appshelf*"]
 
 [tool.setuptools.package-data]
-"appshelf" = ["data/*.json"]
+"appshelf" = ["data/*.json", "data/*.java"]
 "appshelf.web" = ["templates/*.html"]
 
 [tool.pytest.ini_options]

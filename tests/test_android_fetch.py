@@ -46,6 +46,53 @@ def versions(conn, shelf) -> dict:
         "SELECT role, version_code FROM android_versions WHERE shelf_id=?", (shelf.id,))}
 
 
+def test_higher_pending_does_not_block_current_updates(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=1000, cert=b"CERT-B")
+    run(ctx, conn, shelf, "upload", clock, path=str(alien), name="", package=PKG)
+    assert versions(conn, shelf)["pending"] == 1000
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "update.apk", version_code=6)
+    ctx.sources._latest[PKG] = Latest(6, "", True)
+    fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "work")
+    assert versions(conn, shelf) == {"current": 6, "previous": 5, "pending": 1000}
+
+
+def test_major_version_code_transition_is_stored_and_compared_in_full(ctx, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "old.apk", version_code=5))
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "new.apk", version_code=1, version_code_major=1)
+    ctx.sources._latest[PKG] = Latest((1 << 32) | 1, "", True)
+    assert fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "work") == "updated"
+    assert versions(conn, shelf) == {"current": (1 << 32) | 1, "previous": 5}
+
+
+def test_rejected_pending_deduplicates_exact_file_but_accepts_new_candidate(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    args = dict(source="link", source_ref="https://apps.example/new.apk", expected_package=PKG,
+                expected_signer="", name_hint="", icon=None)
+    import shutil
+    candidate = tmp_path / "candidate.apk"
+    shutil.copyfile(alien, candidate)
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args)[1] == "pending"
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    root = cfg.archive / shelf.shelf
+    assert not db.reject_pending(conn, root, shelf.id, PKG, pending["id"] + 1)
+    assert db.reject_pending(conn, root, shelf.id, PKG, pending["id"])
+    assert not (root / pending["dir"]).exists()
+    shutil.copyfile(alien, candidate)
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args)[1] == "same"
+    assert db.list_apps(conn, shelf.id)[0].pending is None
+    # Same version and signer but a different signed file is a separate owner decision.
+    make_apk(candidate, version_code=6, cert=b"CERT-B", version_name="6-fixed")
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args)[1] == "pending"
+    make_apk(candidate, version_code=7, cert=b"CERT-B")
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args)[1] == "pending"
+    assert db.list_apps(conn, shelf.id)[0].pending["version_code"] == 7
+    assert db.current_version(conn, shelf.id, PKG)["version_code"] == 5
+    db.remove_app(conn, root, shelf.id, PKG)
+    assert not conn.execute("SELECT 1 FROM state WHERE key LIKE 'android_rejected:%'").fetchone()
+
+
 def test_job_shelf_read_failure_finishes_job(ctx, conn, clock, monkeypatch):
     shelf = shelf_of(conn, clock)
     db.put_app(conn, shelf.id, PKG, "Пример", "rustore", PKG, clock.iso())

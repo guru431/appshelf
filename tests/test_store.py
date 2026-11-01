@@ -14,6 +14,25 @@ def test_rotation_keeps_current_and_previous_and_removes_older(conn, cfg, clock,
     assert store.list_apps(conn, 1)[0].status == "ok"
 
 
+def test_upgrade_from_v8_preserves_versions_and_adds_recovery_state(cfg, clock):
+    c = store.connect(cfg.db)
+    seed_app(c, cfg, clock, versions=("1.0",))
+    for name in ("signature_verified", "rotation_min_sdk"):
+        c.execute(f"ALTER TABLE android_versions DROP COLUMN {name}")
+    c.execute("DROP TABLE removed_retries")
+    c.execute("PRAGMA user_version=8")
+    c.close()
+    c = store.connect(cfg.db)
+    try:
+        assert c.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        assert store.current_version(c, 1, 123)["version"] == "1.0"
+        columns = {r["name"]: r["dflt_value"] for r in c.execute("PRAGMA table_info(android_versions)")}
+        assert columns["signature_verified"] == columns["rotation_min_sdk"] == "0"
+        assert c.execute("SELECT COUNT(*) FROM removed_retries").fetchone()[0] == 0
+    finally:
+        c.close()
+
+
 def test_add_version_after_unpublish_raises(conn, cfg, clock, acct):
     seed_app(conn, cfg, clock)
     store.unpublish(conn, 1, cfg.shelf_root(acct), 123)

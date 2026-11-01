@@ -280,6 +280,58 @@ def test_cli_check_reports_unavailable_archive(monkeypatch, tmp_path, clock, cap
 
 # --- Android-полки -------------------------------------------------------------
 
+
+@pytest.mark.parametrize("deep", [False, True])
+def test_android_versions_without_shelf_fail_check(monkeypatch, tmp_path, capsys, deep):
+    cfg = cli_env(monkeypatch, tmp_path)
+    with closing(store.connect(cfg.db)) as c:
+        c.execute("INSERT INTO android_versions (shelf_id,package,version_name,version_code,min_sdk,target_sdk,"
+                  "signer,source,size,sha256,dir,downloaded_at,role) "
+                  "VALUES (999,'ru.example.app','1',1,21,35,'signer','upload',3,'hash','ru.example.app-1','t0','current')")
+        rep = integrity.check(cfg, c, deep=deep)
+    assert not rep.ok
+    assert (rep.apks, rep.android_shelves) == (1, 0)
+    assert [(p.kind, p.shelf) for p in rep.problems] == [("no_android_shelf", 999)]
+    assert cli.main(["check", "--json", *(["--deep"] if deep else [])]) == 1
+    assert not json.loads(capsys.readouterr().out)["ok"]
+
+
+def test_restore_report_is_offline_private_and_includes_manual_connections(monkeypatch, tmp_path, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    with closing(store.connect(cfg.db)) as c:
+        from appshelf import people
+        uid = people.create_user(c, "Person", "member", None, "t0")
+        gid = people.create_google(c, uid, "sub", "person@example.org", "Person", "t0")
+        people.set_play(c, gid, "ok", "t0")
+    isolated = tmp_path / "isolated"
+    snapshot = integrity.backup(cfg.db, isolated)
+    archive = isolated / "pub"
+    archive.mkdir()
+    protected = isolated / "protected"
+    protected.mkdir()
+    (protected / "appshelf.env").write_text("PRIVATE_ENV_VALUE", encoding="utf-8")
+    key = protected / "cookie-key"
+    key.write_bytes(b"PRIVATE_COOKIE_KEY" * 2)
+    from appshelf.android import net
+    def no_network(*args, **kwargs):
+        pytest.fail("restore report must not contact providers")
+    monkeypatch.setattr(net.Http, "request", no_network)
+    before = tree(isolated)
+    args = ["restore-report", "--db", str(snapshot), "--archive", str(archive),
+            "--secrets-dir", str(protected), "--cookie-key", str(key), "--deep"]
+    assert cli.main(args) == 0
+    raw = capsys.readouterr().out
+    rep = json.loads(raw)
+    assert rep["offline_ok"] and not rep["external_connections_verified"]
+    assert rep["schema_version"] == store.SCHEMA_VERSION and rep["code_version"]
+    assert rep["connections_policy"] == "reconnect"
+    assert next(s for s in rep["manual_steps"] if s["provider"] == "Google Play")["accounts"] == 1
+    assert all(s not in raw for s in ("PRIVATE_ENV_VALUE", "PRIVATE_COOKIE_KEY", "person@example.org"))
+    assert tree(isolated) == before
+    key.unlink()
+    assert cli.main(args) == 1
+    assert not json.loads(capsys.readouterr().out)["protected_files"]["cookie-key"]
+
 def android_shelf(ctx, cfg, conn, clock, tmp_path):
     """Android-полка владельца с одной версией — настоящий конвейер (fetch.run_job), как на сервере."""
     from apk_factory import make_apk

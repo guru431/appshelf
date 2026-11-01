@@ -96,3 +96,28 @@ def test_cli_rotate_public_and_android(monkeypatch, tmp_path, capsys):
     c.close()
     with pytest.raises(SystemExit):
         cli.main(["rotate-token", "--public", "--android"])
+
+
+def test_rotate_google_only_shelf_by_user_id(monkeypatch, tmp_path, capsys):
+    from appshelf.android import db as android_db
+    env(monkeypatch, tmp_path)
+    c = store.connect(tmp_path / "data" / "appshelf.db")
+    uid = people.create_user(c, "Google participant", people.MEMBER, None, "2026-10-08T00:00:00+00:00")
+    people.create_google(c, uid, "google-sub", "person@example.org", "Google participant", "2026-10-08T00:00:00+00:00")
+    shelf = android_db.ensure_shelf(c, uid, "t0")
+    folder = tmp_path / "data" / "pub" / shelf.shelf / "ru.example.app-1"
+    folder.mkdir(parents=True)
+    (folder / "app.apk").write_bytes(b"saved app")
+    assert cli.main(["rotate-token", "--user-id", str(uid), "--android"]) == 0
+    new = android_db.get_shelf(c, shelf.id)
+    assert new.shelf != shelf.shelf
+    assert (folder.parent.parent / new.shelf / folder.name / "app.apk").read_bytes() == b"saved app"
+    assert not folder.parent.exists()
+    assert "готово" in capsys.readouterr().out
+    assert cli.main(["rotate-token", "--user-id", "999", "--android"]) == 2
+    assert "нет" in capsys.readouterr().err
+    c.close()
+    for args in (["--user-id", str(uid)], ["--user-id", "0", "--android"],
+                 ["--user-id", str(uid), "--public"]):
+        with pytest.raises(SystemExit):
+            cli.main(["rotate-token", *args])

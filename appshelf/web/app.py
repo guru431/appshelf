@@ -20,10 +20,10 @@ from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, android, google_signin, pwa, signin
-from .common import THEMES, WebCtx, back, back_to
+from .common import THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind
 from .login import Limiter, LoginFlow
 
-PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p",  # /p — гость публичной полки, по PIN
+PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
           "/google/start", "/google/callback", "/privacy")  # /privacy — ссылка с экрана входа Google
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/", "/apk/")  # /apk/ — постоянная ссылка на APK, секрет — токен полки
 # страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
@@ -80,7 +80,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     fourpda_browser = fourpda_browser or BrowserLogin(cfg, clock=clock)
     env = jobs.Env(cfg, tools, now=now, send=send, disk_free=disk_free,
                    sources=sources or Sources(net.Http(cfg.sources_ca), play=play.PlayPool(cfg),
-                                              appgallery_host=cfg.appgallery_host, fourpda=fourpda_sessions))
+                                              appgallery_host=cfg.appgallery_host, fourpda=fourpda_sessions,
+                                              cache_dir=cfg.data_dir / "cache" / "fdroid"))
     flow = LoginFlow(clock=clock)
     w = WebCtx(cfg, env, new_tool or (lambda home, mac: ipatool.for_new(cfg, home, mac)), flow, Limiter(clock), now,
                webauth.load_key(cfg.cookie_key))
@@ -129,6 +130,19 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if request.method == "GET" and not path.startswith("/api/"):
                 return RedirectResponse("/apple", status_code=303)
             return PlainTextResponse(NO_APPLE_ID, status_code=409)
+        if (kind := mutation_kind(path)) and (request.method == "POST" or kind in request.query_params):
+            values = request.query_params.getlist(kind)
+            if len(values) != 1 or not values[0].isdigit():
+                return PlainTextResponse("Контекст полки устарел. Обновите страницу и повторите действие.", status_code=409)
+            targets = request.state.accounts if kind == "account" else request.state.users
+            target = next((x for x in targets if x.id == int(values[0])), None)
+            if target is None:
+                return PlainTextResponse("Нет доступа к указанной полке. Обновите страницу.", status_code=403)
+            if kind == "account":
+                request.state.acct = target
+                request.state.user = next(u for u in request.state.users if u.id == target.user_id)
+            else:
+                request.state.who = target
         return await call_next(request)
 
     def not_found():
@@ -160,6 +174,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             apps = store.list_apps(c, a.id)
             nightly = (store.get_state(c, "nightly_last"), result_for(store.get_state(c, "nightly_result"), a.email))
             busy = store.has_active_jobs(c, a.id)
+            waiting = {x.app_id: store.waiting_reason(c, a.id, x.app_id) for x in apps if x.status == "queued"}
         banners = [error] if error else []
         try:
             free = jobs.free_space(env)
@@ -173,8 +188,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         since = datetime.fromisoformat(now()) - timedelta(days=NEW_VERSION_DAYS)
         fresh = {x.app_id for x in apps
                  if x.previous is not None and datetime.fromisoformat(x.current["downloaded_at"]) >= since}
+        apps, filters = filter_shelf(apps, request, fresh)
         return w.page(request, "catalog.html", "catalog", status_code, apps=apps, banners=banners, nightly=nightly,
-                      busy=busy, statuses=statuses, fresh=fresh, public_url=lambda d, f: cfg.shelf_url(a, d, f))
+                      busy=busy, statuses=statuses, fresh=fresh, waiting=waiting, status_url=f"/api/status?account={a.id}", **filters,
+                      public_url=lambda d, f: cfg.shelf_url(a, d, f))
 
     @app.get("/", response_class=HTMLResponse)
     def catalog(request: Request, explicit: str = Query("", alias="os")):
@@ -195,10 +212,20 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         """Тема: light / dark / auto (как в системе). Возврат на ту же страницу."""
         resp = back(back_to(request, back_url))
         if set in THEMES:
-            resp.set_cookie("theme", set, max_age=10 * 365 * 86400, samesite="lax", secure=True)
+            resp.set_cookie("theme", set, max_age=10 * 365 * 86400, samesite="lax", secure=w.secure)
         else:
             resp.delete_cookie("theme")
         return resp
+
+    @app.get("/apps/{app_id}/qr.png")
+    def apple_qr(request: Request, app_id: int):
+        a = request.state.acct
+        with w.conn() as c:
+            item = next((x for x in store.list_apps(c, a.id) if x.app_id == app_id), None)
+        if item is None or item.current is None:
+            return not_found()
+        url = "itms-services://?action=download-manifest&url=" + cfg.shelf_url(a, item.current["dir"], "manifest.plist")
+        return Response(android._qr_png(url), media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
     def matches(needle: str, alias: dict, app_id: int, *texts: str) -> bool:
         return any(needle in t.casefold() for t in texts) or needle in alias.get(app_id, "")
@@ -344,17 +371,20 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         except jobs.ArchiveUnavailable:
             return catalog_page(request, 503, PIN_ARCHIVE_DOWN)
         with w.conn() as c:
-            if not fn(c, a.id, cfg.shelf_root(a), app_id, version_id):  # чужая или несуществующая — как нет
-                return not_found()
+            try:
+                if not fn(cfg, c, a, app_id, version_id):
+                    return not_found()
+            except jobs.AccountBusy:
+                return catalog_page(request, 503, "Полка занята скачиванием — повторите через минуту")
         return back("/")
 
     @app.post("/apps/{app_id}/versions/{version_id}/pin", response_class=HTMLResponse)
     def pin(request: Request, app_id: int, version_id: int):
-        return change_pin(request, app_id, version_id, store.pin_version)
+        return change_pin(request, app_id, version_id, jobs.pin_version)
 
     @app.post("/apps/{app_id}/versions/{version_id}/unpin", response_class=HTMLResponse)
     def unpin(request: Request, app_id: int, version_id: int):
-        return change_pin(request, app_id, version_id, store.unpin_version)
+        return change_pin(request, app_id, version_id, jobs.unpin_version)
 
     @app.get("/api/status")
     def api_status(request: Request):

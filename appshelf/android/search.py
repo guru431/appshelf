@@ -157,6 +157,9 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     for source, catalog in (("fdroid", src.fdroid_catalog), ("fdroid_archive", src.fdroid_archive)):
         detail = "загрузка каталога — f-droid.org" if getattr(catalog, "_apps", True) is None else "поиск в каталоге"
         found = yield from run(source, detail, lambda: catalog.search(query, src._wait))
+        if getattr(catalog, "stale", False):
+            errors[source] = f"{NAMES[source]}: показан устаревший кэш; перед скачиванием каталог будет проверен заново"
+            yield Update("status", source, "error", "устаревший кэш — источник недоступен")
         for app in found or ():
             build = app.select()
             choices = tuple((b.name, f"{app.package}@{b.code}") for b in app.choices())

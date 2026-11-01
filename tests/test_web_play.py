@@ -36,6 +36,8 @@ def connects(monkeypatch):
         d = play.token_dir(cfg, gid)
         d.mkdir(parents=True, exist_ok=True)
         (d / "aas").write_text("aas_et/x")
+        if kw.get("on_saved"):
+            kw["on_saved"]("")
         return ""
     fake.calls, fake.error = [], None
     monkeypatch.setattr(play, "connect", fake)
@@ -192,7 +194,7 @@ def test_play_precheck_auth_and_network_failure_leave_no_card(pweb, play_add, co
 def test_add_from_play_by_url_and_package(pweb, conn, clock):
     people.set_play(conn, pweb.gid, "ok", clock.iso())
     page = pweb.client.get("/android/add").text
-    assert "Google Play" in page and 'action="/android/add/play"' in page and f'value="{pweb.gid}"' in page
+    assert "Google Play" in page and 'action="/android/add/play?person=1"' in page and f'value="{pweb.gid}"' in page
     r = pweb.client.post("/android/add/play", follow_redirects=False, data={
         "package": "https://play.google.com/store/apps/details?id=com.fsck.k9&hl=ru", "account": pweb.gid})
     assert r.status_code == 303
@@ -275,7 +277,7 @@ def test_split_job_alternatives_download_same_package_and_check_access(pweb, con
     uid, _ = google_only(conn, clock)
     foreign = TestClient(pweb.app, base_url=f"https://{HOST}")
     sign_in(foreign, cfg, conn, clock, uid)
-    assert foreign.post(endpoint, data={"source": "rustore"}).status_code == 404
+    assert foreign.post(endpoint, params={"person": uid}, data={"source": "rustore"}).status_code == 404
     assert foreign.post(f"/android/public/jobs/{jid}/alternative", data={"source": "rustore"}).status_code == 403
     del pweb.sources.fail[package]
     pweb.sources.apks[package] = make_apk(tmp_path / "alternative.apk", package=package)

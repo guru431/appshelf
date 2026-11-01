@@ -1,7 +1,8 @@
 import pytest
 
 from appshelf import jobs, nightly, people, removed, store
-from appshelf.ipatool import SessionExpired
+from appshelf.ipatool import IpatoolError, SessionExpired
+from appshelf.android import db as android_db
 from helpers import FakeTool, assert_shelf_gone, make_account, owner, set_session, to_weekday
 from ipa_factory import make_ipa
 
@@ -29,13 +30,17 @@ def test_check_adds_only_owned_apps_to_history(ctx, conn, clock):
 
 
 def test_check_stops_on_expired_session(ctx, conn, clock):
-    # вход истёк — и список покупок не отдаётся; это id после нового входа первым не спрашиваем: вдруг его и убил
+    # Истёкший вход не доказывает отсутствие лицензии; свежий вход должен повторить этот id.
     acct = owner(conn, clock)
     ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "")
     ctx.tool.errors["list_purchases"] = SessionExpired("session_expired", "")
     with pytest.raises(SessionExpired):
         removed.check(ctx.env, conn, acct, CATALOG)
-    assert store.no_license_ids(conn, 1) == {1}
+    assert store.no_license_ids(conn, 1) == set()
+    clock.advance(1)
+    people.mark_login(conn, acct.id, {}, clock.iso())
+    ctx.tool.latest[1] = "900"
+    assert removed.check(ctx.env, conn, people.get_account(conn, acct.id), CATALOG[:1]) == (1, 0, 0)
 
 
 def test_check_goes_on_when_only_one_app_refused(ctx, conn, clock):
@@ -44,8 +49,83 @@ def test_check_goes_on_when_only_one_app_refused(ctx, conn, clock):
     ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "")
     ctx.tool.latest[2] = "900"
     ctx.tool.no_license.add(3)
-    assert removed.check(ctx.env, conn, acct, CATALOG) == (1, 2, 0)
-    assert store.no_license_ids(conn, 1) == {1, 3} and ("list_purchases",) in ctx.tool.calls
+    assert removed.check(ctx.env, conn, acct, CATALOG) == (1, 1, 1)
+    assert store.no_license_ids(conn, 1) == {3} and ("list_purchases",) in ctx.tool.calls
+
+
+def test_repeated_session_failures_quarantine_only_that_app(ctx, conn, clock):
+    acct = owner(conn, clock)
+
+    def expire():
+        ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "2042")
+        ctx.tool.errors["list_purchases"] = SessionExpired("session_expired", "expired")
+        with pytest.raises(SessionExpired):
+            removed.check(ctx.env, conn, acct, CATALOG)
+
+    expire()
+    ctx.tool.calls.clear()
+    # Тот же вход не опрашивает проблемное приложение снова; остальные ID остаются доступны.
+    ctx.tool.no_license.update({2, 3})
+    assert removed.check(ctx.env, conn, acct, CATALOG) == (0, 2, 0)
+    assert ("latest_version_id", 1) not in ctx.tool.calls
+    clock.advance(1)
+    people.mark_login(conn, acct.id, {}, clock.iso())
+    expire()  # свежий вход даёт ещё одну попытку
+    clock.advance(1)
+    people.mark_login(conn, acct.id, {}, clock.iso())
+    ctx.tool.calls.clear()
+    assert removed.check(ctx.env, conn, acct, CATALOG) == (0, 0, 0)
+    assert ctx.tool.calls == [] and 1 not in store.no_license_ids(conn, acct.id)
+    clock.advance(7 * 86400)
+    ctx.tool.latest[1] = "900"
+    assert removed.check(ctx.env, conn, acct, CATALOG) == (1, 0, 0)
+    assert conn.execute("SELECT 1 FROM removed_retries WHERE app_id=1").fetchone() is None
+
+
+def test_failed_control_request_does_not_expire_session(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(removed, "load", lambda: CATALOG[:1])
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    ctx.tool.errors["latest_version_id"] = SessionExpired("session_expired", "2042")
+    ctx.tool.errors["list_purchases"] = IpatoolError("network", "offline")
+    store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).tick()
+    assert people.get_account(conn, 1).session == "ok"
+    assert store.no_license_ids(conn, 1) == set()
+    assert conn.execute("SELECT COUNT(*) FROM removed_retries").fetchone()[0] == 1
+
+
+def test_check_yields_to_android_and_resumes_cursor_after_restart(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(removed, "load", lambda: CATALOG)
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    ctx.tool.no_license.update({1, 2, 3})
+    ctx.tool.errors["latest_version_id"] = IpatoolError("network", "temporary")
+    shelf = android_db.ensure_shelf(conn, 1, clock.iso())
+
+    def queue_android(name, *args):
+        if name == "latest_version_id" and args[0] == 1:
+            ctx.tool.on_call = None
+            android_db.enqueue(conn, shelf.id, "copy", clock.iso(), package="example.one")
+
+    ctx.tool.on_call = queue_android
+    store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).tick()
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "queued"
+    seen = []
+
+    def android(env, c, job):
+        seen.append("android")
+        android_db.finish_job(c, job["id"], "done", clock.iso())
+
+    monkeypatch.setattr(jobs.android_fetch, "run_job", android)
+    w = jobs.Worker(ctx.env, lambda: store.connect(cfg.db))  # перезапуск не теряет позицию
+    w.tick()
+    assert seen == ["android"]
+    ctx.tool.calls.clear()
+    w.tick()
+    assert [call[1] for call in ctx.tool.calls if call[0] == "latest_version_id"] == [2, 3, 1]
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "done"
 
 
 def test_worker_runs_check_job(ctx, cfg, conn, clock, monkeypatch):

@@ -3,11 +3,50 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-from appshelf import jobs, removed, store
+from appshelf import apk, jobs, removed, store
 from appshelf.config import GB, Config
 from appshelf.web.app import create_app
 from android_fakes import FakeSources
-from helpers import HOST, TOKEN, Clock, FakeTool, owner, sign_in
+from helpers import HOST, TOKEN, Clock, FakeTool, ShelfClient, owner, sign_in
+
+
+@pytest.fixture(autouse=True)
+def synthetic_apk_verifier(request, monkeypatch):
+    """Only immutable hashes from make_apk use a fake. Real crypto tests opt out by module."""
+    if request.module.__name__ == "test_apk_verification":
+        return
+    import hashlib
+    from apk_factory import SYNTHETIC_SIGNATURES
+
+    def verify(path):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in SYNTHETIC_SIGNATURES:
+            raise apk.ApkError("криптографическая проверка APK не пройдена")
+        return SYNTHETIC_SIGNATURES[digest]
+
+    monkeypatch.setattr(apk, "verify_apk", verify)
+    monkeypatch.setattr(apk, "verified_rotation", lambda path, old_signer, new_signer: 0)
+
+
+@pytest.fixture(autouse=True)
+def synthetic_fdroid_index_verifier(monkeypatch):
+    import io
+    import zipfile
+    from appshelf.android import fdroid_index
+
+    real_verify = fdroid_index.verify
+
+    def verify(raw):
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                if z.comment == b"appshelf-test-index":
+                    return
+        except zipfile.BadZipFile:
+            pass
+        return real_verify(raw)
+
+    monkeypatch.setattr(fdroid_index, "verify", verify)
+    monkeypatch.setattr(fdroid_index, "wall_time", lambda: 1800000000.0, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +117,7 @@ def make_web(clock):
                             now=clock.iso, clock=clock.monotonic,
                             send=lambda subject, body, to: wb.sent.append((subject, body)),
                             disk_free=lambda path: wb.free["bytes"], start_worker=False, sources=wb.sources, **kw)
-        wb.client = TestClient(wb.app, base_url=f"https://{HOST}")
+        wb.client = ShelfClient(wb.app, base_url=f"https://{HOST}")
         return wb
     return make
 

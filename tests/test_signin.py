@@ -382,7 +382,7 @@ def test_two_people_in_one_browser_show_all_their_shelves(web, conn, cfg, clock)
     only.get("/acct/1")                                               # полку владельца не выбрать
     page = only.get("/").text
     assert names_in(page) == ["Общее"] and "owner@example" not in page
-    assert only.post("/apps/6/retry", follow_redirects=False).status_code == 404
+    assert only.post("/apps/6/retry", params={"account": shared.id}, follow_redirects=False).status_code == 404
 
 
 def test_junk_around_a_good_cookie_entry_is_ignored(web):  # 2026-10-12, Review Focus 1
@@ -414,7 +414,7 @@ def test_adding_apple_id_of_another_person_signs_this_browser_in_as_them(web, co
                      follow_redirects=False).status_code == 303
     page = only.get("/").text
     assert names_in(page) == ["Общее"] and "owner@example" not in page
-    assert only.post("/apps/6/retry", follow_redirects=False).status_code == 404
+    assert only.post("/apps/6/retry", params={"account": shared.id}, follow_redirects=False).status_code == 404
 
 
 def test_login_in_signed_in_browser_adds_the_person(web, conn, clock):  # 2026-10-12, Review Focus 5

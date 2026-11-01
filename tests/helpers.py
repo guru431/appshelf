@@ -4,6 +4,9 @@ from __future__ import annotations
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from starlette.testclient import TestClient
 
 from appshelf import people, store, webauth
 from appshelf.ipatool import LicenseNotFound
@@ -11,6 +14,39 @@ from appshelf.ipatool import LicenseNotFound
 TOKEN = "0123456789abcdef0123456789abcdef"
 OWNER_EMAIL = "owner@example"
 HOST = "apps.example"
+
+
+class ShelfClient(TestClient):
+    """Submit against the shelf last displayed by this test browser.
+
+    Explicit query context wins. request('POST', ...) remains raw for malformed/stale-form regression tests.
+    """
+    shown_account = None
+    shown_person = None
+    shown_users = None
+
+    def request(self, method, url, **kwargs):
+        response = super().request(method, url, **kwargs)
+        context = getattr(response, "context", None)
+        if context:
+            self.shown_account = context.get("acct")
+            self.shown_person = context.get("who")
+            self.shown_users = context.get("users")
+        return response
+
+    def post(self, url, **kwargs):
+        from appshelf.web.common import mutation_kind
+        kind = mutation_kind(str(url))
+        if kind and kind + "=" not in urlsplit(str(url)).query:
+            target = self.shown_account if kind == "account" else self.shown_person
+            if target is None:
+                self.get("/?os=apple" if kind == "account" else "/android")
+                target = self.shown_account if kind == "account" else self.shown_person
+            if urlsplit(str(url)).path == "/android/public/add/from-shelf":
+                target = next((u for u in self.shown_users or [] if u.role == people.OWNER), target)
+            if target is not None:
+                kwargs["params"] = {kind: target.id, **dict(kwargs.get("params") or {})}
+        return super().post(url, **kwargs)
 
 
 class Clock:

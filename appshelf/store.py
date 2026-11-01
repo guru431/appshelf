@@ -12,10 +12,10 @@ import sqlite3
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 # Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
 # schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Правило для переходов с версии 4:
 # лишь добавляющий столбцы с умолчаниями или таблицы, которых прежний код не читает, пишет туда прежний
@@ -117,6 +117,14 @@ CREATE TABLE IF NOT EXISTS removed_checks (
     checked_at TEXT NOT NULL,
     PRIMARY KEY (account_id, app_id)
 );
+CREATE TABLE IF NOT EXISTS removed_retries (
+    account_id INTEGER NOT NULL,
+    app_id INTEGER NOT NULL,
+    attempts INTEGER NOT NULL,
+    session_at TEXT NOT NULL,
+    retry_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, app_id)
+);
 CREATE TABLE IF NOT EXISTS android_shelves (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER UNIQUE,
     shelf TEXT NOT NULL, shelf_next TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS android_apps (shelf_id INTEGER NOT NULL, package TEXT NOT NULL, name TEXT NOT NULL,
@@ -128,7 +136,8 @@ CREATE TABLE IF NOT EXISTS android_versions (id INTEGER PRIMARY KEY, shelf_id IN
     version_name TEXT NOT NULL, version_code INTEGER NOT NULL, min_sdk INTEGER NOT NULL, target_sdk INTEGER NOT NULL,
     abis TEXT NOT NULL DEFAULT '', signer TEXT NOT NULL, source TEXT NOT NULL, size INTEGER NOT NULL,
     sha256 TEXT NOT NULL, dir TEXT NOT NULL, downloaded_at TEXT NOT NULL, role TEXT NOT NULL,
-    pinned INTEGER NOT NULL DEFAULT 0);
+    pinned INTEGER NOT NULL DEFAULT 0, signature_verified INTEGER NOT NULL DEFAULT 0,
+    rotation_min_sdk INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS android_jobs (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, kind TEXT NOT NULL,
     package TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL,
     finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
@@ -163,7 +172,11 @@ V8_COLUMNS = (
     ("android_apps", "google_account_id INTEGER"),
     ("android_apps", "paid INTEGER NOT NULL DEFAULT 0"),
 )
-SHELF_TABLES = ("purchases", "apps", "versions", "jobs", "removed_checks")
+V9_COLUMNS = (
+    ("android_versions", "signature_verified INTEGER NOT NULL DEFAULT 0"),
+    ("android_versions", "rotation_min_sdk INTEGER NOT NULL DEFAULT 0"),
+)
+SHELF_TABLES = ("purchases", "apps", "versions", "jobs", "removed_checks", "removed_retries")
 LEGACY_STATE = ("session", "session_since", "account_name", "storefront", "expired_mail_sent")
 DIR_RE = re.compile(r"^\d+-[A-Za-z0-9._-]+$")
 WORKER_KINDS = ("publish", "refresh_history", "check_removed")
@@ -257,7 +270,7 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version in (4, 5, 6, 7):  # таблицы Android (5), счётчики PIN (6), Google-аккаунты (7): код версии 4 их не
+        if version in (4, 5, 6, 7, 8):  # таблицы Android (5), счётчики PIN (6), Google-аккаунты (7): код версии 4 их не
             # читает — откат возможен; участник без Apple ID для него просто не вошедший. Столбцы Play (8) — с
             # умолчаниями: таблицам, что были до перехода, — ALTER
             _create(c)
@@ -279,6 +292,10 @@ def _upgrade(c, owner_email: str) -> None:
             _fill_v4(c)
         else:
             _create(c)
+        # Старые схемы 1–3 имеют отдельный путь перехода: новые столбцы нужны и им.
+        for table, column in V9_COLUMNS:
+            if column.split()[0] not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
         c.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -447,6 +464,36 @@ def mark_no_license(c, aid: int, app_id: int, now: str) -> None:
                     (aid, app_id, now, aid))
     if cur.rowcount == 0:
         raise AccountGone(aid)
+    clear_removed_retry(c, aid, app_id)
+
+
+def removed_retry_allowed(c, aid: int, app_id: int, session_at: str, now: str) -> bool:
+    """Неопределённый отказ Apple: одна попытка на свежий вход, не более двух до недельного карантина.
+    Карантин не означает отсутствие лицензии и не мешает проверять остальные приложения."""
+    row = c.execute("SELECT * FROM removed_retries WHERE account_id=? AND app_id=?", (aid, app_id)).fetchone()
+    return row is None or now >= row["retry_at"] or (session_at != row["session_at"] and row["attempts"] < 2)
+
+
+def removed_retry_status(c, aid: int) -> dict[int, str]:
+    """Причины временно непроверенных лицензий для справочника; это не отметка «нет в аккаунте»."""
+    return {r["app_id"]: ("Apple не подтвердил лицензию — повторим после нового входа" if r["attempts"] < 2 else
+                          "Проверка временно отложена после двух отказов Apple — повторим " + r["retry_at"][:10])
+            for r in c.execute("SELECT app_id, attempts, retry_at FROM removed_retries WHERE account_id=?", (aid,))}
+
+
+def mark_removed_retry(c, aid: int, app_id: int, session_at: str, now: str) -> None:
+    retry_at = (datetime.fromisoformat(now) + timedelta(days=7)).isoformat(timespec="seconds")
+    with tx(c):
+        _require_account(c, aid)
+        c.execute("INSERT INTO removed_retries (account_id, app_id, attempts, session_at, retry_at) "
+                  "VALUES (?, ?, 1, ?, ?) ON CONFLICT(account_id, app_id) DO UPDATE SET "
+                  "attempts=CASE WHEN retry_at<=? THEN 1 ELSE attempts+1 END, "
+                  "session_at=excluded.session_at, retry_at=excluded.retry_at",
+                  (aid, app_id, session_at, retry_at, now))
+
+
+def clear_removed_retry(c, aid: int, app_id: int) -> None:
+    c.execute("DELETE FROM removed_retries WHERE account_id=? AND app_id=?", (aid, app_id))
 
 
 def set_purchase_version(c, aid: int, app_id: int, version: str, now: str) -> None:
@@ -471,6 +518,7 @@ def confirm_license(c, aid: int, app_id: int) -> None:
 
 def clear_no_license(c, aid: int, app_id: int) -> None:
     c.execute("DELETE FROM removed_checks WHERE account_id=? AND app_id=?", (aid, app_id))
+    clear_removed_retry(c, aid, app_id)
 
 
 def add_known(c, aid: int, app_id: int, name: str, source: str) -> None:
@@ -710,6 +758,35 @@ def has_runnable(c, kind: str) -> bool:
     уступает только таким: публикация Apple ID без входа прерывала бы её на каждом шаге."""
     return c.execute(f"SELECT 1 FROM jobs WHERE status='queued' AND kind=? AND {RUNNABLE} LIMIT 1",
                      (kind,)).fetchone() is not None
+
+
+def queue_waiting_reason(c) -> str:
+    """Причина ожидания отдельно от ошибки; обе платформы обслуживает один обработчик."""
+    running = c.execute("SELECT kind FROM jobs WHERE status='running' ORDER BY id LIMIT 1").fetchone()
+    if running is not None and running["kind"] == "check_removed":
+        return "Ждёт завершения проверки текущего приложения"
+    if running is not None or c.execute("SELECT 1 FROM android_jobs WHERE status='running' LIMIT 1").fetchone():
+        return "Ждёт завершения текущего задания"
+    return "В очереди — задания Apple и Android выполняются по очереди"
+
+
+def waiting_reason(c, aid: int, app_id: int) -> str:
+    row = c.execute("SELECT a.session FROM jobs j JOIN accounts a ON a.id=j.account_id "
+                    "WHERE j.account_id=? AND j.app_id=? AND j.status='queued' LIMIT 1", (aid, app_id)).fetchone()
+    if row is None:
+        return ""
+    return "Ждёт входа в Apple ID" if row["session"] != "ok" else queue_waiting_reason(c)
+
+
+def android_waiting_reason(c, shelf_id: int, package: str) -> str:
+    from .android import db as android_db
+
+    row = c.execute(f"SELECT {android_db.RUNNABLE} AS runnable FROM android_jobs j "
+                    "WHERE shelf_id=? AND package=? AND status='queued' LIMIT 1",
+                    (shelf_id, package)).fetchone()
+    if row is None:
+        return ""
+    return queue_waiting_reason(c) if row["runnable"] else "Ждёт подключения Google Play"
 
 
 def requeue_job(c, job_id: int) -> None:

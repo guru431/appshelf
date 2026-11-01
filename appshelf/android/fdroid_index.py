@@ -1,30 +1,38 @@
 """Каталоги основного и архивного F-Droid: поиск, версии, ссылки на исходный GitHub.
 
-index-v1.jar загружается по HTTPS, с пределами сжатого и распакованного размера. Как у
-пакетного API F-Droid, подпись самого индекса пока не проверяется; APK сверяется с его
-SHA-256 и сертификатом. Каталог в памяти обновляется раз в шесть часов, под замком.
+entry.jar проверяется Java JarFile по закреплённому сертификату; его SHA-256 аутентифицирует index-v2.json.
+Нормализованный кэш живёт на локальном диске; APK сверяется с SHA-256 принятого каталога.
 """
 from __future__ import annotations
 
 import hashlib
+import gzip
 import io
 import json
+import os
 import re
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
 import zipfile
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..apk import PACKAGE_RE
+from ..ipatool import IpatoolError, hold
 from .net import FetchError, Http, SourceError
 
 MAX_JAR = 32 << 20
 MAX_INDEX = 192 << 20
 TTL = 6 * 3600
+MAX_AGE = 14 * 86400
+# Official repository key: https://f-droid.org/docs/Release_Channels_and_Signing_Keys/
+REPO_SIGNER = "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+wall_time = time.time
 
 
 def split_ref(ref: str) -> tuple[str, int | None]:
@@ -77,26 +85,113 @@ class App:
 
 
 class Catalog:
-    def __init__(self, http: Http, *, archive: bool = False, clock=time.monotonic):
+    def __init__(self, http: Http, *, archive: bool = False, clock=time.monotonic,
+                 cache_dir: Path | None = None, wall_clock=None):
         self.http, self.clock = http, clock
+        self.wall_clock = wall_clock or wall_time
         self.repo = f"https://f-droid.org/{'archive' if archive else 'repo'}/"
+        self.cache = cache_dir / ("archive.json" if archive else "repo.json") if cache_dir else None
         self._apps: dict[str, App] | None = None
         self._until = 0.0
+        self._timestamp = 0
+        self.stale = False
         self._lock = threading.Lock()
 
-    def apps(self, wait=lambda: None) -> dict[str, App]:
+    def apps(self, wait=lambda: None, *, allow_stale=False) -> dict[str, App]:
         with self._lock:
+            if self._apps is None and self.cache and self.cache.exists():
+                self._load_cache()
             if self._apps is None or self.clock() >= self._until:
                 wait()
                 http = copy(self.http)
                 if isinstance(http, Http):
                     http.timeout = min(http.timeout, 10.0)
-                status, _, raw = http.request("GET", self.repo + "index-v1.jar", max_bytes=MAX_JAR)
-                if status != 200:
-                    raise FetchError(f"каталог F-Droid ответил {status}")
-                self._apps = parse(raw)
-                self._until = self.clock() + TTL
+                try:
+                    status, _, raw = http.request("GET", self.repo + "entry.jar", max_bytes=MAX_JAR)
+                    if status != 200:
+                        raise FetchError(f"каталог F-Droid ответил {status}")
+                except FetchError:
+                    if not allow_stale or self._apps is None:
+                        raise
+                    self.stale = True
+                    return self._apps
+                verify(raw)
+                entry = _index_data(raw)
+                timestamp = index_timestamp(raw)
+                if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
+                        or timestamp > (self.wall_clock() + 86400) * 1000:
+                    raise SourceError("устаревший каталог F-Droid или откат его версии")
+                if "index" in entry:
+                    meta = entry["index"]
+                    if meta.get("name") != "/index-v2.json" or not SHA256_RE.fullmatch(str(meta.get("sha256", ""))) \
+                            or not isinstance(meta.get("size"), int) or not 0 < meta["size"] <= MAX_INDEX:
+                        raise SourceError("неизвестный формат entry F-Droid")
+                    try:
+                        status, headers, body = http.request("GET", self.repo + "index-v2.json",
+                            headers={"Accept-Encoding": "gzip"}, max_bytes=MAX_INDEX)
+                        if status != 200:
+                            raise FetchError(f"каталог F-Droid ответил {status}")
+                    except FetchError:
+                        if not allow_stale or self._apps is None:
+                            raise
+                        self.stale = True
+                        return self._apps
+                    if headers.get("content-encoding", "").lower() == "gzip":
+                        try:
+                            with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                                body = stream.read(MAX_INDEX + 1)
+                        except (OSError, EOFError):
+                            raise SourceError("сжатый каталог F-Droid повреждён") from None
+                    if len(body) != meta["size"] or hashlib.sha256(body).hexdigest() != meta["sha256"]:
+                        raise SourceError("каталог F-Droid не совпал с SHA-256 подписанного entry")
+                    apps = parse_v2(body)
+                else:
+                    apps = parse(raw)
+                try:
+                    self._save_cache(apps, timestamp)
+                except (OSError, IpatoolError, ValueError, KeyError):
+                    raise SourceError("не удалось сохранить локальный кэш F-Droid; прежнее поколение сохранено") from None
+                self._apps, self._timestamp = apps, timestamp
+                self._until, self.stale = self.clock() + TTL, False
             return self._apps
+
+    def _load_cache(self):
+        try:
+            if self.cache.stat().st_size > MAX_INDEX:
+                raise ValueError()
+            data = json.loads(self.cache.read_bytes())
+            if data["schema"] != 1 or data["repo"] != self.repo or data["signer"] != REPO_SIGNER:
+                raise ValueError()
+            self._apps = {p: App(p, a["name"], a["upstream"], a["suggested"],
+                                tuple(Build(**{**b, "abis": tuple(b["abis"])}) for b in a["builds"]))
+                          for p, a in data["apps"].items()}
+            self._timestamp = int(data["timestamp"])
+            age = max(0, self.wall_clock() - float(data["checked_at"]))
+            self._until = self.clock() + max(0, min(TTL - age,
+                self._timestamp / 1000 + MAX_AGE - self.wall_clock()))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise SourceError("локальный кэш F-Droid повреждён; восстановите его из доверенной копии") from None
+
+    def _save_cache(self, apps, timestamp):
+        if self.cache is None:
+            return
+        self.cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with hold(self.cache.with_suffix(".lock"), wait=15):
+            if self.cache.exists():
+                saved = json.loads(self.cache.read_bytes())
+                if int(saved["timestamp"]) > timestamp:
+                    raise SourceError("откат версии каталога F-Droid")
+            data = {"schema": 1, "repo": self.repo, "signer": REPO_SIGNER, "timestamp": timestamp,
+                    "checked_at": self.wall_clock(), "apps": {p: asdict(a) for p, a in apps.items()}}
+            fd, name = tempfile.mkstemp(dir=self.cache.parent, suffix=".partial")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    json.dump(data, output, ensure_ascii=False, separators=(",", ":"))
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(name, self.cache)
+            finally:
+                Path(name).unlink(missing_ok=True)
 
     def info(self, ref: str, wait=lambda: None) -> tuple[App, Build]:
         package, code = split_ref(ref)
@@ -107,7 +202,7 @@ class Catalog:
 
     def search(self, query: str, wait=lambda: None, limit: int = 15) -> list[App]:
         words = query.casefold().split()
-        matches = [a for a in self.apps(wait).values()
+        matches = [a for a in self.apps(wait, allow_stale=True).values()
                    if a.choices() and all(w in f"{a.name} {a.package}".casefold() for w in words)]
         return sorted(matches, key=lambda a: (a.package.casefold() != query.casefold(),
                                              a.name.casefold() != query.casefold(), a.name.casefold()))[:limit]
@@ -122,13 +217,52 @@ class Catalog:
             raise SourceError("APK из F-Droid не совпал с SHA-256 в каталоге")
 
 
+def _index_data(raw: bytes) -> dict:
+    if len(raw) > MAX_JAR:
+        raise SourceError("каталог F-Droid слишком большой")
+    with zipfile.ZipFile(io.BytesIO(raw)) as jar:
+        entries = jar.infolist()
+        if len({e.filename for e in entries}) != len(entries):
+            raise SourceError("повторяющиеся файлы в каталоге F-Droid")
+        entry = jar.getinfo("entry.json" if "entry.json" in jar.namelist() else "index-v1.json")
+        if entry.file_size > MAX_INDEX or sum(e.file_size for e in entries if e != entry) > 8 << 20:
+            raise SourceError("каталог F-Droid слишком большой")
+        return json.loads(jar.read(entry))
+
+
+def verify(raw: bytes) -> None:
+    """Java's maintained JAR verifier; pinned certificate, signed JSON and full digest verification."""
+    try:
+        _index_data(raw)
+        with tempfile.TemporaryDirectory(prefix="appshelf-fdroid-") as temp:
+            path = Path(temp) / "index.jar"
+            path.write_bytes(raw)
+            helper = Path(__file__).resolve().parent.parent / "data" / "VerifyIndex.java"
+            entry_name = "entry.json" if "index" in _index_data(raw) else "index-v1.json"
+            result = subprocess.run(["java", "-Xmx384m", "--source", "11", str(helper), str(path), REPO_SIGNER, entry_name],
+                                    capture_output=True, timeout=25)
+            if result.returncode != 0 or result.stdout.strip() != b"verified":
+                raise SourceError("подпись каталога F-Droid не прошла проверку доверенным ключом")
+    except (OSError, subprocess.SubprocessError):
+        raise SourceError("проверка каталога F-Droid недоступна: нужен Java 11+ (JDK)") from None
+    except (ValueError, KeyError, zipfile.BadZipFile, RuntimeError, NotImplementedError):
+        raise SourceError("каталог F-Droid ответил в неизвестном формате") from None
+
+
+def index_timestamp(raw: bytes) -> int:
+    try:
+        data = _index_data(raw)
+        timestamp = int(data["timestamp"] if "index" in data else data["repo"]["timestamp"])
+        if timestamp <= 0:
+            raise ValueError()
+        return timestamp
+    except (KeyError, ValueError, TypeError):
+        raise SourceError("в каталоге F-Droid нет корректного времени публикации") from None
+
+
 def parse(raw: bytes) -> dict[str, App]:
     try:
-        with zipfile.ZipFile(io.BytesIO(raw)) as jar:
-            entry = jar.getinfo("index-v1.json")
-            if entry.file_size > MAX_INDEX:
-                raise SourceError("каталог F-Droid слишком большой")
-            data = json.loads(jar.read(entry))
+        data = _index_data(raw)
         apps = {}
         for meta in data["apps"]:
             package = meta["packageName"]
@@ -152,3 +286,36 @@ def parse(raw: bytes) -> dict[str, App]:
         return apps
     except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile, RuntimeError, NotImplementedError):
         raise SourceError("каталог F-Droid ответил в неизвестном формате") from None
+
+
+def parse_v2(raw: bytes) -> dict[str, App]:
+    """Normalize the authenticated v2 format to the same small catalog used by the shelf."""
+    try:
+        data = json.loads(raw)
+        apps = {}
+        for package, app in data["packages"].items():
+            if not PACKAGE_RE.fullmatch(package):
+                continue
+            meta, builds = app["metadata"], []
+            preferred = meta.get("preferredSigner", "")
+            for version in app.get("versions", {}).values():
+                if version.get("releaseChannels"):
+                    continue
+                file, manifest = version["file"], version["manifest"]
+                filename = file["name"].removeprefix("/")
+                digest = file["sha256"]
+                signers = manifest.get("signer", {}).get("sha256", [])
+                signer = signers[0] if len(signers) == 1 else ""
+                if not filename.endswith(".apk") or "/" in filename or "\\" in filename \
+                        or not SHA256_RE.fullmatch(digest) or not SHA256_RE.fullmatch(signer):
+                    continue
+                builds.append(Build(str(manifest["versionName"]), int(manifest["versionCode"]), filename,
+                                    digest, signer, tuple(manifest.get("nativecode", ()))))
+            names = meta.get("name", {})
+            name = next((names[k] for k in ("ru", "ru-RU", "en-US", "en") if names.get(k)), None)
+            name = name or next(iter(names.values()), package)
+            suggested = max((b.code for b in builds if not preferred or b.signer == preferred), default=0)
+            apps[package] = App(package, str(name), str(meta.get("sourceCode", "")), suggested, tuple(builds))
+        return apps
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise SourceError("каталог F-Droid v2 ответил в неизвестном формате") from None

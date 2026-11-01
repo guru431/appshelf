@@ -5,7 +5,7 @@
 удалась (повторит следующая).</p>
 <div class="stats"><span class="tag">Есть в аккаунте: {{ counts.owned }}</span><span class="tag">нет в аккаунте: {{ counts.missing }}</span><span class="tag">не проверено: {{ counts.unknown }}</span>
   {%- if counts.failed %}<span class="tag">ошибка проверки: {{ counts.failed }}</span>{% endif %}</div>
-<form method="post" action="/blocked/check" class="bar">
+<form method="post" action="{{ post_url('/blocked/check') }}" class="bar">
   <button>Проверить новые</button>
   {% if checking and acct.session == 'ok' %}<span class="meta busy" id="progress">{{ progress or 'проверяю…' }}</span>
   {%- else %}<span class="meta">{% if checking %}ждёт входа в Apple ID{% else %}
@@ -22,13 +22,13 @@
     ID {{ i.id }} · {{ {'owned': 'есть в аккаунте', 'missing': 'нет в аккаунте', 'unknown': 'не проверено',
                         'failed': 'ошибка проверки'}[i.status] }}</div></div>
   {% if i.status == 'owned' %}<div class="act">{% if i.published %}<span class="meta done">в каталоге</span>{% else %}
-    <form method="post" action="/apps/{{ i.id }}/publish"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>{% endif %}
+    <form method="post" action="{{ post_url('/apps/' ~ i.id ~ '/publish') }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>{% endif %}
 </div>
 {% else %}
 <div class="row hint">Ничего не найдено</div>
 {% endfor %}
 </div>
-<form method="post" action="/blocked/add">
+<form method="post" action="{{ post_url('/blocked/add') }}">
   <p class="hint">Нет в справочнике — вставьте ссылку App Store или ID приложения.</p>
   <div class="field"><input name="ref" value="{{ add_ref }}" placeholder="apps.apple.com/ru/app/…/id492224193 или 492224193"><button>Добавить</button></div>
   {% if add_error %}<p class="err">{{ add_error }}</p>{% endif %}

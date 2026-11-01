@@ -3,15 +3,15 @@
 {% if created_link %}<div class="banner">Ссылка — показывается один раз, скопируйте сейчас:<br>
   <code>{{ created_link }}</code></div>{% endif %}
 <h2>Приглашения</h2>
-<form method="post" action="/admin/invites" class="field">
+<form method="post" action="{{ post_url('/admin/invites') }}" class="field">
   <input name="label" placeholder="подпись: коллеги, Петя…"><button>Создать ссылку</button></form>
 <p class="hint">По ссылке входят новым Apple ID один раз; ссылка работает, пока вы её не отключите или не удалите — одна на всех или своя на каждого. Отключённая остаётся в списке, удалённая пропадает.</p>
 <div class="card list">
 {% for i in invites %}
 <div class="row{{ ' inactive' if i['disabled_at'] }}">
   <div class="body"><div class="title">{{ i['label'] }}</div><div class="meta">{{ i['created_at'][:10] }} · пришло: {{ i['joined'] }}{% if i['disabled_at'] %} · отключена{% endif %}</div></div>
-  <div class="act">{% if not i['disabled_at'] %}<form method="post" action="/admin/invites/{{ i['id'] }}/disable"><button class="sm secondary">Отключить</button></form>{% endif %}
-    <form method="post" action="/admin/invites/{{ i['id'] }}/delete"><button class="sm danger">Удалить</button></form></div>
+  <div class="act">{% if not i['disabled_at'] %}<form method="post" action="{{ post_url('/admin/invites/' ~ i['id'] ~ '/disable') }}"><button class="sm secondary">Отключить</button></form>{% endif %}
+    <form method="post" action="{{ post_url('/admin/invites/' ~ i['id'] ~ '/delete') }}"><button class="sm danger">Удалить</button></form></div>
 </div>
 {% else %}
 <div class="row hint">Приглашений нет.</div>
@@ -26,8 +26,8 @@
     · последний вход {{ r.a.last_login_at[:10] or '—' }} · {{ r.size | gb }} ГБ</div>{% endfor %}
   {% for x in p.google %}<div class="meta body">Google {{ x.email }} · последний вход {{ x.last_login_at[:10] or '—' }}</div>{% endfor %}
   <div class="bar">
-    <form method="post" action="/admin/users/{{ p.user.id }}/login-link"><button class="sm secondary">Ссылка входа</button></form>
-    <form method="post" action="/admin/users/{{ p.user.id }}/logout-all"><button class="sm secondary">Выйти везде</button></form>
+    <form method="post" action="{{ post_url('/admin/users/' ~ p.user.id ~ '/login-link') }}"><button class="sm secondary">Ссылка входа</button></form>
+    <form method="post" action="{{ post_url('/admin/users/' ~ p.user.id ~ '/logout-all') }}"><button class="sm secondary">Выйти везде</button></form>
     {% if p.user.role != 'owner' %}<a class="btn sm danger" href="/admin/users/{{ p.user.id }}/delete">Удалить</a>{% endif %}
   </div>
 </div>

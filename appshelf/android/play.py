@@ -13,10 +13,12 @@ import shutil
 import threading
 import time
 import urllib.parse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
+from ..ipatool import hold
 from . import net, pb
 from .net import SourceError
 
@@ -70,7 +72,7 @@ FEATURES = tuple(f"android.hardware.{f}" for f in (
         "input_methods", "ipsec_tunnels", "live_wallpaper", "managed_users", "midi", "picture_in_picture", "print",
         "secure_lock_screen", "securely_removes_users", "verified_boot", "voice_recognizers", "webview"))
 
-_TOKENS: dict[int, tuple[str, float]] = {}   # токен Play по Google-аккаунту: (токен, до какого времени)
+_TOKENS: dict[int, tuple[str, float, str]] = {}   # (токен, до какого времени, хэш поколения credentials)
 _LOCK = threading.Lock()
 
 
@@ -84,6 +86,10 @@ class PlayAuthError(PlayError):
 
 class PlayGone(PlayError):
     """Приложения нет в Google Play (удалено или такого пакета нет)."""
+
+
+class PlayAccountGone(PlayError):
+    """Участника удалили во время подключения: новый ключ не должен остаться без владельца."""
 
 
 @dataclass(frozen=True)
@@ -240,29 +246,108 @@ def _write_secret(path: Path, text: str) -> None:
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
 
 
-def _save(d: Path, aas: str, dev: dict) -> None:
-    """Каталог токена целиком — рядом и переименованием: прежнее подключение заменяется, недописанного не бывает."""
+def _sync_dir(path: Path) -> None:
+    if os.name == "posix":
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _credentials_lock(d: Path):
     d.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    tmp = d.with_name(d.name + ".new")
-    shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir(mode=0o700)
-    try:
-        os.chmod(tmp, 0o700)
-        _write_secret(tmp / "aas", aas)
-        _write_secret(tmp / "device.json", json.dumps(dev))
-        shutil.rmtree(d, ignore_errors=True)
-        os.replace(tmp, d)
-    except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise
+    d.parent.chmod(0o700)
+    return hold(d.with_name(d.name + ".lock"))
+
+
+def _recover(d: Path) -> None:
+    """Под замком: до commit нового поколения прежнее остаётся в .old; после SIGKILL оно восстанавливается."""
+    old = d.with_name(d.name + ".old")
+    if old.exists():
+        if not d.exists():
+            os.replace(old, d)
+            _sync_dir(d.parent)
+        else:
+            shutil.rmtree(old)
+    shutil.rmtree(d.with_name(d.name + ".new"), ignore_errors=True)
+
+
+def disconnect(cfg, gid: int, *, on_removed: Callable[[], None] | None = None) -> None:
+    """Согласовано с чтением и заменой: восстановление не воскресит отключённое подключение."""
+    d = token_dir(cfg, gid)
+    with _credentials_lock(d):
+        _remove_credentials_locked(d)
+        forget(gid)
+        if on_removed is not None:
+            on_removed()
+
+
+def _remove_credentials_locked(d: Path) -> None:
+    # Прежде всего убираем recovery copy, чтобы прерывание удаления не могло вернуть её.
+    for candidate in (d.with_name(d.name + ".old"), d.with_name(d.name + ".new"), d):
+        if candidate.exists():
+            shutil.rmtree(candidate)
+    _sync_dir(d.parent)
+
+
+def _read_credentials(d: Path) -> tuple[str, dict]:
+    """Оба файла одного поколения, включая восстановление после прерванного переименования."""
+    _recover(d)
+    aas = (d / "aas").read_text(encoding="utf-8").strip()
+    dev = json.loads((d / "device.json").read_text(encoding="utf-8"))
+    return aas, dev
+
+
+def _save(d: Path, aas: str, dev: dict, *, _locked: bool = False) -> None:
+    """Переключение целого комплекта под общим замком, с durable backup до commit и recovery при следующем чтении."""
+    d.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with nullcontext() if _locked else _credentials_lock(d):
+        _recover(d)
+        tmp, old = d.with_name(d.name + ".new"), d.with_name(d.name + ".old")
+        tmp.mkdir(mode=0o700)
+        try:
+            os.chmod(tmp, 0o700)
+            _write_secret(tmp / "aas", aas)
+            _write_secret(tmp / "device.json", json.dumps(dev))
+            _sync_dir(tmp)
+            if d.exists():
+                os.replace(d, old)
+                _sync_dir(d.parent)
+            os.replace(tmp, d)
+            _sync_dir(d.parent)
+        except BaseException:
+            if not d.exists() and old.exists():
+                os.replace(old, d)
+                _sync_dir(d.parent)
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        shutil.rmtree(old, ignore_errors=True)
+        if d.name.isdigit():
+            forget(int(d.name))
 
 
 def connect(cfg, gid: int, email: str, oauth_token: str, proxy: str, *, http_factory=net.Http,
-            clock=time.time) -> str:
+            clock=time.time, on_saved: Callable[[str], None] | None = None) -> str:
     """oauth_token (со страницы Google, ~10 минут, один раз) → мастер-токен в token_dir/aas. Адрес из ответа ≠
     email — PlayError, и ничего не сохранено. Возвращает страну аккаунта; ответы Play её не называют — ''."""
+    with _credentials_lock(token_dir(cfg, gid)):
+        country = _connect_locked(cfg, gid, email, oauth_token, proxy, http_factory=http_factory, clock=clock)
+        if on_saved is not None:
+            try:
+                on_saved(country)
+            except PlayAccountGone:
+                _remove_credentials_locked(token_dir(cfg, gid))
+                forget(gid)
+                raise
+        return country
+
+
+def _connect_locked(cfg, gid, email, oauth_token, proxy, *, http_factory, clock):
     http = _http(cfg, proxy, http_factory)
     dev = _checkin(http, clock())
     status, reply = _auth(http, {**_base_params(dev, email), "service": "ac2dm", "add_account": "1",
@@ -278,7 +363,7 @@ def connect(cfg, gid: int, email: str, oauth_token: str, proxy: str, *, http_fac
         raise PlayError("это другой Google-аккаунт: на странице Google войдите тем же аккаунтом")
     dev["config_token"] = _upload_config(http, dev)
     dev["email"] = account
-    _save(token_dir(cfg, gid), aas, dev)
+    _save(token_dir(cfg, gid), aas, dev, _locked=True)
     forget(gid)
     return ""
 
@@ -309,22 +394,29 @@ class PlayClient:
     def _device(self) -> dict:
         if self._dev is None:
             try:
-                self._dev = json.loads((token_dir(self.cfg, self.gid) / "device.json").read_text(encoding="utf-8"))
+                d = token_dir(self.cfg, self.gid)
+                with _credentials_lock(d):
+                    _, self._dev = _read_credentials(d)
             except (OSError, ValueError):
                 raise PlayAuthError(NOT_CONNECTED) from None
         return self._dev
 
     def _token(self, force: bool = False) -> str:
+        with _credentials_lock(token_dir(self.cfg, self.gid)):
+            return self._token_locked(force)
+
+    def _token_locked(self, force: bool) -> str:
         now = self.clock()
+        try:
+            aas, self._dev = _read_credentials(token_dir(self.cfg, self.gid))
+        except (OSError, ValueError):
+            raise PlayAuthError(NOT_CONNECTED) from None
+        dev = self._dev
+        generation = hashlib.sha256((aas + json.dumps(dev, sort_keys=True)).encode()).hexdigest()
         with _LOCK:
             cached = _TOKENS.get(self.gid)
-        if cached and not force and cached[1] > now + TOKEN_MARGIN:
+        if cached and not force and cached[1] > now + TOKEN_MARGIN and cached[2] == generation:
             return cached[0]
-        try:
-            aas = (token_dir(self.cfg, self.gid) / "aas").read_text(encoding="utf-8").strip()
-        except OSError:
-            raise PlayAuthError(NOT_CONNECTED) from None
-        dev = self._device()
         status, reply = _auth(self.http, {**_base_params(dev, dev.get("email", "")), "app": "com.android.vending",
                                           "client_sig": CALLER_SIG, "callerPkg": "com.google.android.gms",
                                           "Token": aas, "oauth2_foreground": "1", "token_request_options": "CAA4AVAB",
@@ -340,7 +432,7 @@ class PlayClient:
         ttl = reply.get("ExpiresInDurationSec", "")
         until = int(expiry) if expiry.isdigit() else now + (int(ttl) if ttl.isdigit() else 3600)
         with _LOCK:
-            _TOKENS[self.gid] = (token, until)
+            _TOKENS[self.gid] = (token, until, generation)
         return token
 
     def _fdfe(self, method: str, endpoint: str, query: dict | None = None, body: bytes | None = None,
@@ -348,7 +440,8 @@ class PlayClient:
         """(статус, тело, текст ошибки Play). 401 — новый токен и ещё раз; снова 401 — подключение истекло."""
         url = f"{FDFE}/{endpoint}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
         for attempt in range(2):
-            headers = _dfe_headers(self._device(), self._token(force=attempt > 0))
+            token = self._token(force=attempt > 0)
+            headers = _dfe_headers(self._device(), token)
             if content_type:
                 headers["Content-Type"] = content_type
             status, _, data = self.http.request(method, url, headers=headers, body=body, follow=False)

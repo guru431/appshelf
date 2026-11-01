@@ -5,8 +5,8 @@ Safari по `itms-services` (OTA). Дизайн — `docs/superpowers/specs/2026
 Вход и несколько Apple ID — `docs/superpowers/specs/2026-10-08-multi-apple-id-design.md`.
 Несколько участников в одном браузере — `docs/superpowers/specs/2026-10-12-multi-signin-design.md`.
 Android-полки, вход Google, публичная полка — `docs/superpowers/specs/2026-10-28-android-design.md` (этапы 1–5 реализованы;
-этап 4 — Google Play — `docs/superpowers/plans/2026-10-28-android-stage4.md`, протокол — вики проекта, google-play-protocol;
-этап 5 — AppGallery, F-Droid, APKPure — `docs/superpowers/plans/2026-10-28-android-stage5.md`, форматы — `tests/data/*/README.md`).
+Google Play, AppGallery, F-Droid, APKPure — README, раздел Android; протокол Play — приватная вики проекта,
+google-play-protocol; форматы источников — `tests/data/*/README.md`). Локальные планы не входят в публичный checkout.
 
 ## Устройство
 - `appshelf/` — пакет: `ipatool.py` (запуск bin/ipatool), `ipa.py` (IPA, иконка, manifest), `store.py` (SQLite),
@@ -38,6 +38,10 @@ Android-полки, вход Google, публичная полка — `docs/sup
 - Тесты (Windows): `.venv/Scripts/python -m pytest -q`; живые на сервере: `.venv/Scripts/python -m pytest -q -m integration`.
 - Проверка браузерного ввода 4PDA (Windows, локальный Chromium и extra `fourpda`, без внешней сети):
   `.venv/Scripts/python -m pytest -q tests/test_fourpda.py -m integration`.
+- Реальные криптографические проверки APK и каталогов F-Droid (Windows, JDK и apksigner, без внешней сети):
+  `.venv/Scripts/python -m pytest -q tests/test_apk_verification.py tests/test_fdroid_verification.py -m integration`.
+- Геометрия, диалоги, клавиатура и контраст (Windows, локальный Chromium, без внешней сети):
+  `.venv/Scripts/python -m pytest -q tests/test_web_browser.py -m integration`.
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
@@ -85,6 +89,8 @@ Android-полки, вход Google, публичная полка — `docs/sup
 - Патчи форка — LF (`*.patch -text`); правка — в `.work/ipatool-src` и перегенерация (`ipatool/README.md`).
 - Сеть к источникам APK — только через `android/net.py`: адрес проверяется перед каждым запросом и после каждого
   редиректа, проверка сертификата не отключается (доп. корни НУЦ — файл `APPSHELF_SOURCES_CA`).
+- Публикация APK требует успешного AOSP `apksigner verify`; одного извлечённого сертификата недостаточно.
+  Каталог F-Droid проверяется Java JarFile с закреплённым сертификатом, кэш — только локально в `data/cache/fdroid`.
 - Android-полка — у участника (`android_shelves.user_id`); удаление участника удаляет и её (`jobs._remove`).
 - Публичная Android-полка — одна (`user_id IS NULL`), менять её — только владельцу (проверка на сервере).
 - PIN публичной полки — только соль и хэш в `state`; сам PIN не в git, базе, журнале, `jobs.error`, письмах. Адрес

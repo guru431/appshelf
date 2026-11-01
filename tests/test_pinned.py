@@ -1,5 +1,9 @@
 """Закреплённая версия: переживает ротацию двух слотов в роли kept; закрепление и снятие из каталога."""
-from appshelf import jobs, store
+from contextlib import contextmanager
+
+import pytest
+
+from appshelf import jobs, people, store
 from helpers import make_account, seed_app
 
 
@@ -76,6 +80,44 @@ def test_unpublish_removes_kept(conn, cfg, clock, acct):
     update(conn, cfg, clock, acct, "3.0")
     jobs.unpublish(cfg, conn, acct, 123)
     assert roles(conn) == {} and not (root / "123-1.0").exists()
+
+
+@pytest.mark.parametrize("change", ["pin", "unpin", "unpublish"])
+def test_shelf_change_reloads_account_after_obtaining_lock(conn, cfg, clock, acct, monkeypatch, change):
+    seed_app(conn, cfg, clock, versions=("1.0", "2.0"), make_dirs=True)
+    store.pin_version(conn, acct.id, cfg.shelf_root(acct), 123, vid(conn, "1.0"))
+    update(conn, cfg, clock, acct, "3.0")
+    real_hold, moved, inside = jobs.hold, [], []
+
+    @contextmanager
+    def hold(path, wait=None):
+        if path == cfg.download_lock and not moved:
+            moved.append(True)
+            jobs.move_shelf(cfg, conn, acct)  # перенос завершился, пока действие ждало замок
+        with real_hold(path, wait):
+            inside.append(path)
+            try:
+                yield
+            finally:
+                inside.pop()
+
+    monkeypatch.setattr(jobs, "hold", hold)
+    real_remove = store.remove_dirs
+
+    def remove(root, names):
+        assert cfg.download_lock in inside  # перенос не может вклиниться между COMMIT и удалением файлов
+        real_remove(root, names)
+
+    monkeypatch.setattr(store, "remove_dirs", remove)
+    if change == "pin":
+        assert jobs.pin_version(cfg, conn, acct, 123, vid(conn, "3.0"))
+    elif change == "unpin":
+        assert jobs.unpin_version(cfg, conn, acct, 123, vid(conn, "1.0"))
+    else:
+        jobs.unpublish(cfg, conn, acct, 123)
+    fresh = people.get_account(conn, acct.id)
+    assert cfg.shelf_root(fresh) != cfg.shelf_root(acct)
+    assert not (cfg.shelf_root(fresh) / "123-1.0").exists()
 
 
 def test_catalog_shows_kept_and_pin_menu(web, conn, cfg, clock, acct):

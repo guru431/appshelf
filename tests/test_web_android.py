@@ -274,9 +274,9 @@ def test_card_shows_source_and_notices(web, conn, tmp_path):
     page = web.client.get("/android").text
     assert "F-Droid" in page and "APKPure" in page
     assert fetch.SIGNER_DIFFERS in page and "подпись не сверена" in page and "не удалось обновить" not in page
-    for name in ("Брать из RuStore", "Брать из AppGallery", "Брать из F-Droid", "Брать из APKPure"):
+    for name in ("Сменить источник", "RuStore", "AppGallery", "F-Droid", "APKPure"):
         assert name in page, name
-    assert 'name="ack"' in page.split("Брать из APKPure")[0].rsplit("<form", 1)[1]   # галочка — в форме APKPure
+    assert 'name="ack"' in page and 'data-source-warning' in page
     r = web.client.post("/android/apps/ru.f/source", data={"source": "appgallery", "ref": ""}, follow_redirects=False)
     assert r.status_code == 303
     app = db.get_app(conn, shelf(conn).id, "ru.f")
@@ -365,7 +365,8 @@ def test_pending_signer_card_and_accept(web, conn, tmp_path):
     work(web, conn)
     page = web.client.get("/android").text
     assert "подпись сменилась" in page and "Принять новую подпись" in page and cert_sha(b"CERT-B")[-4:] in page
-    web.client.post(f"/android/apps/{PKG}/accept-signer")
+    pending = db.list_apps(conn, shelf(conn).id)[0].pending
+    web.client.post(f"/android/apps/{PKG}/accept-signer", data={"version_id": pending["id"], "confirm": "1"})
     view = db.list_apps(conn, shelf(conn).id)[0]
     assert (view.current["version_code"], view.pending, view.signer) == (2, None, cert_sha(b"CERT-B"))
     assert "подпись сменилась" not in web.client.get("/android").text

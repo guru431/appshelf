@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
-{% if not apps %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
+{% include 'shelf_filter.html' %}
+{% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
 {% for a in apps %}
 <div class="card app">
   {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
@@ -16,41 +17,58 @@
     {% endif %}
     </div>
     {% if a.current %}
-    <p class="install"><a class="btn pill" href="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Установить</a>
+    <p class="install"><a class="btn pill" href="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Установить</a><a class="meta" href="#install-help" data-help>Как установить</a>
       {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a>
         {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</p>
+    {% if device == 'desktop' %}<div class="desktop-transfer">
+      <button type="button" class="sm secondary" data-qr-toggle aria-controls="qr-{{ a.app_id }}" aria-expanded="false">QR для iPhone</button>
+      <button type="button" class="sm secondary" data-copy="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Скопировать ссылку</button>
+      <div class="app-qr" id="qr-{{ a.app_id }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}" alt="QR-код установки {{ a.name }} на iPhone" width="196" height="196" loading="lazy"></div>
+    </div>{% endif %}
     {% endif %}
     {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ (a.kept['size'] / 1048576) | round | int }} МБ</div>{% endif %}
-    {% if a.status == 'queued' %}<div class="meta">{{ 'в очереди' if acct.session == 'ok' else 'ждёт входа в Apple ID' }}</div>
+    {% if a.status == 'queued' %}<div class="meta">в очереди · {{ waiting.get(a.app_id) or ('ждёт входа в Apple ID' if acct.session != 'ok' else 'ожидает обработчика') }}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
-    <form method="post" action="/apps/{{ a.app_id }}/retry" class="install"><button class="sm tint">Повторить</button></form>
+    <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>
     {% elif a.status == 'nolicense' %}<div class="err">{{ a.last_error }}</div>
     {% elif a.current and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия{% else %} новее нет{% endif %}</div>
     {% elif a.last_error %}<div class="meta">не удалось обновить: {{ a.last_error }}</div>
     {% endif %}
   </div>
-  <details class="pop more"><summary aria-label="Действия">⋯</summary>
-    <div class="sheet">
+  <details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
+    <div class="sheet action-list">
       {%- if a.current and a.status in ('ok', 'error') %}
-      <form method="post" action="/apps/{{ a.app_id }}/check"><button>Проверить обновление</button></form>
+      <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/check') }}"><button>Проверить обновление</button></form>
       {%- endif %}
-      {%- for v in (a.current, a.previous, a.kept) if v %}{# kept всегда закреплена #}
-      <form method="post" action="/apps/{{ a.app_id }}/versions/{{ v['id'] }}/{{ 'unpin' if v['pinned'] else 'pin' }}"><button>{{ 'Снять закрепление' if v['pinned'] else 'Закрепить' }} {{ v['version'] }}</button></form>
-      {%- endfor %}
-      <form method="post" action="/apps/{{ a.app_id }}/unpublish"><button class="danger">Снять с публикации</button></form></div>
+      {% if a.current %}<button type="button" class="secondary" data-dialog="versions-{{ a.app_id }}">Версии и закрепления</button>{% endif %}
+      <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/unpublish') }}"><button class="danger">Снять с публикации</button></form></div>
   </details>
+  {% if a.current %}<dialog id="versions-{{ a.app_id }}" aria-labelledby="versions-title-{{ a.app_id }}">
+    <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
+    <h2 id="versions-title-{{ a.app_id }}">Версии · {{ a.name }}</h2>
+    {% for v in (a.current, a.previous, a.kept) if v %}
+    <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/versions/' ~ v['id'] ~ '/' ~ ('unpin' if v['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ v['version'] }}{% if v['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if v['pinned'] else 'Закрепить' }} {{ v['version'] }}</button></form>
+    {% endfor %}<p class="hint">Старая версия может не принять данные от новой. Откат выполняйте после сохранения данных.</p>
+  </dialog>{% endif %}
 </div>
 {% endfor %}
 <div class="hint">
   <p>На iPhone в App Store должен быть выполнен вход этим же Apple ID ({{ acct.email }}) — иначе приложение при запуске попросит пароль.</p>
+  <p>Не удаляйте приложение ради обновления: удаление стирает его данные. Для сохранения данных используйте «Сгрузить приложение».</p>
+  <details id="install-help"><summary>Как установить</summary>
+  <details><summary>Первый раз</summary>
   <p>Открывайте страницу в Safari: из Telegram и Chrome установка не запускается.
     Safari → «Поделиться» → «На экран „Домой“» — полка откроется как приложение.</p>
   <p>После «Установить» подтвердите системное окно — иконка появится на экране «Домой».</p>
+  </details><details><summary>Обновить</summary>
   <p>Обновить уже установленное приложение: поверх iOS не ставит («… is Already Installed»), но удалять его не нужно.
     «Настройки → Основные → Хранилище iPhone» → приложение → «Сгрузить приложение», затем «Установить» здесь —
     встанет версия с полки, данные приложения останутся.</p>
+  </details><details><summary>Если не устанавливается</summary>
+  <p>Проверьте минимальную iOS на карточке, свободное место и вход в App Store. На компьютере откройте полку на iPhone в Safari.</p>
+  </details></details>
   <p>«⋯» → «Закрепить»: версия переживёт следующие обновления («сохранённая») и ставится так же. Файл сохранён, но
     откат не гарантирован: старая версия может не принять данные, оставленные новой, — ставить её поверх них на свой риск.</p>
   <p>«⋯» → «Проверить обновление»: последняя версия приложения сразу, не дожидаясь ночи; не отдаст Apple — текущая

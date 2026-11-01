@@ -59,7 +59,8 @@ def test_interrupted_check_keeps_progress_and_goes_on(ctx, cfg, conn, clock, tmp
     w = jobs.Worker(ctx.env, lambda: store.connect(cfg.db))
     w.tick()
     assert conn.execute(JOB).fetchone()["status"] == "queued"
-    assert progress(conn) == {"done": 1, "total": 3, "added": 0, "missing": 0, "errors": 1, "failed": [1]}
+    assert progress(conn) == {"done": 1, "total": 3, "added": 0, "missing": 0, "errors": 1, "failed": [1],
+                              "cursor": 1}
     w.tick()                                                                         # публикация
     w.tick()
     assert conn.execute(JOB).fetchone()["status"] == "done"

@@ -14,7 +14,7 @@
   {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>
   {% elif a.paid %}<span class="meta">Купленное — только на своей полке</span>
   {% else %}<details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
-    <div class="sheet"><form method="post" action="{{ prefix }}/add/from-shelf">
+    <div class="sheet"><form method="post" action="{{ post_url(prefix ~ '/add/from-shelf') }}">
       <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form></div>
   </details>{% endif %}
 </div>
@@ -76,7 +76,9 @@
     function tick() { summary.textContent = 'Поиск идёт · ' + Math.floor((Date.now() - started) / 1000) + ' с'; }
     tick(); timer = setInterval(tick, 1000);
     var url = new URL(form.action); url.searchParams.set('q', query); history.replaceState(null, '', url);
-    var active = new EventSource({{ (prefix + '/search') | tojson }} + '?q=' + encodeURIComponent(query)); stream = active;
+    var searchUrl = new URL({{ post_url(prefix + '/search') | tojson }}, location.origin);
+    searchUrl.searchParams.set('q', query);
+    var active = new EventSource(searchUrl); stream = active;
     active.addEventListener('status', function (event) {
       if (stream !== active) return;
       var data = JSON.parse(event.data), target = rows[data.source]; if (!target) return;
@@ -105,7 +107,7 @@
   не скачать.</p>
 <h2>Google Play</h2>
 {% if play_accounts %}
-<form method="post" action="{{ prefix }}/add/play" class="card">
+<form method="post" action="{{ post_url(prefix ~ '/add/play') }}" class="card">
   <label>Ссылка Google Play или имя пакета<input name="package" placeholder="https://play.google.com/store/apps/details?id=… или com.example.app" required></label>
   {% if play_accounts | length > 1 %}<label>Каким аккаунтом<select name="account">
     {%- for g in play_accounts %}<option value="{{ g.id }}">{{ g.email }}</option>{% endfor %}</select></label>
@@ -124,7 +126,7 @@
   странице <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}.</p>
 {% endif %}
 <h2>По ссылке</h2>
-<form method="post" action="{{ prefix }}/add/link" class="card">
+<form method="post" action="{{ post_url(prefix ~ '/add/link') }}" class="card">
   <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://f-droid.org/packages/… или https://…/app.apk" required></label>
   <label>Название (необязательно)<input name="name"></label>
   <label><input type="checkbox" name="ack" value="1"> Для APKPure: APKPure распространял подменённые APK; если пакета
@@ -136,7 +138,7 @@
   F-Droid сохраняется без обновления; репозиторий GitHub следует последнему стабильному выпуску с APK.
   Адреса локальной сети не принимаются.</p>
 <h2>Свой файл</h2>
-<form method="post" action="{{ prefix }}/add/upload" enctype="multipart/form-data" class="card">
+<form method="post" action="{{ post_url(prefix ~ '/add/upload') }}" enctype="multipart/form-data" class="card">
   <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label>
   <label>Название (необязательно)<input name="name"></label>
   <button>Загрузить</button></form>

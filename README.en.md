@@ -28,6 +28,9 @@ The web UI is in Russian.
   App Store get updates only from here); the owner gets an email when their Apple ID session expires or disk space
   runs low.
 - PWA: the shelf on the Home Screen.
+- Search saved apps by name or bundle/package ID; filter recent updates, errors and items awaiting a decision.
+  Parameters stay in the URL, with an additional Android source filter. Shared accounts/people pages retain
+  the selected platform; theme selection is available on sign-in and guest pages too.
 - Android: a section with each person's Android shelf — APKs from RuStore, Google Play, AppGallery, F-Droid, APKPure,
   from a direct link on a bank's site or an uploaded file; install and update from the phone's browser, nightly check
   for new versions, a signing rule (see "Android").
@@ -69,6 +72,39 @@ Sign-in and multiple Apple IDs: [docs/superpowers/specs/2026-10-08-multi-apple-i
 - Docker, only to build `bin/ipatool`: on the server or on a separate host (`APPSHELF_BUILD_SSH` in `.env`) with
   passwordless sudo; the server needs the `libunicorn2t64` package.
 - Optional: a local `sendmail` (e.g. exim4) for emails.
+- Android needs AOSP `apksigner` and a Java JDK (`apksigner default-jdk-headless` on Debian, installed by
+  `deploy/install.sh`). They verify APK signatures and the signed F-Droid catalog before publication.
+  Set `APPSHELF_APKSIGNER` to a verifier executable or its `.jar` when configuring it manually.
+- The 4PDA sign-in window needs Chromium and Xvfb (`sudo bash deploy/setup-fourpda.sh` on Debian).
+  Deployment installs Playwright; for a manual setup, install the extra with `pip install '.[fourpda]'`.
+
+## Personal 4PDA account
+
+Open "Аккаунты" → "4PDA" → "Подключить или изменить" → "Войти в 4PDA". Complete the sign-in and CAPTCHA
+yourself in the displayed browser, then select "Подключить аккаунт". On a phone, tap the forum's input field,
+then type using the keyboard below the window.
+
+Cloudflare may repeat its challenge indefinitely: browsers controlled by Playwright are
+[unsupported for solving challenges](https://developers.cloudflare.com/cloudflare-challenges/reference/supported-browsers/).
+If that happens, sign into 4PDA in a normal browser tab and paste the `4pda.to` cookies as JSON on the connection
+page, or upload a JSON file. The page has Firefox Android instructions for
+[Cookie-Editor](https://addons.mozilla.org/en-US/firefox/addon/cookie-editor/): export the current tab as JSON to
+the clipboard. Import from the same browser where you signed in, so AppShelf receives the matching User-Agent.
+The server checks the session before saving it; if 4PDA still demands a challenge, the connection remains unavailable.
+
+On "Android" → "Добавить", search by app name or paste a topic/message link into the combined search.
+4PDA topics appear alongside other sources; select "Выбрать APK", choose one attachment and add it to your shelf.
+This source uses the current person's account and is unavailable on the public shelf. Each file passes the
+same APK and cryptographic signature checks as other sources. APKS/XAPK bundles are unsupported.
+The selected attachment stays fixed: select a new file from the topic for a new version. Other builds or
+modifications are never substituted automatically.
+
+Passwords are not saved. The session is kept in `/etc/appshelf/fourpda/<person id>.json` (directory 0700,
+files 0600), separately from the database and archive. Other people and file CDNs never receive it.
+The temporary download URL is obtained again from the attachment page and is not stored in a card or job.
+An unfinished sign-in window closes after ten minutes. "Отключить 4PDA" removes the local session;
+revoking the forum session or signing out on all devices is done separately on 4PDA.
+Set `APPSHELF_FOURPDA_BROWSER` in `appshelf.env` to select a browser executable manually.
 
 ## Installation
 
@@ -223,10 +259,14 @@ page (`/blocked`) shows the whole catalog and lets you add an app by link or ID.
 `{"id", "name", "aliases"}` to the JSON. Whether an ID is gone from the RU App Store:
 `itunes.apple.com/lookup?id=…&country=ru` (empty — removed).
 
-The catalog check takes minutes (~480 requests) and yields to publishing. While it runs, "Removed" and "History"
+The catalog check takes minutes (~480 requests) and yields between apps to interactive Apple and Android jobs.
+Platforms alternate and background work also advances; queue status and waiting reasons are separate from errors.
+While it runs, "Removed" and "History"
 show "checked X of Y: found …, no license …, errors …" — the progress lives in the job (`jobs.progress`) and survives
 a page reload and yielding. When it ends, "Removed" shows the result of the last check, and IDs that Apple answered
 with a technical error are marked "check failed", separately from "not in account"; the next check asks them again.
+An expired sign-in does not mean no license: an unconfirmed ID gets another attempt after a fresh sign-in,
+at most once per sign-in. After two such failures, only that ID is deferred for a week; other apps remain eligible.
 
 ## Updating an installed app
 
@@ -258,7 +298,8 @@ Design (Russian): [docs/superpowers/specs/2026-10-28-android-design.md](docs/sup
 Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
 
 - **Sources.** "Add" searches by name, package or link across RuStore, F-Droid, the F-Droid archive, GitHub,
-  Google Play, AppGallery and APKPure. Choose a source and, for F-Droid, a version. AppGallery and APKPure are
+  Google Play, AppGallery, APKPure and your connected 4PDA account. Choose a source and, for F-Droid, a version
+  or, for 4PDA, a specific attachment. AppGallery and APKPure are
   checked for up to five matching package names from the catalogs and public Play search; these are not complete
   store catalogs. A failed source is reported separately without hiding other results. Google Play uses a
   connected Google account (below), "By link" accepts an app page on
@@ -267,7 +308,7 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   to 1 GB. The server never follows a link into an internal network: the name is resolved before every request and
   after every redirect, and any non-global address (private, loopback, link-local, multicast) is refused before
   connecting.
-- **Search progress.** The page opens immediately and shows the current source and partial results.
+- **Search progress.** The page opens immediately and streams source status and partial results through SSE.
   "Stop" closes the search while retaining discovered options; a completed or interrupted search can be retried.
   Network errors include the affected domain; APKPure metadata uses `api.pureapk.com`.
 - **Source limits.** One whole APK only, nothing paid except apps bought in Google Play. The terms of RuStore,
@@ -279,15 +320,14 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   whole APK: bundles (split APK, XAPK, APKS) are refused when added. "Copy link" in the card's "⋯" gives a permanent address
   `<site address>/apk/<shelf token>/<package>.apk`: always the current version, opens without signing in (like the
   files themselves); changing the shelf token (`rotate-token`, a new PIN of the public shelf) disables it too.
-- **Signature.** The first version sets the app's signature on the shelf. A new version signed with another
-  certificate does not become current: the card shows "signature changed" and "Accept the new signature" — such a
-  version will not install over the installed one, the app would have to be removed with its data. If the app came
-  from Google Play with another signature, remove it first.
-  The shelf compares the SHA-256 of the certificate from v3, then v2, then v1; it does not cryptographically
-  verify the APK signature. A matching fingerprint alone does not prove authenticity: a copied certificate
-  has the same fingerprint. The Android installer performs the final check; use APKs from a trusted source.
-- **Versions** — as with IPAs: current, previous, pinned; "⋯" — check for update, pin, change source, upload a new
-  version as a file, remove from the shelf. Layout:
+- **Signature.** Before publication, `apksigner` verifies the APK signature and its content integrity; a failed
+  check preserves the working version. The first version sets the expected certificate. A different signer
+  remains pending: "Сравнить версии и решить" compares versions, sources, full fingerprints and verification
+  results. Accept it with confirmation, or reject the build. Without confirmed compatibility, installation
+  may require removing the app and its data. A verified v3 key rotation chain is labelled "Ключ обновлён разработчиком"
+  with the minimum Android version; the decision stays manual. A matching key alone does not guarantee a safe app.
+- **Versions** — as with IPAs: current, previous, pinned. "⋯" opens a short menu; versions and source management
+  (alternatives, link, own file) have separate panels. Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
 - **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore, Google Play, AppGallery and
   APKPure by `versionCode`, F-Droid by the suggested version, GitHub by its latest stable release, the F-Droid
@@ -304,9 +344,9 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   URLs of own and public shelves — `LimitRequestBody 1100000000`. Uploads go to `TMPDIR=/var/lib/appshelf/tmp`
   (set in the `appshelf-web` unit), not to `/tmp`.
 
-Hints for the phone are in the section's catalog: Samsung Auto Blocker, Huawei Pure Mode, Play Protect; from 2027
-Google requires developer verification for installs outside stores too — apps of unverified developers (probably
-including sanctioned banks) install only through the one-time "advanced flow" (developer mode, a day's wait).
+"How to install" covers Samsung Auto Blocker, Huawei Pure Mode and Play Protect. Google's developer verification
+expands gradually from 2027 on certified Android 7+ devices; timing depends on region and distribution channel.
+Advanced flow, ADB and specific exceptions remain available; see the [official Google FAQ](https://developer.android.com/developer-verification/guides/faq).
 
 ### Google Play
 
@@ -352,14 +392,17 @@ its package. The signature of every downloaded version is compared with RuStore.
   `appshelf.env`. From a foreign address AppGallery answers for another zone with no banks — "AppGallery не нашёл
   приложение (зона …)". Huawei may re-sign an app with its own key: a signature other than RuStore's gives the card
   the mark "подписан не так, как в RuStore: не встанет поверх версии оттуда" (the app is still added).
-- **F-Droid** — the official `f-droid.org` repository: the package API and APKs over HTTPS. The F-Droid index
-  signature is **not verified** (the index is tens of MB of JSON): the first version on the shelf sets the app's
-  signature, as with a link. One version may have several builds per ABI, and the suggested one is not always ARM
+- **F-Droid** — the official `f-droid.org` repository: the `entry.jar` signature is checked against the pinned
+  repository certificate, followed by the signed SHA-256 of `index-v2.json` and the APK hash from that catalog.
+  Unknown keys, corruption, timestamp rollback and indexes older than fourteen days are rejected. Trusted keys
+  change only through a reviewed AppShelf release. One version may have several builds per ABI, and the suggested one is not always ARM
   (VLC's is x86_64): the shelf takes a universal or `arm64-v8a` build, otherwise `armeabi-v7a`, otherwise "в F-Droid
   нет сборки для ARM". There are no banks in F-Droid.
 - **F-Droid archive** is a separate source for removed apps and older versions of active apps. A 404 from the
-  main package API automatically checks the archive. Both catalogs are cached in memory for six hours; indexed
-  APKs are checked against SHA-256 and the certificate. Selecting an exact version or an archive APK URL keeps
+  main package API automatically checks the archive. Normalized catalogs persist locally in `data/cache/fdroid/`
+  for six hours and survive web/nightly restarts. During a source outage, search can show clearly labelled stale
+  results; downloading requires fresh validation. Indexed APKs are checked against SHA-256 and the certificate.
+  Selecting an exact version or an archive APK URL keeps
   that version without updating it.
 - **GitHub** checks the latest stable release for a universal or ARM APK. Automatic checks run only when a store
   returns a bundle: the app description or one developer website page supplies the
@@ -378,7 +421,7 @@ its package. The signature of every downloaded version is compared with RuStore.
 One Android shelf per server for people without a panel sign-in. The owner fills it (Android → **Публичная** →
 "Добавить в публичную": the same sources), people see it on the same tab without a PIN and without
 actions, a guest opens `<site address>/p` and enters the PIN — and sees only the list with "Download APK" and the
-hints, no menu and no panel.
+hints, search and filters; guests cannot manage the shelf.
 
 - **From my shelf** — "Добавить в публичную" lets the owner select an app already downloaded on their personal
   Android shelf; "Добавить в публичную" is in the app's "⋯" menu, including on eligible personal cards. It copies
@@ -412,7 +455,10 @@ installed apps stay):
     sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf rotate-token --email <Apple ID>'
 
 Android shelves likewise: `rotate-token --email <Apple ID> --android` — the shelf of that Apple ID's person,
-`rotate-token --public` — the public one (changing the PIN rotates it too). The directory is renamed, APK links on the
+`rotate-token --user-id <person number> --android` — a personal shelf, including a Google-only person's shelf;
+the owner can find the number on the people page. `--user-id` requires a positive number and `--android`,
+and cannot be combined with `--email` or `--public`. `rotate-token --public` selects the public shelf (changing
+its PIN rotates it too). The directory is renamed, APK links on the
 page become new, old ones stop working.
 
 `PUB_TOKEN` names only the directory of the shelf carried over from the first version; after `rotate-token` on that
@@ -443,8 +489,8 @@ disk (for example, on the share next to the archive) and is created once in adva
 and lands in the directory as a finished file. File permissions on a share are set by the mount: the snapshot is
 open to the same users as the archive (Apple ID addresses and names are in the IPAs themselves too).
 
-A restore set is a database snapshot, a copy of the archive, and a check that the shelves can be restored from that
-pair in full.
+A file restore set is a database snapshot and an IPA/APK archive copy. Checking that pair confirms file consistency;
+sign-ins and automatic updates need a separate check.
 
 1. Database snapshot — with the command, not a file copy while running (WAL): consistent, a single file, mode 0600.
    The directory must be new or empty:
@@ -452,21 +498,32 @@ pair in full.
        sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf backup --out /backup/appshelf/2026-10-21'
 
    The snapshot holds the people, Apple IDs, shelf tokens and the list of versions with sizes and SHA-256.
-2. The IPA archive — as a directory copy, right after the snapshot: `rsync -a <archive>/ /backup/appshelf/2026-10-21/pub/`.
+2. The IPA and APK archive — a directory copy, right after the snapshot: `rsync -a <archive>/ /backup/appshelf/2026-10-21/pub/`.
 3. Check the copy — the same integrity check, run against the snapshot and the archive copy (the snapshot is opened
    read-only; no Apple calls, no mail):
 
        sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf check --db /backup/appshelf/2026-10-21/appshelf.db --archive /backup/appshelf/2026-10-21/pub --deep'
 
-   Exit code 0 means the set is good. Missing files or directories mean the nightly run replaced a version or
+   Exit code 0 means the database and files are consistent. Missing files or directories mean the nightly run replaced a version or
    `rotate-token` ran between the snapshot and the copy: take the set again. A snapshot from another schema version
    is refused — check it with the appshelf version that took it.
 
-- `/etc/appshelf/appshelf.env` (`PUB_TOKEN`) and `/var/lib/appshelf/cookie-key` — separately, to a protected place:
-  without them the archive directories and device sign-ins cannot be restored as they were.
-- ipatool accounts (`/etc/appshelf/accounts`) are encrypted with a key derived from `machine-id` and cannot be read
-  on another machine: after a move each Apple ID signs in again; the archive moves together with the database and
-  `appshelf.env`.
+4. Save `/etc/appshelf/appshelf.env` and `/var/lib/appshelf/cookie-key` separately in protected storage,
+   outside the shared application archive and its network share. Inspect the isolated set with a read-only report;
+   pass the directory containing the protected `appshelf.env` copy and the separate `cookie-key` file:
+
+       appshelf restore-report --db /backup/appshelf/2026-10-21/appshelf.db --archive /backup/appshelf/2026-10-21/pub --secrets-dir /protected/appshelf --cookie-key /protected/appshelf/cookie-key --deep
+
+   The JSON includes code/schema versions, archive consistency, protected-file presence without reading their
+   contents, and manual recovery steps. Exit code 0 / `offline_ok: true` means those checks passed;
+   code 1 means missing or inconsistent parts, and 2 means the report could not run. `external_connections_verified: false`
+   always remains: the command contacts no Apple, Google or 4PDA services, sends no mail and changes nothing.
+
+The connection policy after recovery is **reconnect** (`connections_policy: reconnect`). Provider credentials
+are excluded from the shared archive: sign into each Apple ID again (ipatool accounts are tied to `machine-id`),
+reconnect personal Google Play accounts, and reimport a personal 4PDA session when needed.
+Verify sign-ins, downloads and nightly updates separately afterwards. The database, archive and protected
+settings are all needed; saved application files do not prove that external connections work.
 
 ## Development
 

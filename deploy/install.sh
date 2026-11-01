@@ -39,6 +39,11 @@ for d in "$R/.venv" "$R/bin"; do
   if [ -e "$d" ]; then chmod -R go-w "$d"; fi
 done
 # зависимости и пакет — до подмены кода: упади pip, работать останется прежний код
+# AOSP APK verification and JDK JAR verification must be available before switching code.
+if ! command -v apksigner >/dev/null || ! command -v javac >/dev/null; then
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apksigner default-jdk-headless
+fi
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет

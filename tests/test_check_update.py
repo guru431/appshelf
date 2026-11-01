@@ -26,11 +26,11 @@ def queued(conn) -> int:
 
 def test_menu_has_check_and_double_click_makes_one_job(web, conn, cfg, clock):
     ready(conn, cfg, clock)
-    assert 'action="/apps/123/check"' in web.client.get("/").text
+    assert 'action="/apps/123/check?account=1"' in web.client.get("/").text
     for _ in range(2):
         assert web.client.post("/apps/123/check", follow_redirects=False).status_code == 303
     assert queued(conn) == 1 and app_row(conn)["status"] == "queued"
-    assert 'action="/apps/123/check"' not in web.client.get("/").text        # уже в очереди
+    assert 'action="/apps/123/check?account=1"' not in web.client.get("/").text        # уже в очереди
 
 
 def test_same_version_downloads_nothing(web, conn, cfg, clock):
@@ -67,7 +67,7 @@ def test_refusal_keeps_current_installable(web, conn, cfg, clock):
     assert store.current_version(conn, 1, 123)["version"] == "1.0"
     text = web.client.get("/").text
     assert "UTC — не удалось: ipatool: сбой связи" in text and MANIFEST in text
-    assert "не удалось обновить" not in text and 'action="/apps/123/check"' in text   # можно нажать снова
+    assert "не удалось обновить" not in text and 'action="/apps/123/check?account=1"' in text   # можно нажать снова
 
 
 def test_nightly_records_check_result(ctx, cfg, conn, clock, tmp_path):
@@ -119,4 +119,4 @@ def test_without_login_job_waits(web, conn, cfg, clock):
     set_session(conn, 1, "expired")
     web.client.post("/apps/123/check")
     assert web.app.state.worker.tick() is False and web.tool.calls == []
-    assert queued(conn) == 1 and "ждёт входа в Apple ID" in web.client.get("/").text
+    assert queued(conn) == 1 and "Ждёт входа в Apple ID" in web.client.get("/").text

@@ -6,10 +6,10 @@
   <div class="row" data-result-key="{{ s.source }}:{{ s.ref }}:{{ s.account }}">
     <div class="body"><b>{{ s.name }}</b><div class="meta">{% if s.source == 'fourpda' %}4PDA · Тема форума{% else %}{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}{% if s.related_package %}<br>Вариант автора для {{ s.related_package }}; пакет APK может отличаться{% endif %}{% endif %}</div></div>
     <div class="act">
-      {%- if s.source == 'fourpda' %}<a class="btn sm tint" href="/android/4pda/topic?{{ {'url':s.ref} | urlencode }}">Выбрать APK</a>
+      {%- if s.source == 'fourpda' %}<a class="btn sm tint" href="{{ post_url('/android/4pda/topic') }}&amp;{{ {'url':s.ref} | urlencode }}">Выбрать APK</a>
       {%- elif s.package in on_shelf %}<span class="tag">на полке</span>
       {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
-      {%- else %}<form method="post" action="{{ prefix }}/add/source" class="source-choice">
+      {%- else %}<form method="post" action="{{ post_url(prefix ~ '/add/source') }}" class="source-choice">
         <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">
         {% if s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
         {% else %}<input type="hidden" name="ref" value="{{ s.ref }}">{% endif %}

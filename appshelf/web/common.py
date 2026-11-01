@@ -83,8 +83,61 @@ class WebCtx:
         if ctx["acct"] is not None:
             ctx.setdefault("relogin", relogin_query(ctx["acct"], here))
         theme = request.cookies.get("theme", "")
-        ctx.update(cfg=self.cfg, nav=nav, here=here, theme=theme if theme in THEMES else "")
-        return TEMPLATES.TemplateResponse(request, name, ctx, status_code=status_code)
+        section = request.cookies.get("appshelf_os", "apple")
+        if nav.startswith("a_"):
+            section = "android"
+        elif nav in ("catalog", "history", "blocked"):
+            section = "apple"
+        ctx.update(cfg=self.cfg, nav=nav, here=here, theme=theme if theme in THEMES else "",
+                   section=section, post_url=lambda path: mutation_url(path, ctx["acct"], ctx["who"], ctx["users"]),
+                   device=("android" if "Android" in request.headers.get("user-agent", "") else
+                           "apple" if any(x in request.headers.get("user-agent", "")
+                                          for x in ("iPhone", "iPad", "iPod")) else "desktop"))
+        response = TEMPLATES.TemplateResponse(request, name, ctx, status_code=status_code)
+        if nav.startswith("a_"):
+            response.set_cookie("appshelf_os", "android", max_age=10 * 365 * 86400,
+                                samesite="lax", secure=self.secure)
+        return response
+
+
+def mutation_kind(path: str) -> str:
+    """Routes whose target otherwise comes from a shared selection cookie."""
+    path = urlsplit(path).path
+    if path == "/api/status" or path.startswith(("/apps/", "/history/", "/blocked/")):
+        return "account"
+    if (path in ("/api/android/status", "/android/public/add/from-shelf")
+            or (path.startswith("/android/") and not path.startswith("/android/public"))
+            or path.startswith("/fourpda/add")):
+        return "person"
+    return ""
+
+
+def mutation_url(path: str, acct, who, users=None) -> str:
+    kind = mutation_kind(path)
+    target = acct if kind == "account" else who
+    if urlsplit(path).path == "/android/public/add/from-shelf":
+        target = next((u for u in users or [] if u.role == people.OWNER), None)
+    if not kind or target is None:
+        return path
+    return path + ("&" if "?" in path else "?") + urlencode({kind: target.id})
+
+
+def filter_shelf(apps, request: Request, fresh: set, *, android: bool = False):
+    """Filter saved apps independently from remote store search."""
+    q = request.query_params.get("q", "").strip()[:200]
+    mode = request.query_params.get("filter", "all")
+    mode = mode if mode in ("all", "recent", "errors", "pending") else "all"
+    source = request.query_params.get("source", "") if android else ""
+    total = len(apps)
+    def matches(a):
+        ident = a.package if android else (str(a.app_id) + " " + a.bundle_id)
+        key = a.package if android else a.app_id
+        return ((not q or q.casefold() in (a.name + " " + ident).casefold())
+                and (not source or a.source == source)
+                and (mode != "recent" or key in fresh)
+                and (mode != "errors" or a.status in ("error", "nolicense") or a.check_result == "error")
+                and (mode != "pending" or (bool(a.pending) if android else a.status in ("queued", "downloading"))))
+    return [a for a in apps if matches(a)], {"q": q, "filter_mode": mode, "source_filter": source, "total": total}
 
 
 def back(path: str = "/") -> RedirectResponse:

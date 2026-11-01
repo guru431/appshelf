@@ -16,6 +16,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, field
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 from . import ipa, jobs, people, store
@@ -47,6 +48,7 @@ KINDS = {  # вид проблемы → подпись в кратком ито
     "partial": "незавершённое скачивание (.partial)",
     "shelf_next": "незавершённый перенос каталога полки (доделает старт appshelf-web)",
     "no_account": "строки версий без Apple ID",
+    "no_android_shelf": "строки APK без Android-полки",
     "unknown": "каталог архива не принадлежит ни одному Apple ID",
 }
 
@@ -95,7 +97,7 @@ class Report:
 
     def text(self) -> str:
         head = f"проверено версий: {self.versions}, Apple ID: {self.accounts}"
-        if self.android_shelves:
+        if self.android_shelves or self.apks:
             head += f"; APK: {self.apks}, Android-полок: {self.android_shelves}"
         head += f"; без сохранённой SHA-256: {self.no_sha256}" if self.deep else \
             "; SHA-256 и содержимое IPA не проверялись (--deep)"
@@ -163,10 +165,36 @@ def check(cfg: Config, c, deep: bool = False) -> Report:
             owned.add(shelf.shelf_next)
             rep.add("shelf_next", None, shelf=shelf.id)
         _android_shelf(cfg, shelf, apks.pop(shelf.id, []), deep, rep)
+    for sid, versions in apks.items():
+        rep.add("no_android_shelf", None, detail=f"строк: {len(versions)}", shelf=sid)
     for p in sorted(cfg.archive.iterdir()):
         if p.name not in owned:
             rep.add("unknown", None, p.name[:4] + "…")
     return rep
+
+
+def restore_report(cfg: Config, db: Path, secrets_dir: Path, cookie_key: Path, *, deep=False) -> dict:
+    """Inspect an isolated set without reading credentials or contacting any provider.
+
+    Connection credentials are deliberately excluded from archive backups: restore the
+    protected environment/key separately and reconnect providers after restoring the DB.
+    """
+    with closing(open_ro(db)) as c:
+        report = check(cfg, c, deep=deep)
+        apple = c.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        google = c.execute("SELECT COUNT(*) FROM google_accounts WHERE play!='none'").fetchone()[0]
+        users = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        schema = c.execute("PRAGMA user_version").fetchone()[0]
+    settings_ok = (secrets_dir / "appshelf.env").is_file() and (secrets_dir / "appshelf.env").stat().st_size > 0
+    cookie_ok = cookie_key.is_file() and cookie_key.stat().st_size >= 32
+    return {"code_version": package_version("appshelf"), "schema_version": schema,
+            "offline_ok": report.ok and settings_ok and cookie_ok, "archive": report.as_dict(),
+            "protected_files": {"appshelf.env": settings_ok, "cookie-key": cookie_ok},
+            "connections_policy": "reconnect", "manual_steps": [
+                {"provider": "Apple", "accounts": apple, "action": "повторный вход каждого Apple ID на новом сервере"},
+                {"provider": "Google Play", "accounts": google, "action": "повторное подключение личных аккаунтов Play"},
+                {"provider": "4PDA", "participants": users, "action": "повторный импорт личной сессии при необходимости"}],
+            "external_connections_verified": False}
 
 
 def _shelf(cfg: Config, acct, versions: list, deep: bool, rep: Report) -> None:

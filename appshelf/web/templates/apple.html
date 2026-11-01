@@ -30,8 +30,8 @@
 <div class="row"><div class="body"><div class="title">4PDA</div><div class="meta">Личный аккаунт для поиска тем и скачивания APK</div></div><div class="act"><a class="btn sm secondary" href="/fourpda/{{ g.user.id }}/connect">Подключить или изменить</a></div></div>
 </div>
 <div class="bar">
-  {% if groups | length > 1 %}<form method="post" action="/logout/{{ g.user.id }}"><button class="secondary">Убрать с этого устройства</button></form>{% endif %}
-  <form method="post" action="/logout-all/{{ g.user.id }}"><button class="secondary">Выйти на всех устройствах</button></form>
+  {% if groups | length > 1 %}<form method="post" action="{{ post_url('/logout/' ~ g.user.id) }}"><button class="secondary">Убрать с этого устройства</button></form>{% endif %}
+  <form method="post" action="{{ post_url('/logout-all/' ~ g.user.id) }}"><button class="secondary">Выйти на всех устройствах</button></form>
 </div>
 {% endfor %}
 <div class="bar"><a class="btn" href="/apple/add">Добавить Apple ID</a>

@@ -64,6 +64,104 @@ def connect_files(cfg, gid=GID, aas=AAS):
     (d / "device.json").write_text(json.dumps(DEVICE))
 
 
+def test_failed_credentials_switch_preserves_old_pair(cfg, monkeypatch):
+    connect_files(cfg)
+    d = play.token_dir(cfg, GID)
+    replace = os.replace
+
+    def fail_new(src, dst):
+        if Path(src).name.endswith(".new"):
+            raise OSError("injected rename failure")
+        return replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_new)
+    with pytest.raises(OSError):
+        play._save(d, "new-master", {"gsf": "new"})
+    assert (d / "aas").read_text() == AAS
+    assert json.loads((d / "device.json").read_text()) == DEVICE
+
+
+def test_interrupted_credentials_switch_recovers_and_disconnect_cannot_resurrect(cfg):
+    connect_files(cfg)
+    d = play.token_dir(cfg, GID)
+    old, new = d.with_name(d.name + ".old"), d.with_name(d.name + ".new")
+    os.replace(d, old)  # interruption between the two renames
+    new.mkdir()
+    (new / "aas").write_text("incomplete-new-master")
+    with play._credentials_lock(d):
+        aas, dev = play._read_credentials(d)
+    assert (aas, dev) == (AAS, DEVICE)
+    assert not old.exists() and not new.exists()
+    os.replace(d, old)  # same interrupted state, but owner disconnects rather than reading
+    play.disconnect(cfg, GID)
+    with play._credentials_lock(d), pytest.raises(OSError):
+        play._read_credentials(d)
+    assert not old.exists() and not d.exists()
+
+
+def test_credentials_write_failure_leaves_previous_pair(cfg, monkeypatch):
+    connect_files(cfg)
+    d = play.token_dir(cfg, GID)
+    write = play._write_secret
+
+    def fail_device(path, text):
+        if path.name == "device.json":
+            raise OSError("injected write failure")
+        return write(path, text)
+
+    monkeypatch.setattr(play, "_write_secret", fail_device)
+    with pytest.raises(OSError):
+        play._save(d, "replacement", {"gsf": "new"})
+    with play._credentials_lock(d):
+        assert play._read_credentials(d) == (AAS, DEVICE)
+
+
+def test_cached_play_token_is_bound_to_credential_generation(client, cfg):
+    assert client._token() == "ya29.play-token"
+    d = play.token_dir(cfg, GID)
+    # Another process may reconnect without touching this process's _TOKENS cache.
+    (d / "aas").write_text("different-master")
+    (d / "device.json").write_text(json.dumps({**DEVICE, "gsf": "new-gsf"}))
+    client.fake.on("POST", play.AUTH_URL, 200, TOKEN_OK.replace(b"play-token", b"new-token"))
+    assert client._token() == "ya29.new-token"
+    form = client.fake.form(1)
+    assert form["Token"] == "different-master" and form["androidId"] == "new-gsf"
+
+
+def test_parallel_credentials_reader_waits_for_complete_switch(cfg, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    connect_files(cfg)
+    d = play.token_dir(cfg, GID)
+    renamed, reader_started, commit = threading.Event(), threading.Event(), threading.Event()
+    replace = os.replace
+
+    def pause_after_backup(src, dst):
+        result = replace(src, dst)
+        if Path(dst).name.endswith(".old"):
+            renamed.set()
+            assert commit.wait(0.8)
+        return result
+
+    def read_pair():
+        reader_started.set()
+        with play._credentials_lock(d):
+            return play._read_credentials(d)
+
+    monkeypatch.setattr(os, "replace", pause_after_backup)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        saved = pool.submit(play._save, d, "new-master", {"gsf": "new-device"})
+        try:
+            assert renamed.wait(0.8)
+            reading = pool.submit(read_pair)
+            assert reader_started.wait(0.8)
+        finally:
+            commit.set()
+        saved.result(timeout=1)
+        assert reading.result(timeout=1) == ("new-master", {"gsf": "new-device"})
+
+
 @pytest.fixture(autouse=True)
 def no_cached_tokens():
     play._TOKENS.clear()
@@ -273,6 +371,38 @@ def test_connect_failure_leaves_no_files(cfg):
         with pytest.raises(play.PlayError):
             play.connect(cfg, GID, "user@example.com", OAUTH, "", http_factory=lambda *a, **kw: http)
         assert not play.token_dir(cfg, GID).exists()
+
+
+def test_connection_state_callbacks_run_under_same_credentials_lock(cfg):
+    from appshelf.ipatool import try_lock
+
+    d = play.token_dir(cfg, GID)
+    states = []
+
+    def under_lock(expected_files):
+        fd = os.open(d.with_name(d.name + ".lock"), os.O_RDWR)
+        try:
+            assert not try_lock(fd)
+            assert d.exists() == expected_files
+            states.append(expected_files)
+        finally:
+            os.close(fd)
+
+    http = connect_http(exchange_ok())
+    play.connect(cfg, GID, "user@example.com", OAUTH, "", http_factory=lambda *a, **kw: http,
+                 on_saved=lambda country: under_lock(True))
+    play.disconnect(cfg, GID, on_removed=lambda: under_lock(False))
+    assert states == [True, False]
+
+
+def test_account_deleted_while_connecting_does_not_leave_credentials(cfg):
+    def missing(country):
+        raise play.PlayAccountGone("Google-аккаунт удалён")
+
+    http = connect_http(exchange_ok())
+    with pytest.raises(play.PlayAccountGone):
+        play.connect(cfg, GID, "user@example.com", OAUTH, "", http_factory=lambda *a, **kw: http, on_saved=missing)
+    assert not play.token_dir(cfg, GID).exists()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="права файлов — как на сервере (Linux)")
