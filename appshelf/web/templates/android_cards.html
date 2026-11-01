@@ -9,6 +9,7 @@
 <div class="card app">
   {% if v %}<img src="{{ url(v['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
   <div class="body">
+    <div class="app-info">
     <div><b>{{ a.name }}</b>
       {%- if a.package in fresh %}{% set d = v['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}
       {%- if a.pending %} <span class="tag">подпись сменилась</span>{% endif %}
@@ -20,6 +21,9 @@
     <div class="meta">{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
       · {{ sources.get(a.source, a.source) }} · подпись {{ a.signer[:4] }}…{{ a.signer[-4:] }}
       {%- if v['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
+    {% endif %}
+    </div>
+    {% if v %}
     {% if v['target_sdk'] < 24 %}<div class="err">Android 15+ не поставит: приложение собрано под старые версии (targetSdk {{ v['target_sdk'] }}).</div>{% endif %}
     <div class="install"><div class="download-actions{{ ' with-qr' if qr }}">
       <a class="btn pill" href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>

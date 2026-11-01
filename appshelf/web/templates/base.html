@@ -178,6 +178,25 @@ button:active, .btn:active { transform: scale(.97); filter: brightness(.9); }
 .sm { min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 15px; white-space: nowrap; }
 .pill { padding-left: 22px; padding-right: 22px; border-radius: 999px; }
 
+/* На телефоне иконка и меню занимают только строку сведений; действия — на всю ширину. */
+@media (max-width: 699px) {
+  .app { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: start; gap: 6px 8px;
+         margin-bottom: 8px; padding: 10px; border-radius: 14px; font-size: 16px; line-height: 1.3; }
+  .app > img, .app > .noicon { grid-column: 1; grid-row: 1; width: 40px; height: 40px; border-radius: 10px; }
+  .app > .noicon { font-size: 20px; }
+  .app > .body { display: contents; }
+  .app > .body > * { grid-column: 1 / -1; min-width: 0; }
+  .app > .body > .app-info { grid-column: 2; grid-row: 1; align-self: center; }
+  .app > .more { grid-column: 3; grid-row: 1; }
+  .app > .more > summary { width: 44px; height: 44px; line-height: 44px; }
+  .app .meta { font-size: 13px; line-height: 1.35; }
+  .app .install { gap: 6px 12px; margin: 0; }
+  .app .install > .btn, .app .download-actions > .pill { padding-left: 16px; padding-right: 16px; font-size: 15px; }
+  .app .download-actions > .qr-toggle { width: 44px; min-height: 44px; }
+  .app .app-qr { margin-top: 0; }
+  .app .err { margin-bottom: 0; }
+}
+
 /* поля */
 input { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-height: 46px; padding: 10px 14px;
         border: 1px solid transparent; border-radius: 13px; background: var(--fill); color: var(--fg); font: inherit; }

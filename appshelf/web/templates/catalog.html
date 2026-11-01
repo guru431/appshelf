@@ -6,12 +6,16 @@
 <div class="card app">
   {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
   <div class="body">
+    <div class="app-info">
     <div><b>{{ a.name }}</b>
       {%- if a.app_id in fresh %}{% set d = a.current['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}</div>
     {% if a.current %}
     <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ (a.current['size'] / 1048576) | round | int }} МБ
       {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}
       {%- if a.current['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
+    {% endif %}
+    </div>
+    {% if a.current %}
     <p class="install"><a class="btn pill" href="itms-services://?action=download-manifest&amp;url={{ public_url(a.current['dir'], 'manifest.plist') }}">Установить</a>
       {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a>
         {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</p>
