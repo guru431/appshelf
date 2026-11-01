@@ -77,15 +77,15 @@ class Sources:
         self._wait()
         return rustore.search(self.http, query)
 
-    def search_all(self, query: str, *, accounts=(), split_packages=()):
+    def search_all(self, query: str, *, accounts=(), split_packages=(), user_id=None):
         from .search import Results
         result = Results((), ())
-        for update in self.search_events(query, accounts=accounts, split_packages=split_packages):
+        for update in self.search_events(query, accounts=accounts, split_packages=split_packages, user_id=user_id):
             if update.result is not None:
                 result = update.result
         return result
 
-    def search_events(self, query: str, *, accounts=(), split_packages=()):
+    def search_events(self, query: str, *, accounts=(), split_packages=(), user_id=None):
         from .search import events
         # Обычное скачивание может ждать дольше; поиск должен вернуть хотя бы частичные
         # результаты до тайм-аута веб-сервера. Настройки общего HTTP-клиента не меняются.
@@ -101,7 +101,7 @@ class Sources:
             self._wait()
 
         bounded._wait = wait
-        return events(bounded, query, accounts=accounts, split_packages=split_packages)
+        return events(bounded, query, accounts=accounts, split_packages=split_packages, user_id=user_id)
 
     def github_app(self, ref: str) -> github.GithubApp:
         """Повторный поиск и ночная проверка не расходуют квоту для того же выпуска."""

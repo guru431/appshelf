@@ -88,6 +88,7 @@ def test_topic_rejects_other_origins_and_operations(url):
 def test_search_and_attachments_parse_forum_without_trusting_external_links(sessions):
     query_url = fourpda.FORUM + "?act=search&query=%D2%E5%F1%F2&source=top&forums=all&subforums=1&result=topics&noform=1"
     sessions.http.raw[query_url] = response(AUTH + f'<a href="{TOPIC}">Тест Android</a><a href="{TOPIC}">duplicate</a>'
+                                         f'<a href="{TOPIC}&amp;st=20">2</a>'
                                          '<a href="https://evil.example/forum/index.php?showtopic=9">other</a>')
     sessions.http.raw[TOPIC] = response('<title>Тест - 4PDA</title>' + AUTH + f'<a href="{FILE}">Версия 1.apk</a>'
                                       f'<a href="{FILE}">duplicate</a><a href="https://evil.example/app.apk">bad</a>'
@@ -99,7 +100,7 @@ def test_search_and_attachments_parse_forum_without_trusting_external_links(sess
 
 
 def test_download_resolves_fresh_session_link_and_validates_file(sessions, tmp_path):
-    sessions.http.raw[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Скачать</a>')
+    sessions.http.files[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Скачать</a>')[2]
     sessions.http.files[GATE] = b"PK\x03\x04APK"
     dest = tmp_path / "app.apk"
     client = fourpda.Client(sessions.http, session())
@@ -109,9 +110,19 @@ def test_download_resolves_fresh_session_link_and_validates_file(sessions, tmp_p
     with pytest.raises(fourpda.AuthError):
         client.download(FILE, dest)
     assert not dest.exists()
-    sessions.http.raw[FILE] = response('<a href="https://evil.example/?act=attach&id=1&dlsess=x">bad</a>')
+    sessions.http.files[FILE] = response('<a href="https://evil.example/?act=attach&id=1&dlsess=x">bad</a>')[2]
     with pytest.raises(fourpda.AuthError):
         client.download(FILE, dest)
+    assert not dest.exists()
+
+
+def test_authenticated_gateway_can_redirect_straight_to_large_apk(sessions, tmp_path):
+    data = b"PK\x03\x04" + b"x" * (6 << 20)
+    sessions.http.files[FILE] = data
+    dest = tmp_path / "large.apk"
+    fourpda.Client(sessions.http, session()).download(FILE, dest)
+    assert dest.read_bytes() == data
+    assert [c[0] for c in sessions.http.calls] == ["download"]
 
 
 def test_expired_and_challenged_sessions_are_explicit(sessions):
@@ -173,6 +184,36 @@ def test_clipboard_import_rejects_invalid_input_without_replacing_session(connec
     assert result.status_code == 403
 
 
+def test_general_search_opens_topic_files_with_personal_scope(connected, monkeypatch):
+    import html
+    import re
+    from appshelf.android.search import Option, Results, Update
+    seen = []
+
+    def events(query, **kwargs):
+        uid = kwargs["user_id"]
+        seen.append(uid)
+        found = (Option("fourpda", TOPIC, "", "Example"),) if uid is not None else ()
+        yield Update("done", result=Results(found, ()))
+
+    monkeypatch.setattr(connected.sources, "search_events", events)
+    connected.sessions.http.raw[TOPIC] = response('<title>Example - 4PDA</title>' + AUTH + f'<a href="{FILE}">Example.apk</a>')
+    stream = connected.client.get("/android/search", params={"q": "Example", "user_id": 999})
+    data = [json.loads(line[6:]) for line in stream.text.splitlines() if line.startswith("data: ")][-1]
+    assert seen == [1] and data["count"] == 1
+    assert "Выбрать APK" in data["html"] and COOKIE not in data["html"]
+    link = html.unescape(re.search(r'href="([^"]+)"', data["html"]).group(1))
+    page = connected.client.get(link)
+    assert page.status_code == 200 and FILE in page.text and "Добавить на мою полку" in page.text
+    assert 'action="/android/4pda"' not in page.text
+    public = connected.client.get("/android/public/search", params={"q": "Example"})
+    assert public.status_code == 200 and seen == [1, None]
+    assert "Выбрать APK" not in public.text
+    old = connected.client.get("/android/4pda", params={"q": "Тест & App"}, follow_redirects=False)
+    assert old.status_code == 303 and old.headers["location"].startswith("/android/add?q=")
+    assert "Тест &amp; App" in connected.client.get(old.headers["location"]).text
+
+
 def test_session_endpoints_are_bound_to_signed_in_person(connected, conn, clock):
     uid = people.create_user(conn, "Other", people.MEMBER, None, clock.iso())
     connected.sessions.save(uid, session())
@@ -188,7 +229,7 @@ def test_session_endpoints_are_bound_to_signed_in_person(connected, conn, clock)
 def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cfg, tmp_path):
     web = connected
     apk = make_apk(tmp_path / "input.apk", package="ru.example.app")
-    web.sessions.http.raw[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Download</a>')
+    web.sessions.http.files[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Download</a>')[2]
     web.sessions.http.files[GATE] = apk.read_bytes()
     web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
     result = web.client.post("/android/4pda/add", data={"url": FILE, "name": "Example", "user_id": "999"}, follow_redirects=False)
@@ -207,7 +248,7 @@ def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cf
     # Следующее выбранное вложение того же пакета обновляет и файл, и закреплённую ссылку.
     newer = FILE.replace("/123/", "/124/")
     newer_gate = GATE.replace("id=123", "id=124")
-    web.sessions.http.raw[newer] = response(f'<a href="{newer_gate.replace("&", "&amp;")}">Download</a>')
+    web.sessions.http.files[newer] = response(f'<a href="{newer_gate.replace("&", "&amp;")}">Download</a>')[2]
     web.sessions.http.files[newer_gate] = make_apk(tmp_path / "new.apk", version_code=2).read_bytes()
     web.client.post("/android/4pda/add", data={"url": newer})
     fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
@@ -377,6 +418,47 @@ def local_chromium():
     if not executable:
         pytest.skip("Не установлен Chromium для проверки интерфейса")
     return playwright, executable
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [390, 1280])
+def test_general_search_browser_opens_fourpda_apk_selection(connected, monkeypatch, width, local_chromium):
+    from urllib.parse import urlsplit
+    from appshelf.android.search import Option, Results, Update
+    playwright, executable = local_chromium
+
+    def events(query, **kwargs):
+        assert query == "Example" and kwargs["user_id"] == 1
+        yield Update("status", "fourpda", "running", "поиск тем")
+        yield Update("status", "fourpda", "done", "проверено")
+        yield Update("done", result=Results((Option("fourpda", TOPIC, "", "Example"),), ()))
+
+    monkeypatch.setattr(connected.sources, "search_events", events)
+    connected.sessions.http.raw[TOPIC] = response('<title>Example - 4PDA</title>' + AUTH + f'<a href="{FILE}">Example.apk</a>')
+
+    def route(request):
+        u = urlsplit(request.request.url)
+        result = connected.client.get(u.path + ("?" + u.query if u.query else ""))
+        request.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844}, is_mobile=width == 390,
+                                    has_touch=width == 390)
+            page.route("https://apps.example/**", route)
+            page.goto("https://apps.example/android/add")
+            page.get_by_role("searchbox").fill("Example")
+            page.get_by_role("button", name="Найти", exact=True).click()
+            page.wait_for_function("document.getElementById('search-summary').textContent.includes('Поиск завершён')")
+            assert "4PDA: проверено" in page.locator("#source-statuses").inner_text()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.get_by_role("link", name="Выбрать APK", exact=True).click()
+            assert page.get_by_role("button", name="Добавить на мою полку").is_visible()
+            assert "Example.apk" in page.locator("main").inner_text()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        finally:
+            browser.close()
 
 
 @pytest.mark.integration

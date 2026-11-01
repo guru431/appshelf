@@ -4,9 +4,10 @@
 <div class="card list source-results">
   {%- for s in found %}
   <div class="row" data-result-key="{{ s.source }}:{{ s.ref }}:{{ s.account }}">
-    <div class="body"><b>{{ s.name }}</b><div class="meta">{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}{% if s.related_package %}<br>Вариант автора для {{ s.related_package }}; пакет APK может отличаться{% endif %}</div></div>
+    <div class="body"><b>{{ s.name }}</b><div class="meta">{% if s.source == 'fourpda' %}4PDA · Тема форума{% else %}{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}{% if s.related_package %}<br>Вариант автора для {{ s.related_package }}; пакет APK может отличаться{% endif %}{% endif %}</div></div>
     <div class="act">
-      {%- if s.package in on_shelf %}<span class="tag">на полке</span>
+      {%- if s.source == 'fourpda' %}<a class="btn sm tint" href="/android/4pda/topic?{{ {'url':s.ref} | urlencode }}">Выбрать APK</a>
+      {%- elif s.package in on_shelf %}<span class="tag">на полке</span>
       {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
       {%- else %}<form method="post" action="{{ prefix }}/add/source" class="source-choice">
         <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">

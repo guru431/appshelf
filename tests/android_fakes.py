@@ -90,7 +90,7 @@ class FakeSources:
                        a.version_name, "платное — недоступно" if a.price > 0 else "")
                        for a in self.search(query)), ())
 
-    def search_events(self, query: str, *, accounts=(), split_packages=()):
+    def search_events(self, query: str, *, accounts=(), split_packages=(), user_id=None):
         from appshelf.android.search import Update
         yield Update("status", "rustore", "running", "backapi.rustore.ru")
         yield Update("done", result=self.search_all(query, accounts=accounts))

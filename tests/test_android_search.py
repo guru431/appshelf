@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from android_fakes import FakeHttp
-from appshelf.android import apkpure, appgallery, discovery, fdroid_index, github, net, rustore, sources
+from appshelf.android import apkpure, appgallery, discovery, fdroid_index, fourpda, github, net, rustore, sources
 
 PKG = "com.example.app"
 
@@ -116,3 +116,46 @@ def test_known_split_still_checks_author_when_apkpure_is_unavailable(monkeypatch
     monkeypatch.setattr(apkpure, "info", lambda *a: (_ for _ in ()).throw(net.FetchError("api.pureapk.com: timed out")))
     result = src.search_all(PKG, split_packages=(PKG,))
     assert any(o.source == "github" and o.related_package == PKG for o in result.options)
+
+
+def test_personal_search_streams_fourpda_topics_before_slow_catalogs(monkeypatch):
+    src = setup_search(monkeypatch)
+    seen = []
+    topic = fourpda.Link("Example", fourpda.FORUM + "?showtopic=123")
+    session = fourpda.Session("Mine", "Browser", {"member_id": "1", "pass_hash": "private"})
+    src.fourpda = SimpleNamespace(load=lambda uid: seen.append(uid) or session, http=FakeHttp())
+    monkeypatch.setattr(fourpda.Client, "search", lambda self, q: seen.append(q) or [topic])
+    updates = src.search_events("Example", user_id=7)
+    while (update := next(updates)).source != "fourpda":
+        pass
+    assert update.state == "running" and not seen
+    assert next(updates).state == "done" and seen == [7, "Example"]
+    result = next(updates).result
+    assert [(o.source, o.ref, o.package) for o in result.options] == [("fourpda", topic.url, "")]
+    assert any(o.source == "fdroid_archive" for o in list(updates)[-1].result.options)
+
+
+def test_fourpda_missing_expired_and_public_connections_do_not_break_other_sources(monkeypatch):
+    src = setup_search(monkeypatch)
+    seen = []
+    src.fourpda = SimpleNamespace(load=lambda uid: seen.append(uid), http=FakeHttp())
+    public = list(src.search_events("Example"))
+    assert not seen and not any(u.source == "fourpda" for u in public)
+    missing = list(src.search_events("Example", user_id=8))
+    assert any(u.source == "fourpda" and u.state == "skipped" for u in missing)
+    assert not missing[-1].result.errors
+    src.fourpda.load = lambda uid: (_ for _ in ()).throw(fourpda.AuthError(fourpda.EXPIRED))
+    expired = list(src.search_events("Example", user_id=8))
+    assert any(u.source == "fourpda" and u.state == "error" for u in expired)
+    assert any(o.source == "fdroid_archive" for o in expired[-1].result.options)
+
+
+def test_direct_fourpda_topic_only_queries_personal_forum(monkeypatch):
+    src = setup_search(monkeypatch)
+    topic = fourpda.FORUM + "?showtopic=123&view=findpost&p=456"
+    src.fourpda = SimpleNamespace(load=lambda uid: object(), http=FakeHttp())
+    seen = []
+    monkeypatch.setattr(fourpda.Client, "search", lambda self, q: seen.append(q) or [fourpda.Link("Example", q)])
+    result = src.search_all(topic, user_id=7)
+    assert seen == [topic] and [(o.source, o.ref) for o in result.options] == [("fourpda", topic)]
+    assert not src.http.calls

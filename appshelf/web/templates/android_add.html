@@ -23,12 +23,13 @@
 {% else %}<p class="empty">На вашей Android-полке пока нет скачанных приложений. <a href="/android">Открыть мою полку</a></p>{% endif %}
 {% endif %}
 <h2>Найти приложение</h2>
-{% if not public %}<p><a class="btn secondary" href="/android/4pda">Найти на 4PDA</a></p>{% endif %}
 <form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
-<p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure.
+<p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure{% if not public %}, а также 4PDA вашим аккаунтом{% endif %}.
   Выберите источник: сборки одного приложения могут отличаться подписью и функциями. AppGallery и APKPure
   проверяются по найденным пакетам. Если приложение приходит набором файлов, проверяются ссылки автора на GitHub
   в описании и на его сайте. Поиска по всему GitHub нет.</p>
+{% if not public %}<p class="hint">На 4PDA найдите тему, затем выберите подходящий APK.
+  <a href="/fourpda/{{ who.id }}/connect">Подключение аккаунта 4PDA</a>.</p>{% endif %}
 <div id="search-progress" class="card" hidden>
   <p id="search-summary" role="status" aria-live="polite"></p>
   <div id="source-statuses" aria-live="polite"></div>
@@ -66,7 +67,7 @@
     var query = input.value.trim(); if (!query) return;
     if (stream) stream.close(); clearInterval(timer);
     progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {};
-    ['rustore', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github'].forEach(function (source) {
+    {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(function (source) {
       var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
       title.textContent = names[source] + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
       row.append(title, detail); statuses.append(row); rows[source] = {row: row, detail: detail};

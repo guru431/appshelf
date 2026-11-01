@@ -374,7 +374,8 @@ def _register_scope(app, w, scope: Scope):
         def stream():
             previous = None
             try:
-                for update in w.env.sources.search_events(q, accounts=accounts, split_packages=split_packages):
+                for update in w.env.sources.search_events(q, accounts=accounts, split_packages=split_packages,
+                                                         user_id=None if scope.public else request.state.who.id):
                     if update.kind == "status":
                         yield message("status", {"source": update.source, "state": update.state,
                                                  "detail": update.detail})

@@ -1,16 +1,13 @@
 {% extends "base.html" %}
 {% block main %}
-<h2>Приложения с 4PDA</h2>
+<h2>Выбрать APK с 4PDA</h2>
 {% if error %}<p class="banner" role="alert">{{ error }}</p>{% endif %}
 {% if connected %}
 <p>Аккаунт <b>{{ connected }}</b> · <a href="/fourpda/{{ who.id }}/connect">Управлять подключением</a></p>
-<form method="get" action="/android/4pda" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название приложения или ссылка на тему" aria-label="Поиск на 4PDA" maxlength="200" required><button>Найти</button></form>
-{% if q and not found and not error %}<p>Темы не найдены. Попробуйте полное название приложения или вставьте ссылку на его тему.</p>{% endif %}
-{% for item in found %}<div class="card row"><div class="body"><b>{{ item.name }}</b></div><div class="act"><a class="btn sm" href="/android/4pda/topic?{{ {'url':item.url} | urlencode }}">Выбрать APK</a></div></div>{% endfor %}
 {% if topic %}<h3>{{ title }}</h3>
 <p><a href="{{ topic }}" target="_blank" rel="noopener noreferrer">Открыть тему на 4PDA</a></p>
 {% for item in files %}<div class="card row"><div class="body"><b>{{ item.name }}</b></div><div class="act"><form method="post" action="/android/4pda/add"><input type="hidden" name="url" value="{{ item.url }}"><input type="hidden" name="name" value="{{ title }}"><button class="sm">Добавить на мою полку</button></form></div></div>
-{% else %}{% if not error %}<p>На этой странице нет отдельных APK. Если файл находится в другом сообщении, вставьте ссылку на это сообщение в поиск.</p>{% endif %}{% endfor %}
+{% else %}{% if not error %}<p>На этой странице нет отдельных APK. Если файл находится в другом сообщении, вставьте ссылку на это сообщение в <a href="/android/add">общий поиск</a>.</p>{% endif %}{% endfor %}
 {% endif %}
 <p class="hint">Выберите подходящую версию и архитектуру по описанию в теме. Модификации могут иметь другую подпись.
 Наборы APKS/XAPK не поддерживаются. Выбранный APK закрепляется; новую версию добавьте из темы вручную.</p>
@@ -18,5 +15,5 @@
 <p>Для поиска и скачивания войдите своим аккаунтом 4PDA. Подключение других участников вам не передаётся.</p>
 <p><a class="btn" href="/fourpda/{{ who.id }}/connect">Подключить 4PDA</a></p>
 {% endif %}
-<p><a href="/android/add">Другие источники</a> · <a href="/android">Моя полка</a></p>
+<p><a href="/android/add">Общий поиск приложений</a> · <a href="/android">Моя полка</a></p>
 {% endblock %}

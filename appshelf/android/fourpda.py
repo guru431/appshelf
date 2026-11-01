@@ -14,7 +14,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
-from .net import FetchError, Http, SourceError
+from .net import MAX_JSON, FetchError, Http, SourceError
 
 BASE = "https://4pda.to"
 FORUM = BASE + "/forum/index.php"
@@ -161,7 +161,8 @@ class Client:
         doc, found = self.page(url), {}
         for link in doc.links:
             try:
-                canonical = topic_url(link.url)
+                # Ссылки «1, 2, 3…» в выдаче ведут на ту же тему.
+                canonical = topic_url(link.url).split("&", 1)[0]
             except SourceError:
                 continue
             if link.name and canonical not in found:
@@ -181,33 +182,45 @@ class Client:
 
     def download(self, ref: str, dest: Path):
         gateway = file_url(ref)
-        # dlsess одноразовый: получать заново, не класть его в карточку, задания и ошибки.
-        doc = self.page(gateway, authenticated=False)
-        target = None
-        attachment = urlsplit(gateway).path.split("/")[4]
-        for link in doc.links:
-            try:
-                u = _url(link.url)
-            except SourceError:
-                continue
-            q = parse_qs(u.query)
-            if u.path == "/forum/index.php" and q.get("act") == ["attach"] and q.get("dlsess") and q.get("id") == [attachment]:
-                target = link.url
-                break
-        if target is None:
-            raise AuthError(EXPIRED)
+        valid = False
         try:
+            # У вошедшего пользователя gateway может сразу перенаправить на APK.
+            # Сначала пишем ответ потоком: файл не ограничен размером HTML/JSON.
+            meta = self.http.download(gateway, dest, headers=self.session.headers)
+            with dest.open("rb") as f:
+                magic = f.read(4)
+            if magic == b"PK\x03\x04":
+                valid = True
+                return meta
+            if dest.stat().st_size > MAX_JSON:
+                raise FetchError("Вместо APK получена слишком большая страница")
+            doc = Document(dest.read_bytes(), meta.content_type)
+            # dlsess одноразовый: получать заново, не класть его в карточку, задания и ошибки.
+            attachment, target = urlsplit(gateway).path.split("/")[4], None
+            for link in doc.links:
+                try:
+                    u = _url(link.url)
+                except SourceError:
+                    continue
+                q = parse_qs(u.query)
+                if u.path == "/forum/index.php" and q.get("act") == ["attach"] and q.get("dlsess") and q.get("id") == [attachment]:
+                    target = link.url
+                    break
+            if target is None:
+                raise AuthError(EXPIRED)
             # net.Http убирает Cookie при редиректе с 4pda.to на файловый CDN.
             meta = self.http.download(target, dest, headers={**self.session.headers, "Referer": gateway})
             with dest.open("rb") as f:
                 magic = f.read(4)
             if magic != b"PK\x03\x04":
-                dest.unlink(missing_ok=True)
                 raise AuthError(EXPIRED)
+            valid = True
             return meta
         except FetchError:
-            dest.unlink(missing_ok=True)
             raise FetchError("4PDA не отдал APK — обновите вход и повторите") from None
+        finally:
+            if not valid:
+                dest.unlink(missing_ok=True)
 
 
 class Sessions:

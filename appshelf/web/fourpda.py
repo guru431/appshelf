@@ -5,6 +5,7 @@ import json
 import re
 from contextlib import suppress
 from dataclasses import replace
+from urllib.parse import urlencode
 
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -24,7 +25,7 @@ def register_routes(app, w, sessions, browser):
         return PlainTextResponse("not found", status_code=404)
 
     def connected_response(uid):
-        response = back("/android/4pda")
+        response = back("/android/add")
         w.set_cookie(response, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
         return response
 
@@ -159,9 +160,9 @@ def register_routes(app, w, sessions, browser):
             return connect_page(request, uid, "Идёт скачивание — отключите аккаунт через минуту", 409)
         return back(f"/fourpda/{uid}/connect")
 
-    def catalog(request, query="", topic="", error="", status=200):
+    def catalog(request, topic="", error="", status=200):
         uid = request.state.who.id
-        found, files, title, name = [], [], "", ""
+        files, title, name = [], "", ""
         try:
             if topic:
                 topic = fourpda.topic_url(topic)
@@ -171,19 +172,18 @@ def register_routes(app, w, sessions, browser):
                 client = sessions.client(uid)
                 if topic:
                     title, files = client.files(topic)
-                elif query:
-                    found = client.search(query)
         except (FetchError, SourceError) as e:
             error, status = str(e), 400
             # Не возвращать непроверенный href (в том числе javascript:) в ссылку на форум.
             if not title:
                 topic = ""
-        return w.page(request, "fourpda_catalog.html", "a_add", status, connected=name, q=query, topic=topic,
-                      found=found, files=files, title=title, error=error)
+        return w.page(request, "fourpda_catalog.html", "a_add", status, connected=name, topic=topic,
+                      files=files, title=title, error=error)
 
     @app.get("/android/4pda")
     def search(request: Request, q: str = ""):
-        return catalog(request, query=q.strip()[:200])
+        query = q.strip()[:200]
+        return back("/android/add" + ("?" + urlencode({"q": query}) if query else ""))
 
     @app.get("/android/4pda/topic")
     def topic(request: Request, url: str = ""):

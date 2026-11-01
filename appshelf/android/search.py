@@ -9,13 +9,13 @@ import re
 from dataclasses import dataclass
 
 from ..apk import PACKAGE_RE
-from . import apkpure, appgallery, discovery, fdroid_index, github, links, play, rustore
+from . import apkpure, appgallery, discovery, fdroid_index, fourpda, github, links, play, rustore
 from .net import FetchError, SourceError, StatusError
 
-NAMES = {**links.NAMES, "fdroid_archive": "Архив F-Droid", "github": "GitHub автора"}
+NAMES = {**links.NAMES, "fdroid_archive": "Архив F-Droid", "github": "GitHub автора", "fourpda": "4PDA"}
 DOMAINS = {"rustore": "backapi.rustore.ru", "play": "play.google.com", "appgallery": appgallery.HOST,
            "apkpure": "api.pureapk.com", "fdroid": "f-droid.org", "fdroid_archive": "f-droid.org",
-           "github": "github.com"}
+           "github": "github.com", "fourpda": "4pda.to"}
 MAX_PACKAGES = 5
 
 
@@ -47,12 +47,18 @@ class Update:
     result: Results | None = None
 
 
-def events(src, query: str, *, accounts=(), split_packages=()):
+def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     query = query.strip()[:200]
     options, errors, candidates, author_links, descriptions = {}, {}, {}, {}, {}
     split = set(split_packages)
     exact = query if PACKAGE_RE.fullmatch(query) else ""
     direct_repo = github.parse_ref(query)
+    direct_topic = ""
+    if query.startswith(fourpda.BASE + "/"):
+        try:
+            direct_topic = fourpda.topic_url(query)
+        except SourceError:
+            pass
     if query.startswith("https://"):
         try:
             kind, ref = links.parse(query)
@@ -86,7 +92,7 @@ def events(src, query: str, *, accounts=(), split_packages=()):
         src._wait()
         return fn()
 
-    def run(source, detail, fn):
+    def run(source, detail, fn, *, missing=""):
         # Первый yield обязательно до сетевого запроса: браузер уже видит, чего ждёт.
         yield Update("status", source, "running", detail)
         try:
@@ -105,13 +111,37 @@ def events(src, query: str, *, accounts=(), split_packages=()):
                 errors.setdefault(source, f"{NAMES[source]}: {message[:200]}")
                 yield Update("status", source, "error", message[:200])
             return None
-        yield Update("status", source, "done", "проверено")
+        yield Update("status", source, "skipped" if result is None and missing else "done",
+                     missing if result is None and missing else "проверено")
         return result
+
+    def forum():
+        if user_id is None:
+            if direct_topic:
+                yield Update("status", "fourpda", "skipped", "доступен только на личной полке")
+            return
+
+        def lookup():
+            session = src.fourpda.load(user_id) if src.fourpda is not None else None
+            if session is None:
+                return None
+            return request(lambda: fourpda.Client(src.fourpda.http, session).search(direct_topic or query))
+
+        found = yield from run("fourpda", "поиск тем — 4pda.to", lookup,
+                               missing="подключите свой аккаунт 4PDA в «Аккаунтах»")
+        for topic in found or ():
+            add(Option("fourpda", topic.url, "", topic.name))
+        yield Update("results", result=snapshot())
 
     if direct_repo:
         release = yield from run("github", direct_repo, lambda: request(lambda: src.github_app(direct_repo)))
         if release:
             add(Option("github", release.repository, "", release.name, release.version_name))
+        yield Update("done", result=snapshot())
+        return
+
+    if direct_topic:
+        yield from forum()
         yield Update("done", result=snapshot())
         return
 
@@ -121,6 +151,8 @@ def events(src, query: str, *, accounts=(), split_packages=()):
         add(Option("rustore", app.package, app.package, app.name, app.version_name,
                    "платное — недоступно" if app.price > 0 else ""))
     yield Update("results", result=snapshot())
+
+    yield from forum()
 
     for source, catalog in (("fdroid", src.fdroid_catalog), ("fdroid_archive", src.fdroid_archive)):
         detail = "загрузка каталога — f-droid.org" if getattr(catalog, "_apps", True) is None else "поиск в каталоге"
