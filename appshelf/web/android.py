@@ -690,7 +690,7 @@ def _register_scope(app, w, scope: Scope):
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),
                       ack: str = Form("")):
-        """Сменить источник: версии и закрепления остаются, первая версия из нового источника — по правилу подписи.
+        """Сменить источник: закрепление остаётся, первая версия из нового источника — по правилу подписи и ротации.
         Ссылка — страница магазина (links.parse) или прямая на APK; страница другого пакета — отказ. Новый источник
         сразу проверяется скачиванием; его отказ (подпись, набор файлов, нет пакета) возвращает прежний."""
         with w.conn() as c:

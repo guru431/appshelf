@@ -1,3 +1,5 @@
+import pytest
+
 from apk_factory import cert_sha, make_apk
 from appshelf import nightly, store
 from appshelf.android import db, fetch, net
@@ -55,6 +57,41 @@ def test_nightly_android_runs_without_apple_login(ctx, cfg, conn, clock, tmp_pat
     result = nightly.run(ctx.env, conn)
     assert result == f"{nightly.NO_LOGIN} | Android: обновлено 1, без изменений 1, ошибок 0"
     assert ctx.tool.calls == [] and stamp(cfg) == clock.iso()
+
+
+@pytest.mark.parametrize("public", [False, True])
+def test_nightly_prunes_old_apks_but_keeps_pin_and_downloads_new_versions(ctx, cfg, conn, clock, tmp_path, public):
+    shelf = db.ensure_public_shelf(conn, clock.iso()) if public else db.ensure_shelf(conn, 1, clock.iso())
+    db.put_app(conn, shelf.id, "ru.a", "Банк", "rustore", "ru.a", clock.iso())
+    ctx.sources.apks["ru.a"] = make_apk(tmp_path / "v1.apk", package="ru.a", version_code=1)
+    db.enqueue(conn, shelf.id, "add", clock.iso(), package="ru.a",
+               payload={"source": "rustore", "ref": "ru.a", "name": ""})
+    fetch.run_job(ctx.env, conn, db.take_job(conn))
+    root = fetch.shelf_root(cfg, shelf)
+    pinned = db.current_version(conn, shelf.id, "ru.a")
+    assert db.pin_version(conn, root, shelf.id, "ru.a", pinned["id"])
+    for code in (2, 3, 4):
+        path = make_apk(tmp_path / f"v{code}.apk", package="ru.a", version_code=code)
+        ctx.sources.apks["ru.a"] = path
+        ctx.sources._latest["ru.a"] = Latest(code, "", True)
+        assert nightly.run(ctx.env, conn).endswith("Android: обновлено 1, без изменений 0, ошибок 0")
+    view = db.list_apps(conn, shelf.id)[0]
+    assert [v["version_code"] for v in view.versions] == [4, 3, 1]
+    assert view.kept["pinned"] and view.source == "rustore"
+    assert sorted(p.name for p in root.iterdir()) == ["ru.a-1", "ru.a-3", "ru.a-4"]
+    assert (root / view.current["dir"] / fetch.apk_name("ru.a", view.current["version_name"])).read_bytes() == path.read_bytes()
+    assert db.unpin_version(conn, root, shelf.id, "ru.a", pinned["id"])
+    assert nightly.run(ctx.env, conn).endswith("Android: обновлено 0, без изменений 1, ошибок 0")
+    assert sorted(p.name for p in root.iterdir()) == ["ru.a-1", "ru.a-3", "ru.a-4"]
+    ctx.sources.fail["ru.a"] = net.FetchError("источник недоступен")
+    assert nightly.run(ctx.env, conn).endswith("Android: обновлено 0, без изменений 0, ошибок 1")
+    assert sorted(p.name for p in root.iterdir()) == ["ru.a-1", "ru.a-3", "ru.a-4"]
+    del ctx.sources.fail["ru.a"]
+    ctx.sources.apks["ru.a"] = make_apk(tmp_path / "v5.apk", package="ru.a", version_code=5)
+    ctx.sources._latest["ru.a"] = Latest(5, "", True)
+    assert nightly.run(ctx.env, conn).endswith("Android: обновлено 1, без изменений 0, ошибок 0")
+    assert [v["version_code"] for v in db.list_apps(conn, shelf.id)[0].versions] == [5, 4]
+    assert sorted(p.name for p in root.iterdir()) == ["ru.a-4", "ru.a-5"]
 
 
 def test_nightly_without_android_apps_keeps_old_result(ctx, cfg, conn, clock):

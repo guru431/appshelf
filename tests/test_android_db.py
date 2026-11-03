@@ -1,6 +1,8 @@
 import re
 import sqlite3
 
+import pytest
+
 from appshelf import store
 from appshelf.android import db
 
@@ -60,28 +62,51 @@ def test_rotation_current_previous_kept(conn, tmp_path):
     assert add(conn, root, sid, v(2)) == "current"
     assert add(conn, root, sid, v(3)) == "current"
     view = db.list_apps(conn, sid)[0]
-    assert (view.current["version_code"], view.previous["version_code"], view.kept["version_code"], view.pending) == (3, 2, 1, None)
+    assert (view.current["version_code"], view.previous["version_code"], view.kept, view.pending) == (3, 2, None, None)
     assert (view.status, view.signer) == ("ok", A)
-    assert (root / "ru.x-1").exists() and (root / "ru.x-2").exists()
+    assert not (root / "ru.x-1").exists() and (root / "ru.x-2").exists()
     assert db.pin_version(conn, root, sid, "ru.x", view.previous["id"])
     add(conn, root, sid, v(4))
+    add(conn, root, sid, v(5))
     view = db.list_apps(conn, sid)[0]
-    assert (view.current["version_code"], view.previous["version_code"], view.kept["version_code"]) == (4, 3, 2)
+    assert [v["version_code"] for v in view.versions] == [5, 4, 2]
+    assert view.kept["pinned"] and (root / "ru.x-2").exists()
     assert db.unpin_version(conn, root, sid, "ru.x", view.kept["id"])
     view = db.list_apps(conn, sid)[0]
-    assert [v["version_code"] for v in view.versions] == [4, 3, 2, 1]
     assert not any(v["pinned"] for v in view.versions) and (root / "ru.x-2").exists()
+    add(conn, root, sid, v(6))
+    assert [v["version_code"] for v in db.list_apps(conn, sid)[0].versions] == [6, 5]
+    assert sorted(p.name for p in root.iterdir()) == ["ru.x-5", "ru.x-6"]
+
+
+def test_repin_protects_current_without_stopping_rotation(conn, tmp_path):
+    root, sid = shelf_with_app(conn, tmp_path)
+    add(conn, root, sid, v(1))
+    assert db.pin_version(conn, root, sid, "ru.x", db.current_version(conn, sid, "ru.x")["id"])
+    add(conn, root, sid, v(2))
+    add(conn, root, sid, v(3))
+    assert db.pin_version(conn, root, sid, "ru.x", db.current_version(conn, sid, "ru.x")["id"])
+    add(conn, root, sid, v(4))
+    view = db.list_apps(conn, sid)[0]
+    assert [v["version_code"] for v in view.versions] == [4, 3]
+    assert [v["version_code"] for v in view.versions if v["pinned"]] == [3]
+    assert sorted(p.name for p in root.iterdir()) == ["ru.x-3", "ru.x-4"]
 
 
 def test_other_signer_goes_pending_and_is_accepted(conn, tmp_path):
     root, sid = shelf_with_app(conn, tmp_path)
     add(conn, root, sid, v(1))
-    assert db.add_version(conn, root, sid, "ru.x", v(2, signer=B), NOW) == "pending"
-    assert db.list_apps(conn, sid)[0].current["version_code"] == 1
+    assert db.pin_version(conn, root, sid, "ru.x", db.current_version(conn, sid, "ru.x")["id"])
+    add(conn, root, sid, v(2))
+    add(conn, root, sid, v(3))
+    assert add(conn, root, sid, v(4, signer=B)) == "pending"
+    assert db.list_apps(conn, sid)[0].current["version_code"] == 3
+    assert sorted(p.name for p in root.iterdir()) == ["ru.x-1", "ru.x-2", "ru.x-3", "ru.x-4"]
     assert db.accept_pending(conn, root, sid, "ru.x")
     view = db.list_apps(conn, sid)[0]
-    assert (view.current["version_code"], view.signer, view.pending) == (2, B, None)
-    assert view.previous["version_code"] == 1
+    assert (view.current["version_code"], view.signer, view.pending) == (4, B, None)
+    assert [v["version_code"] for v in view.versions] == [4, 3, 1]
+    assert view.kept["pinned"] and not (root / "ru.x-2").exists()
     assert not db.accept_pending(conn, root, sid, "ru.x")
 
 
@@ -97,11 +122,34 @@ def test_older_versions_and_accepted_old_signer_keep_latest(conn, tmp_path):
     view = db.list_apps(conn, sid)[0]
     assert (view.current["version_code"], view.signer, view.pending) == (5, A, None)
     assert [v["version_code"] for v in view.versions] == [5, 3, 2, 1]
+    saved = next(v for v in view.versions if v["version_code"] == 3)
+    assert db.pin_version(conn, root, sid, "ru.x", saved["id"])
     add(conn, root, sid, v(6))
     add(conn, root, sid, v(7))
     view = db.list_apps(conn, sid)[0]
-    assert [v["version_code"] for v in view.versions] == [7, 6, 5, 3, 2, 1]
-    assert all((root / v["dir"]).is_dir() for v in view.versions)
+    assert [v["version_code"] for v in view.versions] == [7, 6, 3]
+    assert sorted(p.name for p in root.iterdir()) == ["ru.x-3", "ru.x-6", "ru.x-7"]
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_failed_rotation_keeps_rows_and_files(conn, tmp_path, accept):
+    root, sid = shelf_with_app(conn, tmp_path)
+    add(conn, root, sid, v(1))
+    add(conn, root, sid, v(2))
+    if accept:
+        add(conn, root, sid, v(3, signer=B))
+    before = [dict(r) for r in conn.execute("SELECT * FROM android_versions ORDER BY id")]
+    event = "UPDATE OF role" if accept else "INSERT"
+    conn.execute(f"CREATE TRIGGER fail_rotation BEFORE {event} ON android_versions "
+                 "WHEN NEW.role='current' AND NEW.version_code=3 "
+                 "BEGIN SELECT RAISE(ABORT, 'rotation failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="rotation failed"):
+        if accept:
+            db.accept_pending(conn, root, sid, "ru.x")
+        else:
+            add(conn, root, sid, v(3))
+    assert [dict(r) for r in conn.execute("SELECT * FROM android_versions ORDER BY id")] == before
+    assert all((root / r["dir"]).is_dir() for r in before)
 
 
 def test_new_pending_replaces_old_pending(conn, tmp_path):

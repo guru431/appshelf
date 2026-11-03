@@ -55,6 +55,8 @@ def test_qr_unavailable_for_private_missing_and_rotating_shelves(web, anon, cfg,
 
 def test_version_links_and_qr_select_exact_build_within_shelf(web, anon, cfg, conn, clock, shelf, tmp_path):
     old = db.current_version(conn, shelf.id, PKG)
+    assert web.client.post(f"/android/public/apps/{PKG}/versions/{old['id']}/pin",
+                           follow_redirects=False).status_code == 303
     for code in (2, 3):
         web.sources.apks[URL] = make_apk(tmp_path / f"v{code}.apk", version_code=code, version_name=f"{code}.0")
         web.client.post("/android/public/add/link", data={"url": URL})
@@ -62,6 +64,7 @@ def test_version_links_and_qr_select_exact_build_within_shelf(web, anon, cfg, co
     link = fetch.app_url(cfg, shelf, PKG)
     selected = f"{link}?version={old['id']}"
     response = anon.client.get(f"{link}/qr.png?version={old['id']}")
+    assert response.status_code == 200
     decoded = zxingcpp.read_barcode(Image.open(io.BytesIO(response.content)))
     assert decoded is not None and decoded.text == selected
     assert anon.client.get(selected, follow_redirects=False).headers["location"] == \
@@ -81,6 +84,13 @@ def test_version_links_and_qr_select_exact_build_within_shelf(web, anon, cfg, co
             assert anon.client.get(f"{link}{suffix}?version={vid}", follow_redirects=False).status_code == 404
     other = fetch.app_url(cfg, shelf, "ru.other")
     assert anon.client.get(f"{other}?version={old['id']}", follow_redirects=False).status_code == 404
+    web.client.post(f"/android/public/apps/{PKG}/versions/{old['id']}/unpin")
+    web.sources.apks[URL] = make_apk(tmp_path / "v5.apk", version_code=5)
+    web.client.post("/android/public/add/link", data={"url": URL})
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    assert anon.client.get(selected, follow_redirects=False).status_code == 404
+    assert anon.client.get(f"{link}/qr.png?version={old['id']}").status_code == 404
+    assert anon.client.get(link, follow_redirects=False).status_code == 302
     db.set_shelf_next(conn, shelf.id, "f" * 32)
     assert anon.client.get(selected, follow_redirects=False).status_code == 404
 

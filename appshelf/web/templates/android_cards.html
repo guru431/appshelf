@@ -121,12 +121,14 @@
     <h2 id="versions-title-{{ a.package }}">Версии · {{ a.name }}</h2>
     {% for x in a.versions %}
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/' ~ ('unpin' if x['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ x['version_name'] }}{% if x['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
-    {% endfor %}<p class="hint">Все сохранённые версии доступны в списке на карточке; снятие закрепления их не удаляет. При откате приложения могут быть несовместимы с данными более новой версии.</p>
+    {% endfor %}<p class="hint">После успешного обновления остаются текущая, предыдущая и одна закреплённая версия.
+      Закрепление защищает от автоудаления и не мешает скачивать новые версии. После снятия закрепления старая версия
+      будет удалена при следующем успешном обновлении. При откате приложения могут быть несовместимы с данными более новой версии.</p>
   </dialog>{% endif %}
   <dialog id="source-{{ a.package }}" aria-labelledby="source-title-{{ a.package }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
     <h2 id="source-title-{{ a.package }}">Источник · {{ a.name }}</h2>
-    <p class="meta">Текущий: {{ sources.get(a.source, a.source) }}. Версии и закрепления сохранятся; другой ключ потребует отдельного решения.</p>
+    <p class="meta">Текущий: {{ sources.get(a.source, a.source) }}. Закреплённая версия сохранится; другой ключ потребует отдельного решения.</p>
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/source') }}">
       <label>Новый источник<select name="source" aria-label="Новый источник">
       {% for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive', 'izzy', 'apkpure', 'link') %}<option value="{{ s }}"{% if a.source == s %} selected{% endif %}>{{ sources[s] }}</option>{% endfor %}</select></label>

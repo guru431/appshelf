@@ -1,8 +1,9 @@
 """Таблицы Android (spec 2026-10-28 §7, §9, §12): полки участников, приложения, версии APK, задания.
 
 Полка — у участника (user_id; NULL — публичная, этап 2), каталог — <архив>/<shelf>/<пакет>-<versionCode>[-N]/.
-Роли версий — current, previous, kept (вся история) и pending: версия с другой подписью ждёт «Принять новую
-подпись». Транзакции и удаление каталогов после COMMIT — как в store."""
+Роли версий — current, previous, kept (закреплённая или вручную добавленная старая сборка) и pending: версия с
+другой подписью ждёт «Принять новую подпись». При обновлении остаются current, previous и закреплённая версия.
+Транзакции и удаление каталогов после COMMIT — как в store."""
 from __future__ import annotations
 
 import json
@@ -245,12 +246,18 @@ def version_dir(c, shelf_id: int, root: Path, package: str, version_code: int) -
     return name
 
 
-def _rotate(c, shelf_id: int, package: str) -> None:
-    """Место для новой current: previous — kept, current — previous; история остаётся на диске."""
+def _rotate(c, shelf_id: int, package: str) -> list[str]:
+    """Место для новой current: current — previous, из более старых остаётся только закреплённая.
+    Каталоги удаляет вызывающий после COMMIT; pending не трогаем."""
+    old = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
+                                       "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))]
+    c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? "
+              "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))
     c.execute("UPDATE android_versions SET role='kept' WHERE shelf_id=? AND package=? AND role='previous'",
               (shelf_id, package))
     c.execute("UPDATE android_versions SET role='previous' WHERE shelf_id=? AND package=? AND role='current'",
               (shelf_id, package))
+    return old
 
 
 def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str) -> str:
@@ -271,7 +278,7 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
             role = "kept"
         else:
             role = "current"
-            _rotate(c, shelf_id, package)
+            old = _rotate(c, shelf_id, package)
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (v.signer, shelf_id, package))
         c.execute("""INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk,
                          abis, signer, source, size, sha256, dir, downloaded_at, role, signature_verified, rotation_min_sdk)
@@ -284,7 +291,7 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
 
 
 def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
-    """Принять pending: новая — current, старая — kept; последняя версия и её ключ не понижаются."""
+    """Принять pending: новая — current с ротацией, старая — kept; последняя версия и её ключ не понижаются."""
     with tx(c):
         p = c.execute("SELECT id, signer, version_code FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                       (shelf_id, package)).fetchone()
@@ -292,10 +299,12 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
             return False
         current = current_version(c, shelf_id, package)
         role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
+        old = []
         if role == "current":
-            _rotate(c, shelf_id, package)
+            old = _rotate(c, shelf_id, package)
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
         c.execute("UPDATE android_versions SET role=? WHERE id=?", (role, p["id"]))
+    remove_dirs(root, old)
     return True
 
 
@@ -332,7 +341,7 @@ def _version_row(c, shelf_id: int, package: str, version_id: int):
 
 
 def pin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
-    """Одна закреплённая версия на приложение; смена отметки не удаляет историю."""
+    """Одна защищённая от автоудаления версия на приложение; скачивание новых версий продолжается."""
     with tx(c):
         row = _version_row(c, shelf_id, package, version_id)
         if row is None:
@@ -344,6 +353,7 @@ def pin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -> 
 
 
 def unpin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
+    """Снять защиту: старую kept удалит следующее успешное обновление."""
     with tx(c):
         row = _version_row(c, shelf_id, package, version_id)
         if row is None:
