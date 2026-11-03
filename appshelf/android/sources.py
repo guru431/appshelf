@@ -7,6 +7,7 @@ import io
 import hashlib
 import time
 import threading
+import urllib.parse
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from .. import apk
-from . import apkpure, appgallery, fdroid, fdroid_index, github, links, rustore
+from . import apkpure, appgallery, fdroid, fdroid_index, fourpda, github, links, rustore
 from .net import FetchError, Http, Meta, SourceError, StatusError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
@@ -49,6 +50,7 @@ class Got:
     etag: str = ""             # признаки файла по ссылке — чтобы первая ночь не качала его заново
     paid: bool = False         # Google Play: купленное
     ref: str = ""              # ref карточки, если источник его уточнил (AppGallery: пакет вместо ID со страницы)
+    page_url: str = ""         # публичная страница AppGallery: ID теряется после уточнения ref до пакета
 
 
 def _etag(meta: Meta) -> str:
@@ -155,6 +157,33 @@ class Sources:
             return Latest(apkpure.info(self.http, ref).version_code, "", True)
         raise SourceError(f"источник «{source}» не проверяется")
 
+    def download_url(self, source: str, ref: str) -> str:
+        """Ссылка для браузера на сборку источника; без доставки Play и личной сессии 4PDA."""
+        if source == "fourpda":
+            return fourpda.file_url(ref)
+        if source == "link":
+            return ref
+        if source == "github":
+            return self.github_app(ref).asset_url
+        if source == "rustore":
+            self._wait()
+            app = rustore.info(self.http, ref)
+            if app.price > 0:
+                raise SourceError("платное — недоступно")
+            self._wait()
+            return rustore.apk_url(self.http, app.app_id)
+        if source == "appgallery":
+            return self._appgallery(ref).apk_url
+        if source == "apkpure":
+            return self.apkpure_app(ref).url
+        if source in fdroid_index.REPOSITORIES:
+            catalog = self._fdroid_index(source)
+            if source == "fdroid" and ref.split("@", 1)[0] not in catalog.apps(self._wait):
+                catalog = self.fdroid_archive
+            _, build = catalog.info(ref, self._wait)
+            return catalog.repo + urllib.parse.quote(build.filename)
+        raise SourceError("У этого источника нет прямой ссылки на APK")
+
     def fetch(self, source: str, ref: str, dest: Path, *, account=None, allow_paid: bool = False,
               user_id: int | None = None) -> Got:
         """APK в dest. rustore, play — ref: пакет; link — ref: адрес; appgallery — пакет или ID со страницы (Got.ref —
@@ -189,7 +218,8 @@ class Sources:
             app = self._appgallery(ref)
             self._wait()
             appgallery.download(self.http, app, dest)
-            return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
+            return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package,
+                       page_url=links.page_url("appgallery", app.app_id))
         if source in fdroid_index.REPOSITORIES:
             if source != "fdroid" or "@" in ref:
                 return self._fetch_fdroid_index(source, ref, dest)

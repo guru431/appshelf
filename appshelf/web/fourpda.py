@@ -190,14 +190,16 @@ def register_routes(app, w, sessions, browser):
         return catalog(request, topic=url[:2000])
 
     @app.post("/android/4pda/add")
-    def add(request: Request, url: str = Form(""), name: str = Form("")):
+    def add(request: Request, url: str = Form(""), name: str = Form(""), topic: str = Form("")):
         try:
             ref = fourpda.file_url(url)
+            page = fourpda.topic_url(topic) if topic else ""
             # Полку определяет сервер. ID участника/аккаунта из формы не принимается.
             sessions.client(request.state.who.id).who()
         except (FetchError, SourceError) as e:
             return catalog(request, error=str(e), status=400)
         with w.conn() as c:
             shelf = db.ensure_shelf(c, request.state.who.id, w.now())
-            db.enqueue(c, shelf.id, "add", w.now(), payload={"source": "fourpda", "ref": ref, "name": name.strip()[:200]})
+            db.enqueue(c, shelf.id, "add", w.now(), payload={"source": "fourpda", "ref": ref,
+                       "name": name.strip()[:200], "source_page": page})
         return back("/android")

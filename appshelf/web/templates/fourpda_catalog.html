@@ -6,7 +6,7 @@
 <p>Аккаунт <b>{{ connected }}</b> · <a href="/fourpda/{{ who.id }}/connect">Управлять подключением</a></p>
 {% if topic %}<h3>{{ title }}</h3>
 <p><a href="{{ topic }}" target="_blank" rel="noopener noreferrer">Открыть тему на 4PDA</a></p>
-{% for item in files %}<div class="card row"><div class="body"><b>{{ item.name }}</b></div><div class="act"><form method="post" action="{{ post_url('/android/4pda/add') }}"><input type="hidden" name="url" value="{{ item.url }}"><input type="hidden" name="name" value="{{ title }}"><button class="sm">Добавить на мою полку</button></form></div></div>
+{% for item in files %}<div class="card row"><div class="body"><b>{{ item.name }}</b></div><div class="act"><form method="post" action="{{ post_url('/android/4pda/add') }}"><input type="hidden" name="url" value="{{ item.url }}"><input type="hidden" name="name" value="{{ title }}"><input type="hidden" name="topic" value="{{ topic }}"><button class="sm">Добавить на мою полку</button></form></div></div>
 {% else %}{% if not error %}<p>На этой странице нет отдельных APK. Если файл находится в другом сообщении, вставьте ссылку на это сообщение в <a href="/android/add">общий поиск</a>.</p>{% endif %}{% endfor %}
 {% endif %}
 <p class="hint">Выберите подходящую версию и архитектуру по описанию в теме. Модификации могут иметь другую подпись.

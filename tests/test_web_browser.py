@@ -5,16 +5,21 @@ import pytest
 
 from helpers import seed_app
 from test_fourpda import local_chromium
-from test_web_context import android_app
+from test_web_context import PKG, android_app
 from appshelf.android import db, fetch, pin
 from apk_factory import png_bytes
+from android_fakes import FakeHttp
+from appshelf.android.sources import Sources
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock, acct, width, local_chromium):
     playwright, executable = local_chromium
-    android_app(conn, cfg, clock, acct.user_id)
+    shelf = android_app(conn, cfg, clock, acct.user_id)
+    topic = "https://4pda.to/forum/index.php?showtopic=456"
+    db.set_source(conn, shelf.id, PKG, "fourpda", "https://4pda.to/forum/dl/post/123/example.apk", topic)
+    web.app.state.w.env.sources = Sources(FakeHttp(), pause=0)
     seed_app(conn, cfg, clock, versions=("1.0", "2.0"))
 
     def route(target):
@@ -22,7 +27,7 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
         u = urlsplit(request.url)
         result = web.client.request(request.method, u.path + ("?" + u.query if u.query else ""),
                                     content=request.post_data_buffer,
-                                    headers={"user-agent": request.headers.get("user-agent", "")})
+                                    headers={"user-agent": request.headers.get("user-agent", "")}, follow_redirects=False)
         target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
 
     with playwright.sync_playwright() as runtime:
@@ -31,7 +36,8 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
             page = browser.new_page(viewport={"width": width, "height": 844},
                                     user_agent=("Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile"
                                                 if width < 700 else "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"))
-            page.route("https://apps.example/**", route)
+            page.context.route("https://apps.example/**", route)
+            page.context.route("https://4pda.to/**", lambda target: target.fulfill(status=200, body="Source"))
             for theme in ("light", "dark"):
                 web.client.get(f"/theme?set={theme}")
                 for path in ("/?os=apple", "/history", "/blocked", "/android", "/android/add", "/android/public", "/apple", "/admin", "/login", "/p"):
@@ -45,6 +51,21 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
                 page.wait_for_function("window.scrollY === 0")
                 page.screenshot(path=str(cfg.data_dir / f"browser-{width}-{theme}.png"), full_page=True)
                 page.get_by_label("Действия с Shared app", exact=True).click()
+                menu = page.locator(".more[open] .action-list")
+                page.wait_for_function("!document.querySelector('.more[open] .action-list').getAnimations().length")
+                assert menu.evaluate("e => e.scrollWidth <= e.clientWidth")
+                for label in ("Скачать из источника · 4PDA", "Тема на 4PDA"):
+                    link = menu.get_by_role("link", name=label, exact=True)
+                    assert link.is_visible() and link.bounding_box()["height"] >= 44
+                    assert link.get_attribute("target") == "_blank"
+                assert menu.get_by_role("link", name="Тема на 4PDA").get_attribute("href") == topic
+                page.screenshot(path=str(cfg.data_dir / f"source-menu-{width}-{theme}.png"), full_page=True)
+                with page.expect_popup() as opened:
+                    menu.get_by_role("link", name="Скачать из источника · 4PDA", exact=True).click()
+                popup = opened.value
+                popup.wait_for_url("https://4pda.to/forum/dl/post/123/example.apk", timeout=5000)
+                popup.close()
+                assert page.url == "https://apps.example/android"
                 page.get_by_role("button", name="Сменить источник", exact=True).first.click()
                 dialog = page.get_by_role("dialog", name="Источник · Shared app")
                 assert dialog.is_visible()

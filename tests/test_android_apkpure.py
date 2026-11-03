@@ -76,6 +76,7 @@ def test_apkpure_fetch_checks_sha1(tmp_path):
     got = src.fetch("apkpure", K9, tmp_path / "a.apk")
     assert (tmp_path / "a.apk").read_bytes() == body and (got.name, got.expected_signer) == ("K-9 Mail", "")
     assert got.icon.startswith(b"\x89PNG")
+    assert src.download_url("apkpure", K9) == url
     assert src.latest("apkpure", K9, "") == sources.Latest(39046, "", True)
     http.files[url] = b"APX"
     with pytest.raises(net.SourceError, match="контрольн"):

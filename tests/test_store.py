@@ -14,13 +14,16 @@ def test_rotation_keeps_current_and_previous_and_removes_older(conn, cfg, clock,
     assert store.list_apps(conn, 1)[0].status == "ok"
 
 
-def test_upgrade_from_v8_preserves_versions_and_adds_recovery_state(cfg, clock):
+@pytest.mark.parametrize("version", [8, 9])
+def test_upgrade_preserves_versions_and_adds_recovery_state(cfg, clock, version):
     c = store.connect(cfg.db)
     seed_app(c, cfg, clock, versions=("1.0",))
-    for name in ("signature_verified", "rotation_min_sdk"):
-        c.execute(f"ALTER TABLE android_versions DROP COLUMN {name}")
+    if version == 8:
+        for name in ("signature_verified", "rotation_min_sdk"):
+            c.execute(f"ALTER TABLE android_versions DROP COLUMN {name}")
+    c.execute("ALTER TABLE android_apps DROP COLUMN source_page")
     c.execute("DROP TABLE removed_retries")
-    c.execute("PRAGMA user_version=8")
+    c.execute(f"PRAGMA user_version={version}")
     c.close()
     c = store.connect(cfg.db)
     try:
@@ -28,6 +31,7 @@ def test_upgrade_from_v8_preserves_versions_and_adds_recovery_state(cfg, clock):
         assert store.current_version(c, 1, 123)["version"] == "1.0"
         columns = {r["name"]: r["dflt_value"] for r in c.execute("PRAGMA table_info(android_versions)")}
         assert columns["signature_verified"] == columns["rotation_min_sdk"] == "0"
+        assert "source_page" in {r["name"] for r in c.execute("PRAGMA table_info(android_apps)")}
         assert c.execute("SELECT COUNT(*) FROM removed_retries").fetchone()[0] == 0
     finally:
         c.close()

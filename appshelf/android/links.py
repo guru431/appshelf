@@ -58,6 +58,42 @@ def parse(url: str) -> tuple[str, str]:
     return source, ref
 
 
+def page_url(source: str, ref: str, saved: str = "") -> str:
+    """Публичная страница источника; только проверенные адреса, без сетевых запросов."""
+    if source == "fourpda":
+        if not saved:
+            return ""
+        try:
+            return fourpda.topic_url(saved)
+        except SourceError:
+            return ""
+    if source == "github":
+        repo = github.parse_ref(ref)
+        return f"https://github.com/{repo}" if repo else ""
+    if source == "appgallery":
+        if APPGALLERY_ID_RE.fullmatch(ref):
+            return f"https://appgallery.huawei.com/app/{ref}"
+        if saved:
+            try:
+                parsed_source, app_id = parse(saved)
+                if parsed_source == source and APPGALLERY_ID_RE.fullmatch(app_id):
+                    return f"https://appgallery.huawei.com/app/{app_id}"
+            except FetchError:
+                pass
+        return ""
+    package = ref.split("@", 1)[0]
+    if not PACKAGE_RE.fullmatch(package):
+        return ""
+    return {
+        "rustore": f"https://www.rustore.ru/catalog/app/{package}",
+        "play": f"https://play.google.com/store/apps/details?id={package}",
+        "fdroid": f"https://f-droid.org/packages/{package}/",
+        "fdroid_archive": f"https://f-droid.org/packages/{package}/",
+        "izzy": f"https://apt.izzysoft.de/fdroid/index/apk/{package}",
+        "apkpure": f"https://apkpure.com/app/{package}",
+    }.get(source, "")
+
+
 def _page(u: urllib.parse.SplitResult) -> tuple[str, str] | None:
     """Адрес — страница приложения в магазине: (источник, то, что стоит на месте пакета или ID); нет — None."""
     host = (u.hostname or "").lower()

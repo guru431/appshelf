@@ -60,6 +60,9 @@ def test_rustore_sends_version_header():
 
 def test_apk_url_takes_apk_instead_of_zip_wrapper():
     assert rustore.apk_url(rustore_http(), 462271) == APK
+    http = rustore_http()
+    assert sources.Sources(http, sleep=lambda _: None).download_url("rustore", "ru.sberbankmobile") == APK
+    assert all(call[0] == "json" for call in http.calls)
 
 
 def test_unknown_format_is_source_error():

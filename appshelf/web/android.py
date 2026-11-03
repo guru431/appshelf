@@ -145,6 +145,8 @@ def register_routes(app, w) -> None:
                 if db.get_app(c, target.id, package) is None:
                     db.put_app(c, target.id, package, original["name"], original["source"], original["source_ref"],
                                w.now(), google_account_id=original["google_account_id"])
+                    c.execute("UPDATE android_apps SET source_page=? WHERE shelf_id=? AND package=?",
+                              (original["source_page"], target.id, package))
                     db.enqueue(c, target.id, "copy", w.now(), package=package, payload={"from_shelf": source.id})
         return back(PUBLIC.prefix)
 
@@ -334,7 +336,7 @@ def _register_scope(app, w, scope: Scope):
         resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners, **filters,
                       busy=busy, nightly=nightly, fresh=fresh, statuses=statuses, waiting=waiting,
                       status_url=f"/api/android/status?person={request.state.who.id}" + ("&public=1" if scope.public else ""), sources=SOURCES,
-                      notices=NOTICES,
+                      notices=NOTICES, source_page=links.page_url,
                       android_version=apk.android_version, apk_name=fetch.apk_name,
                       url=lambda d, f: fetch.file_url(cfg, shelf, d, f),
                       app_url=lambda package: fetch.app_url(cfg, shelf, package), prefix=p, public=scope.public,
@@ -439,7 +441,8 @@ def _register_scope(app, w, scope: Scope):
                 db.enqueue(c, shelf.id, "check", w.now(), package=package,
                            payload={"previous": previous} if previous else None)
             else:
-                payload = {"source": app["source"], "ref": app["source_ref"], "name": app["name"]}
+                payload = {"source": app["source"], "ref": app["source_ref"], "name": app["name"],
+                           "source_page": app["source_page"]}
                 if app["source"] == "apkpure":
                     payload["ack"] = ack
                 db.enqueue(c, shelf.id, "add", w.now(), package=package, payload=payload)
@@ -447,6 +450,30 @@ def _register_scope(app, w, scope: Scope):
     @app.get(p, response_class=HTMLResponse)
     def android_catalog(request: Request):
         return catalog_page(request)
+
+    @app.get(p + "/apps/{package}/source/{action}")
+    def open_source(request: Request, package: str, action: str):
+        with w.conn() as c:
+            _, original = own(c, request, package)
+        if original is None or action not in ("download", "page"):
+            return not_found()
+        source, ref = original["source"], original["source_ref"]
+        try:
+            if action == "download":
+                if source in ("upload", "play"):
+                    return not_found()
+                target = w.env.sources.download_url(source, ref)
+            else:
+                target = links.page_url(source, ref, original["source_page"])
+                if not target and source == "appgallery":
+                    target = links.page_url(source, w.env.sources._appgallery(ref).app_id)
+                if not target:
+                    return not_found()
+            net.check_url(target)
+        except (net.SourceError, net.FetchError) as e:
+            return catalog_page(request, 502, f"Не удалось открыть источник: {e}")
+        return RedirectResponse(target, status_code=302,
+                                headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
     @app.get(f"{p}/add", response_class=HTMLResponse, dependencies=deps)
     def android_add(request: Request, q: str = ""):
@@ -688,7 +715,7 @@ def _register_scope(app, w, scope: Scope):
             old = db.get_app(c, shelf.id, package)
             db.set_source(c, shelf.id, package, source, ref)
             requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1",
-                    previous=[old["source"], old["source_ref"], old["source_etag"]])
+                    previous=[old["source"], old["source_ref"], old["source_etag"], old["source_page"]])
         return back(p)
 
     @app.post(p + "/jobs/{job_id}/dismiss", dependencies=deps)

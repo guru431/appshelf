@@ -233,13 +233,15 @@ def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cf
     web.sessions.http.files[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Download</a>')[2]
     web.sessions.http.files[GATE] = apk.read_bytes()
     web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
-    result = web.client.post(path, data={"url": FILE, "name": "Example", "user_id": "999"}, follow_redirects=False)
+    result = web.client.post(path, data={"url": FILE, "name": "Example", "user_id": "999", "topic": TOPIC},
+                             follow_redirects=False)
     assert result.status_code == 303
     job = db.take_job(conn)
     assert COOKIE not in job["payload"] and "dlsess" not in job["payload"]
     fetch.run_job(web.app.state.w.env, conn, job)
     shelf = db.shelf_for_user(conn, 1)
     app = db.get_app(conn, shelf.id, "ru.example.app")
+    assert app["source_page"] == (TOPIC if path == "/android/4pda/add" else "")
     assert app["status"] == "ok" and app["source"] == "fourpda" and app["source_ref"] == FILE
     assert db.current_version(conn, shelf.id, "ru.example.app") is not None
     assert COOKIE not in web.client.get("/android").text

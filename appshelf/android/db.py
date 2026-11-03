@@ -66,6 +66,7 @@ class AppView:
     pending: sqlite3.Row | None
     paid: bool = False      # Google Play: купленное
     versions: tuple[sqlite3.Row, ...] = ()  # доступные APK по убыванию versionCode, без pending
+    source_page: str = ""   # страница добавления, если её нельзя восстановить из source_ref (4PDA)
 
 
 # --- полки -------------------------------------------------------------------
@@ -172,10 +173,10 @@ def set_etag(c, shelf_id: int, package: str, etag: str) -> None:
     c.execute("UPDATE android_apps SET source_etag=? WHERE shelf_id=? AND package=?", (etag, shelf_id, package))
 
 
-def set_source(c, shelf_id: int, package: str, source: str, source_ref: str) -> None:
+def set_source(c, shelf_id: int, package: str, source: str, source_ref: str, source_page: str = "") -> None:
     """Сменить источник карточки: версии остаются, признаки прежней ссылки — нет."""
-    c.execute("UPDATE android_apps SET source=?, source_ref=?, source_etag='' WHERE shelf_id=? AND package=?",
-              (source, source_ref, shelf_id, package))
+    c.execute("UPDATE android_apps SET source=?, source_ref=?, source_page=?, source_etag='' WHERE shelf_id=? AND package=?",
+              (source, source_ref, source_page, shelf_id, package))
 
 
 def list_apps(c, shelf_id: int) -> list[AppView]:
@@ -187,7 +188,7 @@ def list_apps(c, shelf_id: int) -> list[AppView]:
         out.append(AppView(a["package"], a["name"], a["source"], a["source_ref"], a["signer"], a["status"],
                            a["last_error"], a["checked_at"], a["check_result"], vs.get("current"),
                            vs.get("previous"), vs.get("kept"), vs.get("pending"), bool(a["paid"]),
-                           tuple(v for v in versions if v["role"] != "pending")))
+                           tuple(v for v in versions if v["role"] != "pending"), a["source_page"]))
     return sorted(out, key=lambda v: (v.name.casefold(), v.package))
 
 

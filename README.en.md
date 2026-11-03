@@ -36,6 +36,9 @@ The web UI is in Russian.
   for new versions, a signing rule (see "Android").
 - A public Android shelf: the owner fills it, a guest opens it with a 6-digit PIN and can only install; brute-force
   protection.
+- The Android app's “⋯” menu downloads an APK directly from its current source and opens the app's page.
+  Selecting a 4PDA attachment also saves its topic; the browser may require forum sign-in.
+  The source build may differ from the version selected on the shelf. Google Play provides only a store page.
 
 ## How it works
 

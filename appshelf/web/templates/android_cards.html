@@ -89,6 +89,14 @@
   {% if edit %}
   <details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
     <div class="sheet action-list">
+      {% if a.source in sources and a.source not in ('upload', 'play') %}
+      <a class="btn secondary" href="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/source/download') }}" target="_blank" rel="noopener noreferrer"
+        title="Сборка из текущего источника; её версия может отличаться от выбранной на полке{{ '; может потребоваться вход на 4PDA' if a.source == 'fourpda' }}">Скачать из источника · {{ sources[a.source] }}</a>
+      {% endif %}
+      {% set page = source_page(a.source, a.source_ref, a.source_page) %}
+      {% if page or a.source == 'appgallery' %}
+      <a class="btn secondary" href="{{ page or post_url(prefix ~ '/apps/' ~ a.package ~ '/source/page') }}" target="_blank" rel="noopener noreferrer">{{ 'Тема на 4PDA' if a.source == 'fourpda' else 'Страница приложения' }}</a>
+      {% endif %}
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
         {% elif not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">

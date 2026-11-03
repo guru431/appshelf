@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .. import apk, ipa, jobs, notify, people, store
 from ..ipatool import IpatoolError
-from . import db, fdroid_index, net, play
+from . import db, fdroid_index, links, net, play
 from .net import SourceError
 from .sources import ACCOUNT_GONE, SplitOnly
 
@@ -165,7 +165,8 @@ def play_expired(env, c, gid: int) -> None:
 
 
 def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, expected_package: str | None,
-              name_hint: str, account=None, ack: bool = False, allow_older: bool = False) -> tuple[str, str, str]:
+              name_hint: str, account=None, ack: bool = False, allow_older: bool = False,
+              source_page: str = "") -> tuple[str, str, str]:
     """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания: (пакет, итог, метка
     карточки). account — Google-аккаунт источника play. Сверка с RuStore (план этапа 5): APKPure — подпись обязана
     совпасть, нет пакета в RuStore — нужна галочка ack (у приложения на полке подпись уже задана) и метка «не
@@ -218,9 +219,15 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                     current = db.current_version(c, shelf.id, package)
                     track_attachment = current is None or pending["version_code"] > current["version_code"]
                 if track_attachment:
-                    db.set_source(c, shelf.id, package, source, ref)
+                    db.set_source(c, shelf.id, package, source, ref, source_page or app["source_page"])
             if got.ref and got.ref != ref and app is not None and (app["source"], app["source_ref"]) == (source, ref):
-                db.set_source(c, shelf.id, package, source, got.ref)  # AppGallery: ID со страницы → пакет
+                db.set_source(c, shelf.id, package, source, got.ref, got.page_url or app["source_page"])
+            app = db.get_app(c, shelf.id, package)
+            if app is not None and (app["source"], app["source_ref"]) == (source, got.ref or ref):
+                page = links.page_url(source, ref, got.page_url or source_page or app["source_page"])
+                if page:
+                    c.execute("UPDATE android_apps SET source_page=? WHERE shelf_id=? AND package=?",
+                              (page, shelf.id, package))
             if got.etag and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_etag(c, shelf.id, package, got.etag)
             if source == "play" and app is not None:
@@ -343,7 +350,7 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
         if ipa.sha256(path) != version["sha256"]:
             raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
         icon = (folder / "icon.png").read_bytes()
-        db.set_source(c, shelf.id, package, original["source"], original["source_ref"])
+        db.set_source(c, shelf.id, package, original["source"], original["source_ref"], original["source_page"])
         c.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=? AND package=?",
                   (original["google_account_id"], shelf.id, package))
         store_apk(env, c, shelf, path, source=original["source"], source_ref=original["source_ref"],
@@ -375,7 +382,8 @@ def run_job(env, c, job) -> None:
             gid = payload.get("account") or gid
             _, result, _ = _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
                                     name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid),
-                                    ack=payload.get("ack") is True, allow_older=True)
+                                    ack=payload.get("ack") is True, allow_older=True,
+                                    source_page=payload.get("source_page", ""))
             if result == "same":
                 raise apk.ApkError("этот APK уже на полке или был отклонён — выберите другую сборку")
         elif job["kind"] == "copy":
@@ -398,7 +406,7 @@ def run_job(env, c, job) -> None:
             except (apk.ApkError, net.FetchError, SourceError) as e:
                 if not previous:
                     raise
-                db.set_source(c, shelf.id, package, previous[0], previous[1])
+                db.set_source(c, shelf.id, package, previous[0], previous[1], previous[3] if len(previous) > 3 else "")
                 db.set_etag(c, shelf.id, package, previous[2] or "")
                 raise SourceError(describe(e) + NOT_CHANGED) from e
         db.finish_job(c, job["id"], "done", env.now())

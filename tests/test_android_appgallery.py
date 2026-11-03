@@ -66,6 +66,8 @@ def test_appgallery_fetch_by_id_checks_file(tmp_path):
     got = src.fetch("appgallery", VTB_ID, tmp_path / "a.apk")
     assert (tmp_path / "a.apk").read_bytes() == b"APK"
     assert (got.name, got.expected_signer, got.ref) == ("Банк ВТБ", "", VTB) and got.icon.startswith(b"\x89PNG")
+    assert got.page_url == f"https://appgallery.huawei.com/app/{VTB_ID}"
+    assert src.download_url("appgallery", VTB) == url
     assert src.fetch("appgallery", VTB, tmp_path / "b.apk").ref == VTB              # пакет — без appdl
     assert [c[0] for c in http.calls].count("head") == 1
     http.files[url] = b"APX"                                                          # битый файл
