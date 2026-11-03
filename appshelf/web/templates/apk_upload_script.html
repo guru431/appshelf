@@ -1,0 +1,76 @@
+<script>
+(function () {
+  if (!window.XMLHttpRequest || !window.FormData) return;
+  function size(bytes) {
+    if (bytes < 1048576) return Math.ceil(bytes / 1024) + ' КБ';
+    return (bytes / 1048576).toLocaleString('ru-RU', {maximumFractionDigits: 1}) + ' МБ';
+  }
+  document.querySelectorAll('form[data-apk-upload]').forEach(function (form) {
+    var active = false, feedback = form.querySelector('[data-upload-feedback]');
+    var progress = form.querySelector('[data-upload-progress]'), status = form.querySelector('[data-upload-status]');
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (active) return;
+      var file = form.elements.file.files[0];
+      if (!file) { form.reportValidity(); return; }
+      var body = new FormData(form), xhr = new XMLHttpRequest(), button = form.querySelector('button');
+      var label = button.textContent;
+      var controls = Array.from(form.elements).map(function (control) {
+        return {element: control, disabled: control.disabled};
+      });
+      active = true; feedback.hidden = false; progress.value = 0;
+      status.className = 'meta'; status.textContent = 'Отправляем APK · 0 % · 0 из ' + size(file.size);
+      form.setAttribute('aria-busy', 'true');
+      controls.forEach(function (control) { control.element.disabled = true; });
+      button.textContent = 'Загрузка…';
+      feedback.scrollIntoView({block: 'nearest'});
+      function fail(message) {
+        if (!active) return;
+        active = false; form.removeAttribute('aria-busy');
+        controls.forEach(function (control) { control.element.disabled = control.disabled; });
+        button.textContent = label; status.className = 'meta err'; status.textContent = message;
+        feedback.scrollIntoView({block: 'nearest'});
+      }
+      xhr.upload.addEventListener('progress', function (event) {
+        if (!active) return;
+        if (event.lengthComputable && event.total > 0) {
+          var percent = Math.min(100, Math.floor(event.loaded / event.total * 100));
+          progress.value = percent;
+          status.textContent = 'Отправляем APK · ' + percent + ' % · ' + size(event.loaded) + ' из ' + size(event.total);
+        } else {
+          progress.removeAttribute('value');
+          status.textContent = 'Отправляем APK · передано ' + size(event.loaded);
+        }
+      });
+      xhr.upload.addEventListener('load', function () {
+        if (!active) return;
+        progress.value = 100;
+        status.textContent = 'Передано 100 %. Ожидаем ответ сервера…';
+      });
+      xhr.addEventListener('load', function () {
+        if (!active) return;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          status.textContent = 'Файл загружен. Открываем полку…';
+          location.assign(form.dataset.uploadTarget);
+        } else if (xhr.status === 413) {
+          fail('Файл больше допустимого размера. Выберите APK до 1 ГБ.');
+        } else if (xhr.status === 401) {
+          fail('Сессия истекла. Обновите страницу и войдите снова.');
+        } else {
+          fail('Сервер не принял загрузку (HTTP ' + xhr.status + '). Повторите отправку или обновите страницу.');
+        }
+      });
+      xhr.addEventListener('error', function () {
+        fail('Не удалось отправить APK: соединение прервалось или браузер не смог прочитать файл. Повторите загрузку.');
+      });
+      xhr.addEventListener('abort', function () { fail('Отправка APK прервана. Можно повторить загрузку.'); });
+      try {
+        xhr.open('POST', form.action);
+        xhr.send(body);
+      } catch (error) {
+        fail('Не удалось начать отправку APK. Выберите файл заново и повторите загрузку.');
+      }
+    });
+  });
+}());
+</script>

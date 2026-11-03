@@ -14,6 +14,90 @@ from test_web_android import work
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("path", ["/android/add", "/android/public"])
+@pytest.mark.parametrize("width", [320, 390, 1280])
+def test_apk_upload_progress_and_retry_after_failure(web, conn, cfg, clock, tmp_path,
+                                                    path, width, local_chromium):
+    """Drive transport events deterministically while keeping the real form and browser UI."""
+    public = db.ensure_public_shelf(conn, clock.iso())
+    db.put_app(conn, public.id, PKG, "Shared app", "upload", "", clock.iso())
+    apk = make_apk(tmp_path / "selected.apk")
+
+    def route(target):
+        url = urlsplit(target.request.url)
+        response = web.client.get(url.path + ("?" + url.query if url.query else ""))
+        target.fulfill(status=response.status_code, headers=dict(response.headers), body=response.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844})
+            page.add_init_script("""window.uploadRequests = [];
+              window.XMLHttpRequest = class extends EventTarget {
+                constructor() { super(); this.upload = new EventTarget(); this.status = 0; }
+                open(method, url) { this.method = method; this.url = url; }
+                send(body) { this.body = body; window.uploadRequests.push(this); }
+              };""")
+            page.route("https://apps.example/**", route)
+            for theme in ("light", "dark"):
+                web.client.get(f"/theme?set={theme}")
+                page.goto("https://apps.example" + path)
+                if path == "/android/public":
+                    page.get_by_label("Действия с Shared app", exact=True).click()
+                    page.get_by_role("button", name="Сменить источник", exact=True).click()
+                form = page.locator("form[data-apk-upload]")
+                file = form.locator('input[type="file"]')
+                file.set_input_files(apk)
+                button = form.get_by_role("button", name="Загрузить", exact=True)
+                button.click()
+                status = form.get_by_role("status")
+                progress = form.get_by_role("progressbar")
+                assert progress.is_visible() and "0 %" in status.inner_text()
+                assert file.is_disabled() and form.get_by_role("button", name="Загрузка…", exact=True).is_disabled()
+                assert form.get_attribute("aria-busy") == "true"
+                form.evaluate("f => f.dispatchEvent(new Event('submit', {cancelable:true}))")
+                assert page.evaluate("uploadRequests.length") == 1
+                assert page.evaluate("uploadRequests[0].method") == "POST"
+                assert page.evaluate("uploadRequests[0].url").endswith(form.get_attribute("action"))
+                assert page.evaluate("uploadRequests[0].body.get('file').name") == "selected.apk"
+                page.evaluate("""() => uploadRequests[0].upload.dispatchEvent(new ProgressEvent('progress', {
+                  lengthComputable:true, loaded:80*1048576, total:160*1048576}))""")
+                assert progress.get_attribute("value") == "50"
+                assert "50 % · 80 МБ из 160 МБ" in status.inner_text()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                if path == "/android/add":
+                    assert status.evaluate("e => e.getBoundingClientRect().bottom <= innerHeight - 72")
+                if path == "/android/add":
+                    page.screenshot(path=str(cfg.data_dir / f"upload-progress-{width}-{theme}.png"), full_page=True)
+                page.evaluate("uploadRequests[0].upload.dispatchEvent(new ProgressEvent('load'))")
+                assert "Ожидаем ответ сервера" in status.inner_text() and progress.get_attribute("value") == "100"
+                assert form.get_by_role("button", name="Загрузка…", exact=True).is_disabled()
+                page.evaluate("uploadRequests[0].status = 400; uploadRequests[0].dispatchEvent(new Event('load'))")
+                assert "HTTP 400" in status.inner_text() and button.is_enabled() and file.is_enabled()
+                assert form.get_attribute("aria-busy") is None
+                assert file.evaluate("f => f.files[0].name") == "selected.apk"
+                button.click()
+                assert page.evaluate("uploadRequests.length") == 2
+                page.evaluate("uploadRequests[1].dispatchEvent(new Event('error'))")
+                assert "соединение прервалось" in status.inner_text() and button.is_enabled()
+                if path == "/android/public":
+                    page.screenshot(path=str(cfg.data_dir / f"upload-error-{width}-{theme}.png"), full_page=True)
+                button.click()
+                page.evaluate("""() => uploadRequests[2].upload.dispatchEvent(new ProgressEvent('progress', {
+                  lengthComputable:false, loaded:31*1048576}))""")
+                assert progress.get_attribute("value") is None and "передано 31 МБ" in status.inner_text()
+                page.evaluate("uploadRequests[2].status = 413; uploadRequests[2].dispatchEvent(new Event('load'))")
+                assert "до 1 ГБ" in status.inner_text() and button.is_enabled()
+                button.click()
+                page.evaluate("uploadRequests[3].status = 401; uploadRequests[3].dispatchEvent(new Event('load'))")
+                assert "войдите снова" in status.inner_text() and button.is_enabled()
+            assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 0
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("prefix", ["/android", "/android/public"])
 def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix, local_chromium):
     """Android file providers may report APKs as binary data or ZIP archives."""
@@ -26,7 +110,7 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
                                     content=request.post_data_buffer,
                                     headers={"user-agent": request.headers.get("user-agent", ""),
                                              "content-type": request.headers.get("content-type", "")},
-                                    follow_redirects=False)
+                                    follow_redirects=request.resource_type == "xhr")
         target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
 
     playwright, executable = local_chromium
@@ -35,6 +119,9 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
         try:
             page = browser.new_page(viewport={"width": 390, "height": 844},
                                     user_agent="Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile")
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("requestfailed", lambda request: errors.append(request.failure))
             page.route("https://apps.example/**", route)
             page.goto("https://apps.example" + prefix + "/add")
             for code, mime in ((1, "application/octet-stream"), (2, "application/zip")):
@@ -51,7 +138,9 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
                                 version_code=code, version_name=f"{code}.0", label="Upload app")
                 chooser.set_files({"name": f"Приложение {code}.apk", "mimeType": mime, "buffer": path.read_bytes()})
                 form.get_by_role("button", name="Загрузить", exact=True).click()
-                page.wait_for_url("https://apps.example" + prefix)
+                page.wait_for_function("""prefix => location.pathname === prefix ||
+                  document.querySelector('[data-upload-status].err')""", arg=prefix, timeout=10000)
+                assert page.url == "https://apps.example" + prefix, (errors, form.inner_text())
                 work(web, conn)
                 page.reload()
                 assert page.get_by_label("Действия с Upload app", exact=True).is_visible()
