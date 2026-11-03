@@ -23,6 +23,7 @@
   <div class="body">
     <div class="app-info">
     <div><b>{{ a.name }}</b>
+      {%- if can_publish and a.package in public_packages %} <span class="public-mark" role="img" aria-label="На публичной полке" title="На публичной полке">✓</span>{% endif %}
       {%- if a.package in fresh %}{% set d = v['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}
       {%- if a.pending %} <span class="tag">подпись сменилась</span>{% endif %}
       {%- if a.paid %} <span class="tag">купленное</span>{% endif %}
