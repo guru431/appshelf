@@ -12,6 +12,7 @@ from appshelf.android import db, fdroid, fdroid_index as index, net, sources
 
 PKG = "org.telegram.messenger"
 ARCHIVE = "https://f-droid.org/archive/"
+IZZY = "https://apt.izzysoft.de/fdroid/repo/"
 
 
 def catalog(builds=(), package=PKG, name="Telegram FOSS", upstream="https://github.com/example/telegram"):
@@ -92,6 +93,47 @@ def test_bad_pinned_refs():
     for ref in (PKG + "@-1", PKG + "@../../x", PKG + "@" + "1" * 100, "../x@1"):
         with pytest.raises(net.SourceError):
             index.split_ref(ref)
+
+
+def test_repository_key_and_cache_are_isolated(tmp_path, monkeypatch):
+    raw = catalog([build(2, "new")])
+    http = FakeHttp(raw={IZZY + "entry.jar": (200, {}, raw),
+                         "https://f-droid.org/repo/entry.jar": (200, {}, raw)})
+    verified = []
+    monkeypatch.setattr(index, "verify", lambda data, signer: verified.append(signer))
+    official = index.Catalog(http, cache_dir=tmp_path)
+    izzy = index.Catalog(http, repository="izzy", cache_dir=tmp_path)
+    assert official.info(PKG)[1].code == izzy.info(PKG)[1].code == 2
+    assert verified == [index.REPO_SIGNER, index.IZZY_SIGNER]
+    assert official.cache != izzy.cache
+    saved = json.loads(izzy.cache.read_bytes())
+    assert saved["repo"] == IZZY and saved["signer"] == index.IZZY_SIGNER
+    izzy.cache.write_bytes(official.cache.read_bytes())
+    with pytest.raises(net.SourceError, match="кэш.*повреждён"):
+        index.Catalog(http, repository="izzy", cache_dir=tmp_path).info(PKG)
+
+
+def test_izzy_download_hash_versions_and_nightly(tmp_path, conn, clock, acct):
+    body = make_apk(tmp_path / "test.apk", package=PKG, version_code=2, version_name="new").read_bytes()
+    signer = apk.read_apk(tmp_path / "test.apk").signer
+    raw = catalog([{**build(2, "new", body), "signer": signer}])
+    http = FakeHttp(raw={IZZY + "entry.jar": (200, {}, raw)}, files={IZZY + PKG + "_2.apk": body})
+    src = sources.Sources(http, sleep=lambda _: None, pause=0)
+    dest = tmp_path / "out.apk"
+    got = src.fetch("izzy", PKG + "@2", dest)
+    assert apk.read_apk(dest).package == PKG and got.etag == "izzy:2"
+    assert got.expected_signer == signer
+    assert not src.latest("izzy", PKG, got.etag).changed
+    assert src.latest("izzy", PKG, "izzy:1").changed
+    assert not src.latest("izzy", PKG + "@2", got.etag).changed
+    http.files[IZZY + PKG + "_2.apk"] = b"wrong"
+    with pytest.raises(net.SourceError, match="SHA-256"):
+        src.fetch("izzy", PKG, dest)
+    assert not dest.exists()
+    shelf = db.ensure_shelf(conn, acct.user_id, clock.iso())
+    db.put_app(conn, shelf.id, PKG, "Example", "izzy", PKG, clock.iso())
+    db.set_status(conn, shelf.id, PKG, "ok")
+    assert [a["source"] for a in db.apps_to_check(conn)] == ["izzy"]
 
 
 def test_persistent_cache_survives_restart_and_marks_stale_search(tmp_path):

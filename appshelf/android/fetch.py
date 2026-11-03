@@ -21,7 +21,7 @@ from .sources import ACCOUNT_GONE, SplitOnly
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
                 "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "архивом F-Droid",
-                "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
+                "izzy": "IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
 SIGNER_DIFFERS = "подписан не так, как в RuStore: не встанет поверх версии оттуда"
@@ -187,7 +187,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             got = env.sources.fetch(source, ref, work / "app.apk", account=account,
                                     allow_paid=_own_shelf(shelf, account), **private)
             want = got.ref or (ref if source in PACKAGE_REFS else "")
-            if source in ("fdroid", "fdroid_archive"):
+            if source in fdroid_index.REPOSITORIES:
                 want = fdroid_index.split_ref(ref)[0]
             if want and (found := apk.read_apk(work / "app.apk").package) != want:
                 # сверяли подпись и карточку этого пакета, а пришёл другой — не на полку
@@ -195,7 +195,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
             expected, signer_from, notice = got.expected_signer, "", ""
             if source == "apkpure":
                 expected, signer_from, notice = (reference, "rustore", "") if reference else ("", "", NOT_VERIFIED)
-            elif source in ("appgallery", "fdroid", "fdroid_archive"):
+            elif source == "appgallery" or source in fdroid_index.REPOSITORIES:
                 try:
                     reference = env.sources.rustore_signature(want)
                 except SourceError:  # метка — подсказка, не защита: RuStore не ответил — без неё

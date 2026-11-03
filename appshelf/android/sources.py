@@ -71,6 +71,7 @@ class Sources:
         self._last: float | None = None
         self.fdroid_catalog = fdroid_index.Catalog(http, clock=clock, cache_dir=cache_dir)
         self.fdroid_archive = fdroid_index.Catalog(http, archive=True, clock=clock, cache_dir=cache_dir)
+        self.izzy_catalog = fdroid_index.Catalog(http, repository="izzy", clock=clock, cache_dir=cache_dir)
         self._github_cache = {}
         self._github_lock = threading.Lock()
 
@@ -136,9 +137,9 @@ class Sources:
             self._wait()
             mark = self.github_app(ref).mark
             return Latest(None, mark, mark != stored_etag)
-        if source in ("fdroid", "fdroid_archive"):
+        if source in fdroid_index.REPOSITORIES:
             # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
-            if source == "fdroid_archive" or "@" in ref:
+            if source != "fdroid" or "@" in ref:
                 _, build = self._fdroid_index(source).info(ref, self._wait)
                 mark = f"{source}:{build.code}"
             else:
@@ -189,8 +190,8 @@ class Sources:
             self._wait()
             appgallery.download(self.http, app, dest)
             return Got(app.name, "", self._icon(app.icon_url, dest), ref=app.package)
-        if source in ("fdroid", "fdroid_archive"):
-            if source == "fdroid_archive" or "@" in ref:
+        if source in fdroid_index.REPOSITORIES:
+            if source != "fdroid" or "@" in ref:
                 return self._fetch_fdroid_index(source, ref, dest)
             try:
                 return self._fetch_fdroid(ref, dest)
@@ -259,7 +260,7 @@ class Sources:
         return SplitOnly(SPLIT_TEXT + hint, alternatives)
 
     def _fdroid_index(self, source: str) -> fdroid_index.Catalog:
-        return self.fdroid_archive if source == "fdroid_archive" else self.fdroid_catalog
+        return {"fdroid": self.fdroid_catalog, "fdroid_archive": self.fdroid_archive, "izzy": self.izzy_catalog}[source]
 
     def _fetch_fdroid_index(self, source: str, ref: str, dest: Path) -> Got:
         catalog = self._fdroid_index(source)

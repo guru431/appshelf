@@ -1,4 +1,4 @@
-"""Каталоги основного и архивного F-Droid: поиск, версии, ссылки на исходный GitHub.
+"""Каталоги F-Droid, его архива и IzzyOnDroid: поиск, версии, ссылки на исходный GitHub.
 
 entry.jar проверяется Java JarFile по закреплённому сертификату; его SHA-256 аутентифицирует index-v2.json.
 Нормализованный кэш живёт на локальном диске; APK сверяется с SHA-256 принятого каталога.
@@ -31,6 +31,13 @@ TTL = 6 * 3600
 MAX_AGE = 14 * 86400
 # Official repository key: https://f-droid.org/docs/Release_Channels_and_Signing_Keys/
 REPO_SIGNER = "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
+# Published at https://apt.izzysoft.de/fdroid/ (repository link with fingerprint).
+IZZY_SIGNER = "3bf0d6abfeae2f401707b6d966be743bf0eee49c2561b9ba39073711f628937a"
+REPOSITORIES = {
+    "fdroid": ("https://f-droid.org/repo/", REPO_SIGNER, "repo.json"),
+    "fdroid_archive": ("https://f-droid.org/archive/", REPO_SIGNER, "archive.json"),
+    "izzy": ("https://apt.izzysoft.de/fdroid/repo/", IZZY_SIGNER, "izzy.json"),
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 wall_time = time.time
 
@@ -86,11 +93,11 @@ class App:
 
 class Catalog:
     def __init__(self, http: Http, *, archive: bool = False, clock=time.monotonic,
-                 cache_dir: Path | None = None, wall_clock=None):
+                 cache_dir: Path | None = None, wall_clock=None, repository: str = "fdroid"):
         self.http, self.clock = http, clock
         self.wall_clock = wall_clock or wall_time
-        self.repo = f"https://f-droid.org/{'archive' if archive else 'repo'}/"
-        self.cache = cache_dir / ("archive.json" if archive else "repo.json") if cache_dir else None
+        self.repo, self.signer, cache_name = REPOSITORIES["fdroid_archive" if archive else repository]
+        self.cache = cache_dir / cache_name if cache_dir else None
         self._apps: dict[str, App] | None = None
         self._until = 0.0
         self._timestamp = 0
@@ -115,7 +122,7 @@ class Catalog:
                         raise
                     self.stale = True
                     return self._apps
-                verify(raw)
+                verify(raw, self.signer)
                 entry = _index_data(raw)
                 timestamp = index_timestamp(raw)
                 if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
@@ -160,7 +167,7 @@ class Catalog:
             if self.cache.stat().st_size > MAX_INDEX:
                 raise ValueError()
             data = json.loads(self.cache.read_bytes())
-            if data["schema"] != 1 or data["repo"] != self.repo or data["signer"] != REPO_SIGNER:
+            if data["schema"] != 1 or data["repo"] != self.repo or data["signer"] != self.signer:
                 raise ValueError()
             self._apps = {p: App(p, a["name"], a["upstream"], a["suggested"],
                                 tuple(Build(**{**b, "abis": tuple(b["abis"])}) for b in a["builds"]))
@@ -181,7 +188,7 @@ class Catalog:
                 saved = json.loads(self.cache.read_bytes())
                 if int(saved["timestamp"]) > timestamp:
                     raise SourceError("откат версии каталога F-Droid")
-            data = {"schema": 1, "repo": self.repo, "signer": REPO_SIGNER, "timestamp": timestamp,
+            data = {"schema": 1, "repo": self.repo, "signer": self.signer, "timestamp": timestamp,
                     "checked_at": self.wall_clock(), "apps": {p: asdict(a) for p, a in apps.items()}}
             fd, name = tempfile.mkstemp(dir=self.cache.parent, suffix=".partial")
             try:
@@ -230,7 +237,7 @@ def _index_data(raw: bytes) -> dict:
         return json.loads(jar.read(entry))
 
 
-def verify(raw: bytes) -> None:
+def verify(raw: bytes, signer: str | None = None) -> None:
     """Java's maintained JAR verifier; pinned certificate, signed JSON and full digest verification."""
     try:
         _index_data(raw)
@@ -239,7 +246,8 @@ def verify(raw: bytes) -> None:
             path.write_bytes(raw)
             helper = Path(__file__).resolve().parent.parent / "data" / "VerifyIndex.java"
             entry_name = "entry.json" if "index" in _index_data(raw) else "index-v1.json"
-            result = subprocess.run(["java", "-Xmx384m", "--source", "11", str(helper), str(path), REPO_SIGNER, entry_name],
+            result = subprocess.run(["java", "-Xmx384m", "--source", "11", str(helper), str(path),
+                                     signer or REPO_SIGNER, entry_name],
                                     capture_output=True, timeout=25)
             if result.returncode != 0 or result.stdout.strip() != b"verified":
                 raise SourceError("подпись каталога F-Droid не прошла проверку доверенным ключом")

@@ -13,6 +13,7 @@ def setup_search(monkeypatch):
         fdroid_index.Build("1.0", 1, "old.apk", "b" * 64, "", ())))
     src.fdroid_catalog = SimpleNamespace(search=lambda *a: [])
     src.fdroid_archive = SimpleNamespace(search=lambda *a: [app])
+    src.izzy_catalog = SimpleNamespace(search=lambda *a: [])
     monkeypatch.setattr(rustore, "search", lambda *a: [])
     monkeypatch.setattr(rustore, "info", lambda *a: (_ for _ in ()).throw(net.StatusError("404", 404)))
     monkeypatch.setattr(discovery, "discover", lambda *a, **kw: [(PKG, "Example")])
@@ -41,6 +42,15 @@ def test_partial_source_failure_keeps_other_results(monkeypatch):
     result = src.search_all("Example")
     assert result.errors == ("RuStore: 503",)
     assert any(o.source == "fdroid_archive" for o in result.options)
+
+
+def test_izzy_search_keeps_repository_and_version_choices(monkeypatch):
+    src = setup_search(monkeypatch)
+    src.izzy_catalog = src.fdroid_archive
+    result = src.search_all("https://apt.izzysoft.de/fdroid/index/apk/" + PKG)
+    option = next(o for o in result.options if o.source == "izzy")
+    assert not result.errors and option.package == PKG
+    assert option.versions == (("2.0", PKG + "@2"), ("1.0", PKG + "@1"))
 
 
 def test_exact_package_and_play_account_are_used(monkeypatch):

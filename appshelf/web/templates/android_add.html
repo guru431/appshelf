@@ -24,7 +24,7 @@
 {% endif %}
 <h2>Найти приложение</h2>
 <form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
-<p class="hint">RuStore, F-Droid и его архив, Google Play, AppGallery и APKPure{% if not public %}, а также 4PDA вашим аккаунтом{% endif %}.
+<p class="hint">RuStore, F-Droid, его архив и IzzyOnDroid, Google Play, AppGallery и APKPure{% if not public %}, а также 4PDA вашим аккаунтом{% endif %}.
   Выберите источник: сборки одного приложения могут отличаться подписью и функциями. AppGallery и APKPure
   проверяются по найденным пакетам. Если приложение приходит набором файлов, проверяются ссылки автора на GitHub
   в описании и на его сайте. Поиска по всему GitHub нет.</p>
@@ -67,7 +67,7 @@
     var query = input.value.trim(); if (!query) return;
     if (stream) stream.close(); clearInterval(timer);
     progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {};
-    {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(function (source) {
+    {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(function (source) {
       var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
       title.textContent = names[source] + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
       row.append(title, detail); statuses.append(row); rows[source] = {row: row, detail: detail};
@@ -132,11 +132,13 @@
   <label><input type="checkbox" name="ack" value="1"> Для APKPure: APKPure распространял подменённые APK; если пакета
     нет в RuStore, подпись не с чем сверить — понимаю</label>
   <button>Добавить</button></form>
-<p class="hint">Понимает страницы приложений Google Play, AppGallery (или ID вида C102312137), F-Droid, APKPure, RuStore и репозитории GitHub —
+<p class="hint">Понимает страницы приложений Google Play, AppGallery (или ID вида C102312137), F-Droid, IzzyOnDroid, APKPure, RuStore и репозитории GitHub —
   источник и пакет берутся из адреса. Иначе ссылка — на сам файл .apk на сайте банка или разработчика, только https:
   ночью полка проверяет, не сменился ли файл. Для F-Droid автоматически проверяется и архив. Выбранная версия
-  F-Droid сохраняется без обновления; репозиторий GitHub следует последнему стабильному выпуску с APK.
+  F-Droid или IzzyOnDroid сохраняется без обновления; репозиторий GitHub следует последнему стабильному выпуску с APK.
   Адреса локальной сети не принимаются.</p>
+{% if not public %}<p class="hint">Ссылку на отдельный APK 4PDA тоже можно вставить сюда: скачивание использует
+  ваш подключённый аккаунт 4PDA. Выбранное вложение сохраняется без автоматического обновления.</p>{% endif %}
 <h2>Свой файл</h2>
 <form method="post" action="{{ post_url(prefix ~ '/add/upload') }}" enctype="multipart/form-data" class="card">
   <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label>

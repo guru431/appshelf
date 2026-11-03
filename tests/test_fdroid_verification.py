@@ -43,6 +43,13 @@ def test_signed_json_and_pinned_key_are_both_required(signed_catalog, monkeypatc
         index.verify(raw)
 
 
+def test_each_repository_uses_its_own_pinned_key(signed_catalog):
+    raw, signer = signed_catalog
+    index.verify(raw, signer)
+    with pytest.raises(net.SourceError, match="подпись"):
+        index.verify(raw, index.IZZY_SIGNER)
+
+
 def test_modified_or_unsigned_json_is_rejected(signed_catalog, monkeypatch):
     raw, signer = signed_catalog
     monkeypatch.setattr(index, "REPO_SIGNER", signer)

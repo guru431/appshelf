@@ -226,13 +226,14 @@ def test_session_endpoints_are_bound_to_signed_in_person(connected, conn, clock)
     assert result.status_code == 403 and connected.sessions.load(1) is not None
 
 
-def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cfg, tmp_path):
+@pytest.mark.parametrize("path", ["/android/4pda/add", "/android/add/link"])
+def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cfg, tmp_path, path):
     web = connected
     apk = make_apk(tmp_path / "input.apk", package="ru.example.app")
     web.sessions.http.files[FILE] = response(f'<a href="{GATE.replace("&", "&amp;")}">Download</a>')[2]
     web.sessions.http.files[GATE] = apk.read_bytes()
     web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
-    result = web.client.post("/android/4pda/add", data={"url": FILE, "name": "Example", "user_id": "999"}, follow_redirects=False)
+    result = web.client.post(path, data={"url": FILE, "name": "Example", "user_id": "999"}, follow_redirects=False)
     assert result.status_code == 303
     job = db.take_job(conn)
     assert COOKIE not in job["payload"] and "dlsess" not in job["payload"]
@@ -250,10 +251,52 @@ def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cf
     newer_gate = GATE.replace("id=123", "id=124")
     web.sessions.http.files[newer] = response(f'<a href="{newer_gate.replace("&", "&amp;")}">Download</a>')[2]
     web.sessions.http.files[newer_gate] = make_apk(tmp_path / "new.apk", version_code=2).read_bytes()
-    web.client.post("/android/4pda/add", data={"url": newer})
+    web.client.post(path, data={"url": newer})
     fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
     assert db.get_app(conn, shelf.id, "ru.example.app")["source_ref"] == newer
     assert db.current_version(conn, shelf.id, "ru.example.app")["version_code"] == 2
+
+
+@pytest.mark.parametrize("state, message", [
+    ("missing", "Подключите свой аккаунт 4PDA"),
+    ("expired", "Вход в 4PDA истёк"),
+    ("public", "4PDA доступен только на личной полке"),
+])
+@pytest.mark.parametrize("operation", ["add", "source"])
+def test_attachment_link_checks_personal_session_before_enqueue(connected, conn, clock, state, message, operation):
+    web = connected
+    web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
+    prefix = "/android/public" if state == "public" else "/android"
+    if state == "missing":
+        web.sessions.forget(1)
+        # Чужая рабочая сессия не заменяет подключение текущего участника.
+        web.sessions.save(2, session())
+    elif state == "expired":
+        web.sessions.http.raw[fourpda.FORUM + "?act=idx"] = response("guest")
+    if operation == "add":
+        result = web.client.post(prefix + "/add/link", data={"url": FILE, "user_id": "2"})
+    else:
+        shelf = db.ensure_public_shelf(conn, clock.iso()) if state == "public" else db.ensure_shelf(conn, 1, clock.iso())
+        db.put_app(conn, shelf.id, "ru.example.app", "Example", "link", "https://example.org/app.apk", clock.iso())
+        result = web.client.post(prefix + "/apps/ru.example.app/source", data={"source": "link", "ref": FILE})
+        assert db.get_app(conn, shelf.id, "ru.example.app")["source"] == "link"
+    assert result.status_code == 400 and message in result.text
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+    assert COOKIE not in result.text
+
+
+def test_change_source_to_attachment_uses_personal_session(connected, conn, clock, tmp_path):
+    web = connected
+    web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
+    web.sessions.http.files[FILE] = make_apk(tmp_path / "source.apk").read_bytes()
+    shelf = db.ensure_shelf(conn, 1, clock.iso())
+    db.put_app(conn, shelf.id, "ru.example.app", "Example", "link", "https://example.org/app.apk", clock.iso())
+    result = web.client.post("/android/apps/ru.example.app/source", data={"source": "link", "ref": FILE},
+                             follow_redirects=False)
+    assert result.status_code == 303
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    app = db.get_app(conn, shelf.id, "ru.example.app")
+    assert app["source"] == "fourpda" and app["source_ref"] == FILE and app["status"] == "ok"
 
 
 def test_disconnect_preserves_shelf_and_deletes_session(connected, conn, clock):

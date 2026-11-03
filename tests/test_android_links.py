@@ -21,8 +21,12 @@ K9, VLC, VTB, SBER = "com.fsck.k9", "org.videolan.vlc", "C102312137", "ru.sberba
     ("https://f-droid.org/app/org.videolan.vlc", ("fdroid", VLC)),   # «Поделиться» в клиенте F-Droid
     ("https://www.f-droid.org/packages/org.videolan.vlc/?locale=ru", ("fdroid", VLC)),
     ("https://f-droid.org/archive/org.videolan.vlc_13070206.apk", ("fdroid_archive", VLC + "@13070206")),
+    ("https://apt.izzysoft.de/fdroid/index/apk/org.videolan.vlc", ("izzy", VLC)),
+    ("https://apt.izzysoft.de/fdroid/repo/org.videolan.vlc_13070206.apk", ("izzy", VLC + "@13070206")),
     ("https://github.com/Happ-proxy/happ-android", ("github", "Happ-proxy/happ-android")),
     ("https://github.com/Happ-proxy/happ-android/releases/latest", ("github", "Happ-proxy/happ-android")),
+    ("https://4pda.to/forum/dl/post/123/Mail+Pro+v1.8.58.apk",
+     ("fourpda", "https://4pda.to/forum/dl/post/123/Mail+Pro+v1.8.58.apk")),
     ("https://apkpure.com/k-9-mail/com.fsck.k9", ("apkpure", K9)),
     ("https://m.apkpure.com/k-9-mail/com.fsck.k9/download", ("apkpure", K9)),
     ("https://apkpure.com/ru/k-9-mail/com.fsck.k9/", ("apkpure", K9)),
@@ -55,7 +59,19 @@ def test_unknown_page_is_direct_link():
     "https://f-droid.org/packages/..%2Fx/",
     "https://apkpure.com/name/com..x",
     "https://www.rustore.ru/catalog/app/bad..pkg",
+    "https://apt.izzysoft.de/fdroid/index/apk/bad..pkg",
 ])
 def test_bad_package_in_store_link_refused(url):
     with pytest.raises(net.FetchError, match="не похоже на страницу приложения"):
+        links.parse(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://4pda.to/forum/index.php?showtopic=456",
+    "https://4pda.to/forum/index.php?act=attach&id=123&dlsess=temporary-secret",
+    "https://4pda.to/forum/dl/post/123/a%2F..%2Fapp.apk",
+    "http://4pda.to/forum/dl/post/123/app.apk",
+])
+def test_fourpda_links_require_stable_https_attachment(url):
+    with pytest.raises(net.FetchError):
         links.parse(url)

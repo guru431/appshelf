@@ -36,14 +36,14 @@ def synthetic_fdroid_index_verifier(monkeypatch):
 
     real_verify = fdroid_index.verify
 
-    def verify(raw):
+    def verify(raw, signer=None):
         try:
             with zipfile.ZipFile(io.BytesIO(raw)) as z:
                 if z.comment == b"appshelf-test-index":
                     return
         except zipfile.BadZipFile:
             pass
-        return real_verify(raw)
+        return real_verify(raw, signer)
 
     monkeypatch.setattr(fdroid_index, "verify", verify)
     monkeypatch.setattr(fdroid_index, "wall_time", lambda: 1800000000.0, raising=False)

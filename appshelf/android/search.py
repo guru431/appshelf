@@ -15,7 +15,7 @@ from .net import FetchError, SourceError, StatusError
 NAMES = {**links.NAMES, "fdroid_archive": "Архив F-Droid", "github": "GitHub автора", "fourpda": "4PDA"}
 DOMAINS = {"rustore": "backapi.rustore.ru", "play": "play.google.com", "appgallery": appgallery.HOST,
            "apkpure": "api.pureapk.com", "fdroid": "f-droid.org", "fdroid_archive": "f-droid.org",
-           "github": "github.com", "fourpda": "4pda.to"}
+           "izzy": "apt.izzysoft.de", "github": "github.com", "fourpda": "4pda.to"}
 MAX_PACKAGES = 5
 
 
@@ -62,8 +62,8 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     if query.startswith("https://"):
         try:
             kind, ref = links.parse(query)
-            if kind in ("rustore", "play", "appgallery", "apkpure", "fdroid", "fdroid_archive"):
-                exact = fdroid_index.split_ref(ref)[0] if kind.startswith("fdroid") else ref
+            if kind in ("rustore", "play", "appgallery", "apkpure", *fdroid_index.REPOSITORIES):
+                exact = fdroid_index.split_ref(ref)[0] if kind in fdroid_index.REPOSITORIES else ref
                 query = exact
         except (FetchError, SourceError):
             pass
@@ -154,8 +154,9 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
 
     yield from forum()
 
-    for source, catalog in (("fdroid", src.fdroid_catalog), ("fdroid_archive", src.fdroid_archive)):
-        detail = "загрузка каталога — f-droid.org" if getattr(catalog, "_apps", True) is None else "поиск в каталоге"
+    for source, catalog in (("fdroid", src.fdroid_catalog), ("fdroid_archive", src.fdroid_archive),
+                            ("izzy", src.izzy_catalog)):
+        detail = f"загрузка каталога — {DOMAINS[source]}" if getattr(catalog, "_apps", True) is None else "поиск в каталоге"
         found = yield from run(source, detail, lambda: catalog.search(query, src._wait))
         if getattr(catalog, "stale", False):
             errors[source] = f"{NAMES[source]}: показан устаревший кэш; перед скачиванием каталог будет проверен заново"

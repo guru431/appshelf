@@ -140,21 +140,22 @@ def test_add_rustore_rejects_bad_package(web, conn):
     assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
 
 
-def test_search_selects_exact_archive_version_and_github(web, conn, tmp_path):
+@pytest.mark.parametrize("source, label", [("fdroid_archive", "Архив F-Droid"), ("izzy", "IzzyOnDroid")])
+def test_search_selects_exact_archive_version_and_github(web, conn, tmp_path, source, label):
     from appshelf.android.search import Option
     ref = PKG + "@7"
-    web.sources.found = [Option("fdroid_archive", PKG, PKG, "Telegram FOSS", "7.0",
+    web.sources.found = [Option(source, PKG, PKG, "Telegram FOSS", "7.0",
                                 versions=(("7.0", ref),)),
                          Option("github", "example/android", "", "Happ", "v4")]
     html = search_results(web, "telegram")
-    assert "Архив F-Droid" in html and ref in html and "GitHub" in html
+    assert label in html and ref in html and "GitHub" in html
     web.sources.apks[ref] = make_apk(tmp_path / "archive.apk", version_code=7, version_name="7.0")
-    r = web.client.post("/android/add/source", data={"source": "fdroid_archive", "ref": ref,
+    r = web.client.post("/android/add/source", data={"source": source, "ref": ref,
                                                     "package": PKG, "name": "Telegram FOSS"}, follow_redirects=False)
     assert r.status_code == 303
     work(web, conn)
     app = db.get_app(conn, shelf(conn).id, PKG)
-    assert (app["source"], app["source_ref"]) == ("fdroid_archive", ref)
+    assert (app["source"], app["source_ref"]) == (source, ref)
     assert db.current_version(conn, shelf(conn).id, PKG)["version_code"] == 7
     web.sources.apks["example/android"] = make_apk(tmp_path / "github.apk", package="com.example.happ")
     web.client.post("/android/add/source", data={"source": "github", "ref": "example/android", "name": "Happ"})
@@ -164,6 +165,7 @@ def test_search_selects_exact_archive_version_and_github(web, conn, tmp_path):
 
 def test_search_selection_validates_source_ref_and_package(web, conn):
     for source, ref, package in (("fdroid_archive", PKG + "@1", "com.other.app"),
+                                 ("izzy", PKG + "@1", "com.other.app"),
                                  ("github", "https://127.0.0.1/private", ""),
                                  ("link", "https://127.0.0.1/app.apk", ""),
                                  ("rustore", "../x", "../x")):

@@ -95,7 +95,7 @@
     <p class="meta">Текущий: {{ sources.get(a.source, a.source) }}. Версии и закрепления сохранятся; другой ключ потребует отдельного решения.</p>
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/source') }}">
       <label>Новый источник<select name="source" aria-label="Новый источник">
-      {% for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive', 'apkpure', 'link') %}<option value="{{ s }}"{% if a.source == s %} selected{% endif %}>{{ sources[s] }}</option>{% endfor %}</select></label>
+      {% for s in ('rustore', 'appgallery', 'fdroid', 'fdroid_archive', 'izzy', 'apkpure', 'link') %}<option value="{{ s }}"{% if a.source == s %} selected{% endif %}>{{ sources[s] }}</option>{% endfor %}</select></label>
       <label>Для сайта: страница магазина или ссылка на APK<input name="ref" type="url" placeholder="https://…" value="{{ a.source_ref if a.source == 'link' }}"></label>
       <label class="check" data-source-warning{% if a.source != 'apkpure' %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск APKPure: без сверки с RuStore подлинность источника не подтверждена</label>
       <p class="install"><button>Сменить источник</button></p>

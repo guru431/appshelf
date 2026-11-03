@@ -1,14 +1,14 @@
 """Поле «Ссылка на приложение или APK» (план этапа 5, Task 1): страница приложения в магазине → (источник, ref),
 иначе — прямая ссылка на APK. Страницы не скачиваются — пакет или ID берётся из самого адреса. ref: пакет (play,
-fdroid, apkpure, rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link)."""
+fdroid, apkpure, rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link, fourpda)."""
 from __future__ import annotations
 
 import re
 import urllib.parse
 
 from ..apk import PACKAGE_RE
-from .net import FetchError, check_url
-from . import github
+from .net import FetchError, SourceError, check_url
+from . import fourpda, github
 
 APPGALLERY_ID_RE = re.compile(r"^C\d{6,12}$")
 PLAY_HOSTS = ("play.google.com",)
@@ -19,7 +19,7 @@ RUSTORE_HOSTS = ("rustore.ru", "www.rustore.ru", "apps.rustore.ru")
 APPGALLERY_MARKS = ("app", "appdl", "outGoingApp")   # …/app/C…, /appdl/C…, /outGoingApp/C…
 APKPURE_TAILS = ("download", "versions")
 NAMES = {"play": "Google Play", "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure",
-         "rustore": "RuStore", "fdroid_archive": "архива F-Droid", "github": "GitHub"}
+         "rustore": "RuStore", "fdroid_archive": "архива F-Droid", "izzy": "IzzyOnDroid", "github": "GitHub"}
 
 
 def parse(url: str) -> tuple[str, str]:
@@ -36,13 +36,17 @@ def parse(url: str) -> tuple[str, str]:
         check_url(text)
         return "link", text
     source, ref = page
+    if source == "fourpda":
+        try:
+            return source, fourpda.file_url(ref)
+        except SourceError as e:
+            raise FetchError(str(e)) from None
     if source == "github":
         if not github.parse_ref(ref):
             raise FetchError("не похоже на репозиторий GitHub")
         return source, ref
-    if source in ("fdroid", "fdroid_archive") and "@" in ref:
+    if source in ("fdroid", "fdroid_archive", "izzy") and "@" in ref:
         from .fdroid_index import split_ref
-        from .net import SourceError
         try:
             split_ref(ref)
         except SourceError:
@@ -58,6 +62,15 @@ def _page(u: urllib.parse.SplitResult) -> tuple[str, str] | None:
     """Адрес — страница приложения в магазине: (источник, то, что стоит на месте пакета или ID); нет — None."""
     host = (u.hostname or "").lower()
     parts = [urllib.parse.unquote(p) for p in u.path.split("/") if p]
+    if host == "4pda.to":
+        return "fourpda", u.geturl()
+    if host == "apt.izzysoft.de":
+        if len(parts) == 4 and parts[:3] == ["fdroid", "index", "apk"]:
+            return "izzy", parts[3]
+        if len(parts) == 3 and parts[:2] == ["fdroid", "repo"]:
+            match = re.fullmatch(r"(.+)_(\d+)\.apk", parts[2])
+            if match:
+                return "izzy", f"{match[1]}@{match[2]}"
     if host == "github.com" and (len(parts) == 2 or len(parts) == 3 and parts[2] == "releases"
                                  or len(parts) == 4 and parts[2:] == ["releases", "latest"]):
         return "github", "/".join(parts[:2])

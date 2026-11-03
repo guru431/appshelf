@@ -29,7 +29,7 @@ from .common import TEMPLATES, back, filter_shelf, mutation_url
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
            "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "Архив F-Droid",
-           "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
+           "izzy": "F-Droid · IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
@@ -39,7 +39,7 @@ PIN_BUSY = "Идёт скачивание — попробуйте через м
 NEED_PLAY = "Сначала подключите Google-аккаунт к Google Play на странице «Аккаунты»"
 PLAY_PACKAGE = "Не похоже на ссылку Google Play или имя пакета"
 NO_PLAY_SOURCE = "Источником карточки Google Play не ставится — снимите её и добавьте приложение из Google Play"
-BY_PACKAGE = ("rustore", "appgallery", "fdroid", "fdroid_archive", "apkpure")
+BY_PACKAGE = ("rustore", "appgallery", "fdroid", "fdroid_archive", "izzy", "apkpure")
 NOTICES = {fetch.SIGNER_DIFFERS: "подпись не как в RuStore", fetch.NOT_VERIFIED: "подпись не сверена"}
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")   # токен каталога полки (db.ensure_shelf)
 
@@ -491,7 +491,7 @@ def _register_scope(app, w, scope: Scope):
         try:
             if len(ref) > MAX_URL or package and not apk.PACKAGE_RE.fullmatch(package):
                 raise net.SourceError("не похоже на приложение Android")
-            if source in ("fdroid", "fdroid_archive"):
+            if source in fdroid_index.REPOSITORIES:
                 expected, _ = fdroid_index.split_ref(ref)
                 if package != expected:
                     raise net.SourceError("пакет не совпал с выбранным результатом")
@@ -535,6 +535,14 @@ def _register_scope(app, w, scope: Scope):
             return add_page(request, status_code=400, error=NEED_PLAY)
         return add_checked_play(request, package, acct)
 
+    def check_fourpda(request):
+        if scope.public:
+            raise net.SourceError("4PDA доступен только на личной полке")
+        sessions = w.env.sources.fourpda
+        if sessions is None:
+            raise net.SourceError("Подключите свой аккаунт 4PDA на странице «Аккаунты»")
+        sessions.client(request.state.who.id).who()
+
     @app.post(f"{p}/add/link", response_class=HTMLResponse, dependencies=deps)
     def add_link(request: Request, url: str = Form(""), name: str = Form(""), ack: str = Form("")):
         """Страница приложения в магазине (links.parse) или прямая ссылка на APK. Google Play — первым подключённым
@@ -545,7 +553,9 @@ def _register_scope(app, w, scope: Scope):
             if len(url) > MAX_URL:
                 raise net.FetchError("ссылка слишком длинная")
             source, ref = links.parse(url)
-        except net.FetchError as e:
+            if source == "fourpda":
+                check_fourpda(request)
+        except (net.FetchError, net.SourceError) as e:
             return add_page(request, status_code=400, error=f"{url[:200]}: {e}", link_url=url[:MAX_URL])
         if source == "play":
             with w.conn() as c:
@@ -553,10 +563,10 @@ def _register_scope(app, w, scope: Scope):
             if acct is None:
                 return add_page(request, status_code=400, error=NEED_PLAY, link_url=url)
             return add_checked_play(request, ref, acct, link_url=url)
-        if source in ("fdroid", "fdroid_archive") and "@" in ref:
+        if source in fdroid_index.REPOSITORIES and "@" in ref:
             package, _ = fdroid_index.split_ref(ref)
             return add_package(request, source, package, name, {"name": name}, ref=ref)
-        if source not in ("link", "appgallery", "apkpure", "github"):
+        if source not in ("link", "appgallery", "apkpure", "github", "fourpda"):
             return add_package(request, source, ref, name, {"name": name})
         payload = {"source": source, "ref": ref, "name": name}
         if source == "apkpure":
@@ -662,12 +672,14 @@ def _register_scope(app, w, scope: Scope):
                 if len(ref) > MAX_URL:
                     raise net.FetchError("ссылка слишком длинная")
                 source, ref = links.parse(ref)
-            except net.FetchError as e:
+                if source == "fourpda":
+                    check_fourpda(request)
+            except (net.FetchError, net.SourceError) as e:
                 return catalog_page(request, 400, f"{ref[:200]}: {e}")
             if source == "play":
                 return catalog_page(request, 400, NO_PLAY_SOURCE)
-            want = fdroid_index.split_ref(ref)[0] if source in ("fdroid", "fdroid_archive") else ref
-            if source not in ("link", "appgallery", "github") and want != package:
+            want = fdroid_index.split_ref(ref)[0] if source in fdroid_index.REPOSITORIES else ref
+            if source not in ("link", "appgallery", "github", "fourpda") and want != package:
                 return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
             return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")
