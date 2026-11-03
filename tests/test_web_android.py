@@ -197,6 +197,17 @@ def test_add_link_names_card_from_resources(web, conn, tmp_path, cfg):
     assert Image.open(io.BytesIO(icon)).size == (192, 192)
 
 
+def test_add_link_stores_adaptive_icon_from_apk(web, conn, tmp_path, cfg):
+    from test_apk import adaptive_apk
+    web.sources.apks[URL] = adaptive_apk(tmp_path)
+    result = web.client.post("/android/add/link", data={"url": URL}, follow_redirects=False)
+    assert result.status_code == 303
+    work(web, conn)
+    current = db.current_version(conn, shelf(conn).id, PKG)
+    icon = fetch.shelf_root(cfg, shelf(conn)) / current["dir"] / "icon.png"
+    assert Image.open(icon).getpixel((96, 96)) == (41, 193, 225, 255)
+
+
 def test_store_page_card_named_from_resources(web, conn, tmp_path):
     """Карточку по странице F-Droid панель заводит до скачивания с именем пакета (F-Droid названия не даёт) — название
     приходит из resources.arsc скачанного APK (Fennec с F-Droid)."""

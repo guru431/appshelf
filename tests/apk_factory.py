@@ -121,16 +121,50 @@ def _axml(manifest_attrs, children, utf8: bool) -> bytes:
     return struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
 
 
+def drawable_xml(tree) -> bytes:
+    """Compiled drawable tree: (tag, {attribute: (kind, value)}, [children])."""
+    strings = []
+
+    def string(value):
+        if value not in strings:
+            strings.append(value)
+        return strings.index(value)
+
+    def node(kind, payload):
+        return struct.pack("<HHIII", kind, 16, 16 + len(payload), 1, 0xFFFFFFFF) + payload
+
+    def element(tree):
+        tag, attrs, children = tree
+        name, values = string(tag), []
+        for key, (kind, value) in attrs.items():
+            key = string(key)
+            if kind == "str":
+                dtype, value = T_STRING, string(value)
+            elif kind == "float":
+                dtype, value = 0x04, struct.unpack("<I", struct.pack("<f", value))[0]
+            else:
+                dtype = {"ref": T_REF, "int": T_INT, "color": 0x1C}[kind]
+            values.append(struct.pack("<IIIHBBI", 0xFFFFFFFF, key, 0xFFFFFFFF, 8, 0, dtype, value))
+        payload = struct.pack("<IIHHHHHH", 0xFFFFFFFF, name, 20, 20, len(values), 0, 0, 0)
+        return node(0x0102, payload + b"".join(values)) + b"".join(element(c) for c in children) \
+            + node(0x0103, struct.pack("<II", 0xFFFFFFFF, name))
+
+    nodes = element(tree)
+    body = _string_pool(strings, True) + nodes
+    return struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
+
+
 # --- resources.arsc ----------------------------------------------------------
 
-def arsc(resources: dict[int, list[tuple[str, int, str]]]) -> bytes:
-    """Таблица ресурсов пакета 0x7f: {id: [(язык, плотность, строка)]} — строковые значения (название, путь к файлу)
+def arsc(resources: dict[int, list[tuple[str, int, str | int | tuple]]]) -> bytes:
+    """Таблица ресурсов пакета 0x7f: {id: [(язык, плотность, значение)]} — строки, цвета и ссылки ("ref", id)
     по конфигурациям; один чанк типа на (тип, язык, плотность), смещения записей — u32."""
-    strings = sorted({s for values in resources.values() for _, _, s in values})
+    strings = sorted({s for values in resources.values() for _, _, s in values if isinstance(s, str)})
     chunks = {}
     for res_id, values in resources.items():
         for lang, density, s in values:
-            chunks.setdefault(((res_id >> 16) & 0xFF, lang, density), {})[res_id & 0xFFFF] = strings.index(s)
+            value = (T_STRING, strings.index(s)) if isinstance(s, str) else (T_REF, s[1]) if isinstance(s, tuple) else (0x1C, s)
+            chunks.setdefault(((res_id >> 16) & 0xFF, lang, density), {})[res_id & 0xFFFF] = value
     body = _string_pool([], False) + _string_pool([], False)  # имена типов и ключей — разбору не нужны
     for (type_id, lang, density), entries in sorted(chunks.items()):
         count = max(entries) + 1
@@ -140,7 +174,8 @@ def arsc(resources: dict[int, list[tuple[str, int, str]]]) -> bytes:
         for i in range(count):
             if i in entries:
                 offsets.append(len(data))
-                data += struct.pack("<HHI", 8, 0, 0) + struct.pack("<HBBI", 8, 0, T_STRING, entries[i])
+                dtype, value = entries[i]
+                data += struct.pack("<HHI", 8, 0, 0) + struct.pack("<HBBI", 8, 0, dtype, value)
             else:
                 offsets.append(0xFFFFFFFF)
         header = 20 + len(config)

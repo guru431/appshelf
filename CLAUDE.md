@@ -15,7 +15,8 @@ google-play-protocol; форматы источников — `tests/data/*/READ
   `notify.py`, `webauth.py` (cookie вошедших людей), `google.py` (OpenID Connect входа через Google), `web/` (вход —
   `signin.py`, вход Google — `google_signin.py`, «Аккаунты» и «Связать» — `accounts.py`, раздел Android — `android.py`),
   `cli.py`.
-- `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `android/` — `db.py` (таблицы android_*), `net.py`
+- `apk.py` (разбор APK: манифест AXML, подпись v1/v2/v3, иконка), `apk_icons.py` (векторные/адаптивные иконки → PNG),
+  `android/` — `db.py` (таблицы android_*), `net.py`
   (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
   Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `appgallery.py` (updateCheck по пакету),
   `fdroid.py` (пакетный API, сборки по ABI), `fdroid_index.py` (основной и архивный каталоги, версии, SHA-256),

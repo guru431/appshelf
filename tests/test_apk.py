@@ -3,7 +3,7 @@ import io
 import pytest
 from PIL import Image
 
-from apk_factory import cert_sha, make_apk, png_bytes
+from apk_factory import cert_sha, drawable_xml, make_apk, png_bytes
 from appshelf import apk
 
 
@@ -110,6 +110,67 @@ def test_resources_missing_or_broken(tmp_path):
     assert (apk.resource_label(broken), apk.resource_icon(broken)) == ("", None)
     literal = make_apk(tmp_path / "l.apk", label="Литерал", resources=SHORT_RES)
     assert apk.resource_label(literal) == ""                                # не ссылка — read_apk уже дал название
+
+
+def vector_drawable(color=0xFF29C1E1):
+    return ("vector", {"viewportWidth": ("float", 108.0), "viewportHeight": ("float", 108.0)}, [
+        ("path", {"fillColor": ("color", color), "pathData": ("str", "M42,42h24v24h-24z")}, [])])
+
+
+def adaptive_apk(tmp_path, *, foreground=None, resource_values=None):
+    background, front = ICON + 1, ICON + 2
+    root = ("adaptive-icon", {}, [
+        ("background", {"drawable": ("ref", background)}, []),
+        ("foreground", {"drawable": ("ref", front)}, [])])
+    return make_apk(tmp_path / "adaptive.apk", icon_ref=ICON,
+                    resources={ICON: [("", 0, "res/a.xml")], background: [("", 0, "res/b.xml")],
+                               front: [("", 0, "res/c.xml")], **(resource_values or {})},
+                    files={"res/a.xml": drawable_xml(root),
+                           "res/b.xml": drawable_xml(("vector", vector_drawable()[1], [
+                               ("path", {"fillColor": ("color", 0xFFFFFFFF),
+                                         "pathData": ("str", "M0,0h108v108h-108z")}, [])])),
+                           "res/c.xml": foreground or drawable_xml(vector_drawable())})
+
+
+def test_adaptive_vector_icon_from_obfuscated_resources(tmp_path):
+    path = adaptive_apk(tmp_path)
+    assert apk.extract_icon(path) is None
+    image = Image.open(io.BytesIO(apk.resource_icon(path)))
+    assert image.size == (192, 192)
+    assert image.getpixel((96, 96)) == (41, 193, 225, 255)
+    assert image.getpixel((8, 8)) == (255, 255, 255, 255)
+
+
+def test_direct_vector_icon_preserves_transforms_and_alpha(tmp_path):
+    vector = vector_drawable()
+    vector[2][0][1]["fillAlpha"] = ("float", 0.5)
+    vector = (vector[0], vector[1], [("group", {"translateX": ("float", 24.0)}, vector[2])])
+    path = make_apk(tmp_path / "vector.apk", icon_ref=ICON, resources={ICON: [("", 0, "res/a.xml")]},
+                    files={"res/a.xml": drawable_xml(vector)})
+    image = Image.open(io.BytesIO(apk.resource_icon(path)))
+    assert image.getpixel((96, 96))[3] == 0
+    assert image.getpixel((140, 96))[3] in (127, 128)
+
+
+def test_adaptive_icon_rejects_oversized_or_broken_xml(tmp_path, monkeypatch):
+    assert apk.resource_icon(adaptive_apk(tmp_path, foreground=b"bad-xml")) is None
+    path = adaptive_apk(tmp_path)
+    monkeypatch.setattr(apk, "ICON_MAX", 50)
+    assert apk.resource_icon(path) is None
+
+
+def test_adaptive_icon_resolves_color_and_drawable_alias(tmp_path):
+    path = adaptive_apk(tmp_path, resource_values={ICON + 1: [("", 0, 0xFF102030)],
+        ICON + 2: [("", 0, ("ref", ICON + 3))], ICON + 3: [("", 0, "res/c.xml")]})
+    image = Image.open(io.BytesIO(apk.resource_icon(path)))
+    assert image.getpixel((8, 8)) == (16, 32, 48, 255)
+    assert image.getpixel((96, 96)) == (41, 193, 225, 255)
+
+
+@pytest.mark.parametrize("cycle", ["res/a.xml", ("ref", ICON + 2)])
+def test_adaptive_icon_rejects_resource_cycles(tmp_path, cycle):
+    path = adaptive_apk(tmp_path, resource_values={ICON + 2: [("", 0, cycle)]})
+    assert apk.resource_icon(path) is None
 
 
 def test_huge_icon_entry_skipped(tmp_path, monkeypatch):

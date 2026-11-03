@@ -213,10 +213,21 @@ def resource_label(path: Path) -> str:
 
 
 def resource_icon(path: Path) -> bytes | None:
-    """Иконка по android:icon через resources.arsc: самая большая PNG/WebP из конфигураций; только XML (адаптивная
-    иконка), не ссылка, нет таблицы — None."""
+    """Иконка по android:icon: PNG/WebP либо скомпилированная векторная/адаптивная иконка."""
     with zipfile.ZipFile(path) as z:
-        return _largest(z, sorted({s for _, _, s in _resolve(z, "icon") if s.endswith(RASTER)}))
+        names = sorted({s for _, _, s in _resolve(z, "icon")})
+        raster = _largest(z, [s for s in names if s.endswith(RASTER)])
+        if raster is not None:
+            return raster
+        from .apk_icons import render_icon
+        for name in names:
+            if name.endswith(".xml"):
+                try:
+                    return render_icon(z, name)
+                except (KeyError, ValueError, TypeError, IndexError, OverflowError, struct.error, UnicodeDecodeError,
+                        zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError):
+                    continue
+        return None
 
 
 def _largest(z: zipfile.ZipFile, names: list[str]) -> bytes | None:
@@ -351,6 +362,11 @@ def _chunks(data: bytes, pos: int, end: int):
 def _arsc(data: bytes, res_id: int) -> list[tuple[str, int, str]]:
     """Строковые значения ресурса res_id из resources.arsc (ResTable_package → ResTable_type по конфигурациям):
     [(язык, плотность, строка)]; значение не строкой (ссылка, число) — мимо."""
+    return [(lang, density, value) for lang, density, value in _arsc_values(data, res_id) if isinstance(value, str)]
+
+
+def _arsc_values(data: bytes, res_id: int) -> list[tuple[str, int, str | int | Ref]]:
+    """Typed resource values: drawable filenames, aliases and colors used by adaptive icon layers."""
     typ, header = struct.unpack_from("<HH", data, 0)
     if typ != 0x0002:
         raise ValueError("не таблица ресурсов")
@@ -363,11 +379,12 @@ def _arsc(data: bytes, res_id: int) -> list[tuple[str, int, str]]:
                 if t != 0x0201 or data[ts + 8] != (res_id >> 16) & 0xFF:
                     continue
                 value = _type_entry(data[ts:te], th, res_id & 0xFFFF)
-                if value is not None and value[0] == 0x03:
+                if value is not None and (value[0] in (0x01, 0x03) or 0x1C <= value[0] <= 0x1F):
                     config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
                     lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
                     (density,) = struct.unpack_from("<H", data, config + 14)
-                    out.append((lang, density, _string(pool, value[1])))
+                    resolved = _string(pool, value[1]) if value[0] == 0x03 else Ref(value[1]) if value[0] == 0x01 else value[1]
+                    out.append((lang, density, resolved))
     return out
 
 
