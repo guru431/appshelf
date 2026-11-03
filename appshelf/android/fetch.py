@@ -325,7 +325,8 @@ def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:
 
 
 def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work: Path) -> None:
-    """Текущий APK полки владельца — независимой копией, без обращения к магазину."""
+    """Принятые APK полки владельца — независимыми копиями, без обращения к магазину.
+    Повторный запуск дополняет историю, сохраняя настройки публичной карточки и проверку новой подписи."""
     with jobs.hold(env.cfg.download_lock):
         shelf = db.get_shelf(c, shelf.id)
         if shelf is None:
@@ -341,22 +342,41 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
             raise SourceError("Приложение больше не доступно на полке владельца")
         if original["paid"]:
             raise SourceError("Купленное в Google Play нельзя добавлять на публичную полку")
-        if db.get_app(c, shelf.id, package) is None:
+        target = db.get_app(c, shelf.id, package)
+        if target is None:
             raise store.AppGone(package)
-        folder = shelf_root(env.cfg, source) / version["dir"]
+        fresh = not db.has_current(c, shelf.id, package)
+        versions = c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? AND role!='pending' "
+                             "ORDER BY (role='current') DESC, version_code, id", (source_id, package)).fetchall()
         work.mkdir(parents=True, exist_ok=True)
         path = work / "app.apk"
-        shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
-        if ipa.sha256(path) != version["sha256"]:
-            raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
-        icon = (folder / "icon.png").read_bytes()
-        db.set_source(c, shelf.id, package, original["source"], original["source_ref"], original["source_page"])
-        c.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=? AND package=?",
-                  (original["google_account_id"], shelf.id, package))
-        store_apk(env, c, shelf, path, source=original["source"], source_ref=original["source_ref"],
-                  expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon)
-        db.set_etag(c, shelf.id, package, original["source_etag"])
-        db.set_status(c, shelf.id, package, "ok", original["last_error"] if original["last_error"] in NOTICES else "")
+        for version in versions:
+            if c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND sha256=?",
+                         (shelf.id, package, version["sha256"])).fetchone() or db.rejected_apk(
+                             c, shelf.id, package, version["sha256"]):
+                continue
+            # Дополнение истории не заменяет сборку, по которой владелец ещё не принял решение.
+            current = db.current_version(c, shelf.id, package)
+            if current is not None and current["signer"] != version["signer"] and c.execute(
+                    "SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
+                    (shelf.id, package)).fetchone():
+                continue
+            _space(env, c)
+            folder = shelf_root(env.cfg, source) / version["dir"]
+            shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+            if ipa.sha256(path) != version["sha256"]:
+                raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
+            icon = (folder / "icon.png").read_bytes()
+            store_apk(env, c, shelf, path, source=version["source"], source_ref=original["source_ref"],
+                      expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon,
+                      allow_older=True)
+        if fresh:
+            db.set_source(c, shelf.id, package, original["source"], original["source_ref"], original["source_page"])
+            c.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=? AND package=?",
+                      (original["google_account_id"], shelf.id, package))
+            db.set_etag(c, shelf.id, package, original["source_etag"])
+        notice = original["last_error"] if fresh else target["last_error"]
+        db.set_status(c, shelf.id, package, "ok", notice if notice in NOTICES else "")
 
 
 def run_job(env, c, job) -> None:

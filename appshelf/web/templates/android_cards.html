@@ -100,6 +100,9 @@
       {% endif %}
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
+        {% if not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
+          <input type="hidden" name="package" value="{{ a.package }}"><input type="hidden" name="sync_history" value="1">
+          <button class="tint">Добавить версии в публичную</button></form>{% endif %}
         {% elif not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
           <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form>{% endif %}
       {%- endif %}

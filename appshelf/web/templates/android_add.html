@@ -4,18 +4,20 @@
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
 {% if public %}
 <h2>Из моей полки</h2>
-<p class="hint">Добавить уже скачанное приложение с полки администратора. На публичной полке будет отдельная копия
-  текущей версии с тем же источником обновлений.</p>
+<p class="hint">Добавить уже скачанное приложение с полки администратора вместе с сохранёнными версиями.
+  На публичной полке будут отдельные копии; для уже добавленного приложения можно дополнить историю.</p>
 {% if own_apps %}
 <div class="card list">
 {% for a in own_apps %}
 <div class="row">
   <div class="body"><b>{{ a.name }}</b><div class="meta">{{ a.current['version_name'] }} · {{ a.package }} · {{ sources.get(a.source, a.source) }}</div></div>
-  {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>
-  {% elif a.paid %}<span class="meta">Купленное — только на своей полке</span>
+  {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>{% endif %}
+  {% if a.paid %}<span class="meta">Купленное — только на своей полке</span>
   {% else %}<details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
     <div class="sheet"><form method="post" action="{{ post_url(prefix ~ '/add/from-shelf') }}">
-      <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form></div>
+      <input type="hidden" name="package" value="{{ a.package }}">
+      {% if a.package in on_shelf %}<input type="hidden" name="sync_history" value="1">{% endif %}
+      <button class="tint">{{ 'Добавить версии в публичную' if a.package in on_shelf else 'Добавить в публичную' }}</button></form></div>
   </details>{% endif %}
 </div>
 {% endfor %}

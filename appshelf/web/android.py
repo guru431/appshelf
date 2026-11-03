@@ -130,7 +130,7 @@ def register_routes(app, w) -> None:
     cfg, owner = w.cfg, [Depends(owner_only)]
 
     @app.post("/android/public/add/from-shelf", dependencies=owner)
-    def add_from_shelf(request: Request, package: str = Form("")):
+    def add_from_shelf(request: Request, package: str = Form(""), sync_history: str = Form("")):
         with w.conn() as c:
             source = db.shelf_for_user(c, request.state.who.id) if request.state.who.role == people.OWNER else None
             original = db.get_app(c, source.id, package) if source is not None else None
@@ -142,11 +142,13 @@ def register_routes(app, w) -> None:
                 return public_page(request, 409, "Сначала дождитесь скачивания приложения на свою полку")
             target = db.ensure_public_shelf(c, w.now())
             with store.tx(c):
-                if db.get_app(c, target.id, package) is None:
+                existing = db.get_app(c, target.id, package)
+                if existing is None:
                     db.put_app(c, target.id, package, original["name"], original["source"], original["source_ref"],
                                w.now(), google_account_id=original["google_account_id"])
                     c.execute("UPDATE android_apps SET source_page=? WHERE shelf_id=? AND package=?",
                               (original["source_page"], target.id, package))
+                if (existing is None or sync_history == "1") and not db.active_for(c, target.id, package):
                     db.enqueue(c, target.id, "copy", w.now(), package=package, payload={"from_shelf": source.id})
         return back(PUBLIC.prefix)
 

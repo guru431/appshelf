@@ -1,4 +1,5 @@
 import json
+from html.parser import HTMLParser
 
 import pytest
 
@@ -147,6 +148,87 @@ def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn
     assert web.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 200
     job = db.take_job(conn)
     assert json.loads(job["payload"])["from_shelf"] == mine.id
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_copy_history_makes_old_versions_available_to_public_guests(web, member, make_web, cfg, conn, clock,
+                                                                  tmp_path, existing):
+    mine = add_personal(web, conn, tmp_path)
+    if existing:
+        web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+        work(web, conn)
+    for code in (3, 2):
+        path = make_apk(tmp_path / f"history-{code}.apk", version_code=code, version_name=f"{code}.0")
+        web.client.post("/android/add/upload", files={"file": ("history.apk", path.read_bytes())})
+        work(web, conn)
+    # A build awaiting the owner's signature decision must stay private.
+    path = make_apk(tmp_path / "pending.apk", version_code=4, cert=b"OTHER-KEY")
+    web.client.post("/android/add/upload", files={"file": ("pending.apk", path.read_bytes())})
+    work(web, conn)
+    data = {"package": PKG, "sync_history": "1"} if existing else {"package": PKG}
+    response = web.client.post("/android/public/add/from-shelf", data=data, follow_redirects=False)
+    assert response.status_code == 303
+    web.client.post("/android/public/add/from-shelf", data=data)
+    work(web, conn)
+    assert db.take_job(conn) is None
+    public = db.public_shelf(conn)
+    view = db.list_apps(conn, public.id)[0]
+    assert [v["version_code"] for v in view.versions] == [3, 2, 1]
+    assert view.current["version_code"] == 3 and view.pending is None
+    assert {v["sha256"] for v in view.versions} == {v["sha256"] for v in db.list_apps(conn, mine.id)[0].versions}
+    pin.set_pin(conn, "482913", clock.iso())
+    guest = make_web(cfg, conn)
+    guest.client.post("/p", data={"pin": "482913"})
+
+    class VersionOptions(HTMLParser):
+        def __init__(self, html):
+            super().__init__()
+            self.links = []
+            self.feed(html)
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "option" and "data-link" in attrs:
+                self.links.append(attrs["data-link"])
+
+    for client, page in ((web.client, "/android/public"), (member.client, "/android/public"), (guest.client, "/p")):
+        links = VersionOptions(client.get(page).text).links
+        assert len(links) == 3
+        old = client.get(links[-1], follow_redirects=False)
+        assert old.status_code == 302 and old.headers["location"].endswith(f"/{PKG}-1.0.apk")
+        assert mine.shelf not in old.headers["location"]
+    before = [dict(v) for v in view.versions]
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
+    work(web, conn)
+    assert [dict(v) for v in db.list_apps(conn, public.id)[0].versions] == before
+
+
+def test_sync_history_preserves_public_source_latest_and_pending_decision(web, cfg, conn, clock, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    path = make_apk(tmp_path / "private-key.apk", version_code=2, cert=b"PRIVATE-KEY")
+    web.client.post("/android/add/upload", files={"file": ("private.apk", path.read_bytes())})
+    work(web, conn)
+    assert db.accept_pending(conn, fetch.shelf_root(cfg, mine), mine.id, PKG)
+    public = add_public(web, conn, tmp_path, version_code=5)
+    db.set_source(conn, public.id, PKG, "rustore", PKG, "https://www.rustore.ru/catalog/app/" + PKG)
+    db.set_etag(conn, public.id, PKG, "public-etag")
+    add_public(web, conn, tmp_path, version_code=6, cert=b"PUBLIC-PENDING")
+    before = db.list_apps(conn, public.id)[0]
+    metadata = dict(db.get_app(conn, public.id, PKG))
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
+    work(web, conn)
+    after = db.list_apps(conn, public.id)[0]
+    assert dict(after.current) == dict(before.current) and dict(after.pending) == dict(before.pending)
+    assert [v["version_code"] for v in after.versions] == [5, 1]
+    for key in ("name", "source", "source_ref", "source_page", "source_etag", "google_account_id"):
+        assert db.get_app(conn, public.id, PKG)[key] == metadata[key]
+    db.reject_pending(conn, fetch.shelf_root(cfg, public), public.id, PKG, after.pending["id"])
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
+    work(web, conn)
+    after = db.list_apps(conn, public.id)[0]
+    assert after.pending["version_code"] == 2 and after.current["version_code"] == 5
+    assert db.accept_pending(conn, fetch.shelf_root(cfg, public), public.id, PKG)
+    assert [v["version_code"] for v in db.list_apps(conn, public.id)[0].versions] == [5, 2, 1]
 
 
 def test_copy_refuses_paid_and_not_downloaded(web, conn, clock, tmp_path):

@@ -17,6 +17,8 @@ from appshelf.android.sources import Sources
 def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock, acct, width, local_chromium):
     playwright, executable = local_chromium
     shelf = android_app(conn, cfg, clock, acct.user_id)
+    public = db.ensure_public_shelf(conn, clock.iso())
+    db.put_app(conn, public.id, PKG, "Shared app", "upload", "", clock.iso())
     topic = "https://4pda.to/forum/index.php?showtopic=456"
     db.set_source(conn, shelf.id, PKG, "fourpda", "https://4pda.to/forum/dl/post/123/example.apk", topic)
     web.app.state.w.env.sources = Sources(FakeHttp(), pause=0)
@@ -40,7 +42,8 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
             page.context.route("https://4pda.to/**", lambda target: target.fulfill(status=200, body="Source"))
             for theme in ("light", "dark"):
                 web.client.get(f"/theme?set={theme}")
-                for path in ("/?os=apple", "/history", "/blocked", "/android", "/android/add", "/android/public", "/apple", "/admin", "/login", "/p"):
+                for path in ("/?os=apple", "/history", "/blocked", "/android", "/android/add", "/android/public",
+                             "/android/public/add", "/apple", "/admin", "/login", "/p"):
                     page.goto("https://apps.example" + path)
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (width, theme, path)
                     heading = page.locator("header h1")
@@ -58,6 +61,9 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
                     link = menu.get_by_role("link", name=label, exact=True)
                     assert link.is_visible() and link.bounding_box()["height"] >= 44
                     assert link.get_attribute("target") == "_blank"
+                sync = menu.get_by_role("button", name="Добавить версии в публичную", exact=True)
+                assert sync.is_visible() and sync.bounding_box()["height"] >= 44
+                assert sync.locator("xpath=..").locator('input[name="sync_history"]').get_attribute("value") == "1"
                 assert menu.get_by_role("link", name="Тема на 4PDA").get_attribute("href") == topic
                 page.screenshot(path=str(cfg.data_dir / f"source-menu-{width}-{theme}.png"), full_page=True)
                 with page.expect_popup() as opened:

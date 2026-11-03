@@ -60,7 +60,7 @@ def test_real_signatures_and_tamper_preserve_working_version(ctx, cfg, conn, clo
 
 @pytest.mark.integration
 @pytest.mark.timeout(120)
-def test_manual_old_build_is_verified_and_preserves_latest(ctx, cfg, conn, clock, tmp_path):
+def test_manual_old_build_is_verified_and_preserves_latest(ctx, cfg, conn, clock, tmp_path, acct):
     shelf = db.ensure_shelf(conn, 1, clock.iso())
     args = dict(source="upload", source_ref="", expected_package=None, expected_signer="", name_hint="", icon=None,
                 allow_older=True)
@@ -71,6 +71,14 @@ def test_manual_old_build_is_verified_and_preserves_latest(ctx, cfg, conn, clock
     shutil.copyfile(DATA / "v2-5.apk", candidate)
     assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args) == (PACKAGE, "saved")
     assert [v["version_code"] for v in db.list_apps(conn, shelf.id)[0].versions] == [6, 5]
+    public = db.ensure_public_shelf(conn, clock.iso())
+    db.put_app(conn, public.id, PACKAGE, "Signed app", "upload", "", clock.iso())
+    fetch._copy_to_public(ctx.env, conn, public, PACKAGE, shelf.id, tmp_path / "copy-work")
+    copies = db.list_apps(conn, public.id)[0].versions
+    assert [v["version_code"] for v in copies] == [6, 5]
+    for version in copies:
+        copied = fetch.shelf_root(cfg, public) / version["dir"] / fetch.apk_name(PACKAGE, version["version_name"])
+        assert version["signature_verified"] and apk.verify_apk(copied) == OLD
     shutil.copyfile(DATA / "v2-5.apk", candidate)
     damaged(candidate, "v2")
     with pytest.raises(apk.ApkError, match="криптографическая"):
