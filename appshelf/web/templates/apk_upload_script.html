@@ -1,5 +1,6 @@
 <script>
 (function () {
+  if (window.ApkUploads) return;
   if (!window.XMLHttpRequest || !window.FormData) return;
   function size(bytes) {
     if (bytes < 1048576) return Math.ceil(bytes / 1024) + ' КБ';

@@ -142,7 +142,7 @@
 {% if not public %}<p class="hint">Ссылку на отдельный APK 4PDA тоже можно вставить сюда: скачивание использует
   ваш подключённый аккаунт 4PDA. Выбранное вложение сохраняется без автоматического обновления.</p>{% endif %}
 <h2>Свой файл</h2>
-<form method="post" action="{{ post_url(prefix ~ '/add/upload') }}" enctype="multipart/form-data" class="card" data-apk-upload data-upload-target="{{ prefix }}">
+<form method="post" action="{{ post_url(prefix ~ '/add/upload') }}" enctype="multipart/form-data" class="card" data-apk-upload data-upload-target="{{ prefix }}" data-upload-api="{{ post_url(prefix ~ '/uploads') }}">
   {# Android file providers can report APKs as ZIP or generic binary data; validate on the server. #}
   <label>Файл APK<input name="file" type="file" required></label>
   <label>Название (необязательно)<input name="name"></label>

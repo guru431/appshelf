@@ -135,7 +135,7 @@
       <p class="install"><button>Сменить источник</button></p>
     </form>
     <h3>Добавить версию своим файлом</h3>
-    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/upload') }}" enctype="multipart/form-data" data-apk-upload data-upload-target="{{ prefix }}">
+    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/upload') }}" enctype="multipart/form-data" data-apk-upload data-upload-target="{{ prefix }}" data-upload-api="{{ post_url(prefix ~ '/uploads') }}" data-upload-package="{{ a.package }}">
       {# Keep the picker unrestricted for Android file providers; validate on the server. #}
       <label>Файл APK<input name="file" type="file" required></label><button>Загрузить</button>
       {% include "apk_upload_progress.html" %}

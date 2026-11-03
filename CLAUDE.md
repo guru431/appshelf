@@ -43,6 +43,8 @@ google-play-protocol; форматы источников — `tests/data/*/READ
   `.venv/Scripts/python -m pytest -q tests/test_apk_verification.py tests/test_fdroid_verification.py -m integration`.
 - Геометрия, диалоги, клавиатура и контраст (Windows, локальный Chromium, без внешней сети):
   `.venv/Scripts/python -m pytest -q tests/test_web_browser.py -m integration`.
+- Докачка, пауза и фоновая отправка APK (Windows, Chromium и локальный HTTP-сервер, без внешней сети):
+  `.venv/Scripts/python -m pytest -q tests/test_upload_browser.py -m integration`.
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
@@ -51,6 +53,12 @@ google-play-protocol; форматы источников — `tests/data/*/READ
   `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
 
 ## Правила
+- Докачка APK: `android/uploads.py`, `web/uploads.py`, `apk_transfers.js`; части по 1 МиБ, два потока,
+  авторизация и явный `person` на каждом запросе, SHA-256 частей и штатный apksigner после сборки.
+  Файлы и квитанции — `data_dir/uploads/` и `android_uploads`, срок 7 дней без новых частей; временные данные
+  ограничены 2 ГБ плюс место для сборки одного APK. Это вне `tmp/web`: recover не должен удалять докачку.
+  Service worker не кэширует страницы; файл в IndexedDB удаляется после передачи или отмены. Android может
+  остановить браузер: поддерживается продолжение при возвращении, постоянная работа в фоне не гарантируется.
 - 4PDA: `android/fourpda.py`, `fourpda_login.py`, `web/fourpda.py`; только личная Android-полка.
   Сессии — `ipatool_home/fourpda/<user_id>.json` (0600), не БД/логи/задания. Вход и капчу проходит человек;
   окно изолировано, живёт 10 минут, требует Chromium + Xvfb и extra `fourpda` (README).

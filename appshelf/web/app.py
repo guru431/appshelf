@@ -162,6 +162,17 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def pwa_manifest():
         return JSONResponse(pwa.MANIFEST, media_type="application/manifest+json")
 
+    @app.get("/pwa/apk-transfers.js")
+    def apk_transfer_script():
+        from pathlib import Path
+        return Response((Path(__file__).parent / "templates" / "apk_transfers.js").read_text(encoding="utf-8"),
+                        media_type="application/javascript", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/pwa/upload-worker.js")
+    def apk_upload_worker():
+        return Response("importScripts('/pwa/apk-transfers.js?v=1');", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
     @app.get("/pwa/icon-{size:int}.png")
     def pwa_icon(size: int):
         if size not in pwa.SIZES:

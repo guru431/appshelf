@@ -29,7 +29,7 @@ include = ["appshelf*"]
 
 [tool.setuptools.package-data]
 "appshelf" = ["data/*.json", "data/*.java"]
-"appshelf.web" = ["templates/*.html"]
+"appshelf.web" = ["templates/*.html", "templates/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

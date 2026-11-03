@@ -105,7 +105,7 @@ def mutation_kind(path: str) -> str:
     path = urlsplit(path).path
     if path == "/api/status" or path.startswith(("/apps/", "/history/", "/blocked/")):
         return "account"
-    if (path in ("/api/android/status", "/android/public/add/from-shelf")
+    if (path in ("/api/android/status", "/android/public/add/from-shelf") or path.startswith("/android/public/uploads")
             or (path.startswith("/android/") and not path.startswith("/android/public"))
             or path.startswith("/fourpda/add")):
         return "person"

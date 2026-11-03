@@ -13,6 +13,32 @@ import pytest
 from appshelf import apk
 from appshelf.android import db, fetch
 
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+def test_resumable_chunks_preserve_real_signature_and_reject_tampering(web, conn, tmp_path):
+    from test_web_android import work
+    from test_uploads import payload, post_part
+    raw = (DATA / "v2-5.apk").read_bytes()
+    item = web.client.post("/android/uploads", json=payload(raw)).json()
+    endpoint = "/android/uploads/" + item["id"]
+    assert post_part(web.client, endpoint, 1, 0, raw).status_code == 200
+    assert web.client.post(endpoint + "/finish").status_code == 200
+    work(web, conn)
+    current = conn.execute("SELECT * FROM android_versions WHERE role='current'").fetchone()
+    assert current["signature_verified"] == 1 and current["signer"] == OLD
+    candidate = tmp_path / "bad.apk"
+    shutil.copyfile(DATA / "v2-6.apk", candidate)
+    damaged(candidate, "v2")
+    raw = candidate.read_bytes()
+    item = web.client.post("/android/uploads", json=payload(raw, client_id="b"*32)).json()
+    endpoint = "/android/uploads/" + item["id"]
+    assert post_part(web.client, endpoint, 1, 0, raw).status_code == 200
+    assert web.client.post(endpoint + "/finish").status_code == 200
+    work(web, conn)
+    assert conn.execute("SELECT COUNT(*) FROM android_versions").fetchone()[0] == 1
+    assert conn.execute("SELECT status FROM android_jobs ORDER BY id DESC LIMIT 1").fetchone()[0] == "error"
+
 DATA = Path(__file__).parent / "data" / "apk-signatures"
 OLD = "6cb0d638923096bfd175cfa91e16404980f5f706eb8dfde5ba37e5528040f186"
 NEW = "e08de9a9f6987978aafa11b24c4276f7146e72c29306bf16dd99bebbbe561d65"

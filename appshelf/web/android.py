@@ -286,6 +286,9 @@ def _register_scope(app, w, scope: Scope):
             return db.ensure_public_shelf(c, w.now())
         return db.ensure_shelf(c, request.state.who.id, w.now())
 
+    from . import uploads as upload_web
+    upload_web.register(app, w, scope, shelf_of, ensure)
+
     def google_accounts(c, request: Request) -> list:
         """Google-аккаунты, которыми качают из Play на полку области: своя — активного участника, публичная —
         владельца (spec §6.4)."""

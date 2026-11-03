@@ -33,7 +33,8 @@ def test_apk_upload_progress_and_retry_after_failure(web, conn, cfg, clock, tmp_
         browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
         try:
             page = browser.new_page(viewport={"width": width, "height": 844})
-            page.add_init_script("""window.uploadRequests = [];
+            page.add_init_script("""Object.defineProperty(window, 'indexedDB', {value:undefined});
+              window.uploadRequests = [];
               window.XMLHttpRequest = class extends EventTarget {
                 constructor() { super(); this.upload = new EventTarget(); this.status = 0; }
                 open(method, url) { this.method = method; this.url = url; }
@@ -109,8 +110,11 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
         result = web.client.request(request.method, url.path + ("?" + url.query if url.query else ""),
                                     content=request.post_data_buffer,
                                     headers={"user-agent": request.headers.get("user-agent", ""),
-                                             "content-type": request.headers.get("content-type", "")},
+                                             "content-type": request.headers.get("content-type", ""),
+                                             "x-chunk-sha256": request.headers.get("x-chunk-sha256", "")},
                                     follow_redirects=request.resource_type == "xhr")
+        if result.status_code >= 400:
+            errors.append((request.method, url.path, result.status_code, result.text[:500]))
         target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
 
     playwright, executable = local_chromium
@@ -119,6 +123,7 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
         try:
             page = browser.new_page(viewport={"width": 390, "height": 844},
                                     user_agent="Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile")
+            page.add_init_script("Object.defineProperty(navigator, 'serviceWorker', {value:undefined});")
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("requestfailed", lambda request: errors.append(request.failure))
@@ -137,10 +142,9 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
                 path = make_apk(tmp_path / f"upload-{code}.apk", package=package,
                                 version_code=code, version_name=f"{code}.0", label="Upload app")
                 chooser.set_files({"name": f"Приложение {code}.apk", "mimeType": mime, "buffer": path.read_bytes()})
-                form.get_by_role("button", name="Загрузить", exact=True).click()
-                page.wait_for_function("""prefix => location.pathname === prefix ||
-                  document.querySelector('[data-upload-status].err')""", arg=prefix, timeout=10000)
-                assert page.url == "https://apps.example" + prefix, (errors, form.inner_text())
+                with page.expect_navigation(url="https://apps.example" + prefix, wait_until="domcontentloaded", timeout=10000):
+                    form.get_by_role("button", name="Загрузить", exact=True).click()
+                assert page.url == "https://apps.example" + prefix, errors
                 work(web, conn)
                 page.reload()
                 assert page.get_by_label("Действия с Upload app", exact=True).is_visible()

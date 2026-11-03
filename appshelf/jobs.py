@@ -338,6 +338,8 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
             _drop_android_dirs(cfg, shelf)
         for uid in uids:
             if people.get_user(c, uid) is None:
+                from .android.uploads import Uploads
+                Uploads(cfg).remove_user(c, uid)
                 fourpda.Sessions(cfg).forget(uid)
         for gid in gids:
             play.disconnect(cfg, gid)  # вместе с незавершёнными поколениями токена, под замком подключения
@@ -419,6 +421,8 @@ def remove_google(cfg: Config, c, gid: int) -> bool:
         if gone is not None:
             _drop_android_dirs(cfg, gone)
         if last:
+            from .android.uploads import Uploads
+            Uploads(cfg).remove_user(c, g.user_id)
             fourpda.Sessions(cfg).forget(g.user_id)
         play.disconnect(cfg, gid)
     return last
@@ -452,6 +456,9 @@ def link_users(cfg: Config, c, keep_uid: int, gone_uid: int) -> None:
             moved: list[tuple[Path, Path]] = []  # (откуда, куда) — для возврата при сбое
             try:
                 with store.tx(c):
+                    if c.execute("SELECT 1 FROM android_uploads WHERE user_id IN (?,?) AND job_id IS NULL LIMIT 1",
+                                 (keep_uid, gone_uid)).fetchone():
+                        raise AccountBusy("загрузка APK: завершите или отмените передачу перед связыванием")
                     drop = _link(cfg, c, keep_uid, gone_uid, moved)
             except BaseException:
                 for src, dst in reversed(moved):
@@ -631,6 +638,8 @@ class Worker:
             known = {str(a.id) for a in people.all_accounts(c)}
             cfg = self.env.cfg
             shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
+            from .android.uploads import Uploads
+            Uploads(cfg).cleanup(c, self.env.now())
             android_fetch.recover(c, self.env.now())  # после очистки tmp/web: загрузки без файла — ошибка
         finally:
             c.close()
@@ -646,6 +655,8 @@ class Worker:
         self.purge()  # пароль шага входа живёт не дольше TTL, даже если страницу бросили
         c = self.connect()
         try:
+            from .android.uploads import Uploads
+            Uploads(self.env.cfg).cleanup(c, self.env.now())
             self.retry_unfinished(c)
             if store.has_running(c, "update"):
                 with nightly_lock(self.env.cfg) as idle:

@@ -180,6 +180,10 @@ button:disabled { cursor: default; background: #4b5665; color: #fff; filter: non
 .upload-feedback progress { display: block; width: 100%; height: 10px; accent-color: var(--accent); }
 .upload-feedback p { margin: 6px 0 0; }
 .upload-feedback .err { color: var(--err); }
+.upload-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.upload-controls[hidden] { display: none; }
+.upload-controls button { min-height: 44px; }
+.upload-feedback .hint { margin-top: 8px; }
 .secondary, .tint, .danger { background-image: none; box-shadow: none; }
 .secondary { background-color: var(--fill); color: var(--fg); }
 .tint { background-color: var(--tint); color: var(--link); }
@@ -419,6 +423,7 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
   navigator.clipboard.writeText(link).then(function () { b.textContent = 'Скопировано'; }, show);
 });
 </script>
+<script src="/pwa/apk-transfers.js?v=1" data-upload-user="{{ who.id if who else '' }}"></script>
 {% include "apk_upload_script.html" %}
 {% if busy %}
 <script>

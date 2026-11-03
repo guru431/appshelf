@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 # Откат — выложить прежний коммит: базу новее себя код берёт, только если её переход записал в state
 # schema_readable_by самую старую годную ей версию кода, иначе MigrationError. Правило для переходов с версии 4:
 # лишь добавляющий столбцы с умолчаниями или таблицы, которых прежний код не читает, пишет туда прежний
@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS android_versions (id INTEGER PRIMARY KEY, shelf_id IN
 CREATE TABLE IF NOT EXISTS android_jobs (id INTEGER PRIMARY KEY, shelf_id INTEGER NOT NULL, kind TEXT NOT NULL,
     package TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL,
     finished_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS android_uploads (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, shelf_id INTEGER NOT NULL,
+    client_id TEXT NOT NULL, package TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', filename TEXT NOT NULL,
+    size INTEGER NOT NULL, fingerprint TEXT NOT NULL, parts TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL, job_id INTEGER, UNIQUE(user_id, client_id));
 CREATE TABLE IF NOT EXISTS pin_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, first_at TEXT NOT NULL,
     blocked_until TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS google_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
@@ -271,9 +275,7 @@ def _upgrade(c, owner_email: str) -> None:
         if version >= SCHEMA_VERSION:
             return
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if version in (4, 5, 6, 7, 8, 9):  # таблицы Android (5), счётчики PIN (6), Google-аккаунты (7): код версии 4 их не
-            # читает — откат возможен; участник без Apple ID для него просто не вошедший. Столбцы Play (8) — с
-            # умолчаниями: таблицам, что были до перехода, — ALTER
+        if version in (4, 5, 6, 7, 8, 9, 10):  # Additive tables and defaulted columns keep older code compatible.
             _create(c)
             for table, column in V8_COLUMNS:
                 if column.split()[0] not in {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}:
