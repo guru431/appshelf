@@ -7,7 +7,8 @@
 {% set notice = a.last_error if a.last_error in notices else '' %}
 {% set err = '' if notice else a.last_error %}
 <div class="card app">
-  {% if v %}<img src="{{ url(v['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
+  {# Versioned URLs refresh repaired placeholders despite the archive's one-year image cache. #}
+  {% if v %}<img src="{{ url(v['dir'], 'icon.png') }}?v=2" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
   <div class="body">
     <div class="app-info">
     <div><b>{{ a.name }}</b>
