@@ -60,15 +60,17 @@ def test_rotation_current_previous_kept(conn, tmp_path):
     assert add(conn, root, sid, v(2)) == "current"
     assert add(conn, root, sid, v(3)) == "current"
     view = db.list_apps(conn, sid)[0]
-    assert (view.current["version_code"], view.previous["version_code"], view.kept, view.pending) == (3, 2, None, None)
+    assert (view.current["version_code"], view.previous["version_code"], view.kept["version_code"], view.pending) == (3, 2, 1, None)
     assert (view.status, view.signer) == ("ok", A)
-    assert not (root / "ru.x-1").exists() and (root / "ru.x-2").exists()
+    assert (root / "ru.x-1").exists() and (root / "ru.x-2").exists()
     assert db.pin_version(conn, root, sid, "ru.x", view.previous["id"])
     add(conn, root, sid, v(4))
     view = db.list_apps(conn, sid)[0]
     assert (view.current["version_code"], view.previous["version_code"], view.kept["version_code"]) == (4, 3, 2)
     assert db.unpin_version(conn, root, sid, "ru.x", view.kept["id"])
-    assert db.list_apps(conn, sid)[0].kept is None and not (root / "ru.x-2").exists()
+    view = db.list_apps(conn, sid)[0]
+    assert [v["version_code"] for v in view.versions] == [4, 3, 2, 1]
+    assert not any(v["pinned"] for v in view.versions) and (root / "ru.x-2").exists()
 
 
 def test_other_signer_goes_pending_and_is_accepted(conn, tmp_path):
@@ -81,6 +83,25 @@ def test_other_signer_goes_pending_and_is_accepted(conn, tmp_path):
     assert (view.current["version_code"], view.signer, view.pending) == (2, B, None)
     assert view.previous["version_code"] == 1
     assert not db.accept_pending(conn, root, sid, "ru.x")
+
+
+def test_older_versions_and_accepted_old_signer_keep_latest(conn, tmp_path):
+    root, sid = shelf_with_app(conn, tmp_path)
+    add(conn, root, sid, v(5))
+    assert add(conn, root, sid, v(3)) == "kept"
+    assert add(conn, root, sid, v(2)) == "kept"
+    assert add(conn, root, sid, v(1, signer=B)) == "pending"
+    view = db.list_apps(conn, sid)[0]
+    assert [v["version_code"] for v in view.versions] == [5, 3, 2]
+    assert db.accept_pending(conn, root, sid, "ru.x")
+    view = db.list_apps(conn, sid)[0]
+    assert (view.current["version_code"], view.signer, view.pending) == (5, A, None)
+    assert [v["version_code"] for v in view.versions] == [5, 3, 2, 1]
+    add(conn, root, sid, v(6))
+    add(conn, root, sid, v(7))
+    view = db.list_apps(conn, sid)[0]
+    assert [v["version_code"] for v in view.versions] == [7, 6, 5, 3, 2, 1]
+    assert all((root / v["dir"]).is_dir() for v in view.versions)
 
 
 def test_new_pending_replaces_old_pending(conn, tmp_path):

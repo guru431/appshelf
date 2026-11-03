@@ -1,7 +1,7 @@
 """Таблицы Android (spec 2026-10-28 §7, §9, §12): полки участников, приложения, версии APK, задания.
 
 Полка — у участника (user_id; NULL — публичная, этап 2), каталог — <архив>/<shelf>/<пакет>-<versionCode>[-N]/.
-Роли версий — как у IPA (current, previous, kept) и pending: новая версия с другой подписью ждёт «Принять новую
+Роли версий — current, previous, kept (вся история) и pending: версия с другой подписью ждёт «Принять новую
 подпись». Транзакции и удаление каталогов после COMMIT — как в store."""
 from __future__ import annotations
 
@@ -65,6 +65,7 @@ class AppView:
     kept: sqlite3.Row | None
     pending: sqlite3.Row | None
     paid: bool = False      # Google Play: купленное
+    versions: tuple[sqlite3.Row, ...] = ()  # доступные APK по убыванию versionCode, без pending
 
 
 # --- полки -------------------------------------------------------------------
@@ -180,11 +181,13 @@ def set_source(c, shelf_id: int, package: str, source: str, source_ref: str) -> 
 def list_apps(c, shelf_id: int) -> list[AppView]:
     out = []
     for a in c.execute("SELECT * FROM android_apps WHERE shelf_id=?", (shelf_id,)).fetchall():
-        vs = {r["role"]: r for r in c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=?",
-                                              (shelf_id, a["package"]))}
+        versions = c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? "
+                             "ORDER BY version_code DESC, (role='current') DESC, id DESC", (shelf_id, a["package"])).fetchall()
+        vs = {r["role"]: r for r in reversed(versions)}
         out.append(AppView(a["package"], a["name"], a["source"], a["source_ref"], a["signer"], a["status"],
                            a["last_error"], a["checked_at"], a["check_result"], vs.get("current"),
-                           vs.get("previous"), vs.get("kept"), vs.get("pending"), bool(a["paid"])))
+                           vs.get("previous"), vs.get("kept"), vs.get("pending"), bool(a["paid"]),
+                           tuple(v for v in versions if v["role"] != "pending")))
     return sorted(out, key=lambda v: (v.name.casefold(), v.package))
 
 
@@ -195,6 +198,16 @@ def has_current(c, shelf_id: int, package: str) -> bool:
 def current_version(c, shelf_id: int, package: str):
     return c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? AND role='current'",
                      (shelf_id, package)).fetchone()
+
+
+def downloadable_version(c, shelf_id: int, package: str, version_id: int = 0):
+    """Без выбора — последняя; явный выбор ограничен полкой, пакетом и принятыми версиями."""
+    if not version_id:
+        return current_version(c, shelf_id, package)
+    if not 0 < version_id <= (1 << 63) - 1:
+        return None
+    return c.execute("SELECT * FROM android_versions WHERE id=? AND shelf_id=? AND package=? AND role!='pending'",
+                     (version_id, shelf_id, package)).fetchone()
 
 
 def apps_to_check(c) -> list[sqlite3.Row]:
@@ -231,65 +244,57 @@ def version_dir(c, shelf_id: int, root: Path, package: str, version_code: int) -
     return name
 
 
-def _rotate(c, shelf_id: int, package: str) -> list[str]:
-    """Место для новой current: незакреплённая previous — прочь (каталог — вызывающему после COMMIT), закреплённая —
-    kept, current — previous."""
-    old = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
-                                       "AND role='previous' AND NOT pinned", (shelf_id, package))]
-    c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? AND role='previous' AND NOT pinned",
-              (shelf_id, package))
+def _rotate(c, shelf_id: int, package: str) -> None:
+    """Место для новой current: previous — kept, current — previous; история остаётся на диске."""
     c.execute("UPDATE android_versions SET role='kept' WHERE shelf_id=? AND package=? AND role='previous'",
               (shelf_id, package))
     c.execute("UPDATE android_versions SET role='previous' WHERE shelf_id=? AND package=? AND role='current'",
               (shelf_id, package))
-    return old
 
 
 def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str) -> str:
-    """Новая версия: 'current' — с ротацией, как у IPA; 'pending' — подпись не та, что у приложения (§7): текущей не
-    становится, прежняя pending — прочь. Первая версия задаёт подпись приложения. Карточки нет — AppGone."""
+    """Новее current — текущая; старая сборка — kept. Другой ключ — pending до решения человека.
+    Первая версия задаёт подпись приложения. Карточки нет — AppGone."""
     with tx(c):
         app = get_app(c, shelf_id, package)
         if app is None:
             raise AppGone(package)
+        old = []
         if app["signer"] and app["signer"] != v.signer:
             role = "pending"
             old = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
                                                "AND role='pending'", (shelf_id, package))]
             c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                       (shelf_id, package))
+        elif (current := current_version(c, shelf_id, package)) is not None and v.version_code <= current["version_code"]:
+            role = "kept"
         else:
             role = "current"
-            old = _rotate(c, shelf_id, package)
-            # pending не новее новой текущей: «Принять» её — откат на старую версию с чужой подписью
-            stale = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
-                                                 "AND role='pending' AND version_code<=?",
-                                                 (shelf_id, package, v.version_code))]
-            c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? AND role='pending' "
-                      "AND version_code<=?", (shelf_id, package, v.version_code))
-            old += stale
+            _rotate(c, shelf_id, package)
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (v.signer, shelf_id, package))
         c.execute("""INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk,
                          abis, signer, source, size, sha256, dir, downloaded_at, role, signature_verified, rotation_min_sdk)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                   (shelf_id, package, v.version_name, v.version_code, v.min_sdk, v.target_sdk, v.abis, v.signer,
                    v.source, v.size, v.sha256, v.dir, now, role, int(v.signature_verified), v.rotation_min_sdk))
-        set_status(c, shelf_id, package, "ok")
+        set_status(c, shelf_id, package, "ok", app["last_error"] if role == "kept" else "")
     remove_dirs(root, old)
     return role
 
 
 def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
-    """«Принять новую подпись»: pending — current с ротацией, подпись приложения — её. False — нечего принимать."""
+    """Принять pending: новая — current, старая — kept; последняя версия и её ключ не понижаются."""
     with tx(c):
-        p = c.execute("SELECT id, signer FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
+        p = c.execute("SELECT id, signer, version_code FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                       (shelf_id, package)).fetchone()
         if p is None:
             return False
-        old = _rotate(c, shelf_id, package)
-        c.execute("UPDATE android_versions SET role='current' WHERE id=?", (p["id"],))
-        c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
-    remove_dirs(root, old)
+        current = current_version(c, shelf_id, package)
+        role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
+        if role == "current":
+            _rotate(c, shelf_id, package)
+            c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
+        c.execute("UPDATE android_versions SET role=? WHERE id=?", (role, p["id"]))
     return True
 
 
@@ -325,28 +330,15 @@ def _version_row(c, shelf_id: int, package: str, version_id: int):
                      "AND role != 'pending'", (version_id, shelf_id, package)).fetchone()
 
 
-def _unpin(c, rows) -> list[str]:
-    dirs = []
-    for r in rows:
-        if r["role"] == "kept":
-            c.execute("DELETE FROM android_versions WHERE id=?", (r["id"],))
-            dirs.append(r["dir"])
-        else:
-            c.execute("UPDATE android_versions SET pinned=0 WHERE id=?", (r["id"],))
-    return dirs
-
-
 def pin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
-    """Как store.pin_version: одна закреплённая на приложение, прежняя kept — с диска."""
+    """Одна закреплённая версия на приложение; смена отметки не удаляет историю."""
     with tx(c):
         row = _version_row(c, shelf_id, package, version_id)
         if row is None:
             return False
-        old = [] if row["pinned"] else _unpin(c, c.execute(
-            "SELECT id, role, dir FROM android_versions WHERE shelf_id=? AND package=? AND pinned",
-            (shelf_id, package)).fetchall())
+        c.execute("UPDATE android_versions SET pinned=0 WHERE shelf_id=? AND package=? AND pinned",
+                  (shelf_id, package))
         c.execute("UPDATE android_versions SET pinned=1 WHERE id=?", (version_id,))
-    remove_dirs(root, old)
     return True
 
 
@@ -355,8 +347,7 @@ def unpin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -
         row = _version_row(c, shelf_id, package, version_id)
         if row is None:
             return False
-        old = _unpin(c, [row]) if row["pinned"] else []
-    remove_dirs(root, old)
+        c.execute("UPDATE android_versions SET pinned=0 WHERE id=?", (version_id,))
     return True
 
 

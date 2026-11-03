@@ -60,6 +60,27 @@ def test_real_signatures_and_tamper_preserve_working_version(ctx, cfg, conn, clo
 
 @pytest.mark.integration
 @pytest.mark.timeout(120)
+def test_manual_old_build_is_verified_and_preserves_latest(ctx, cfg, conn, clock, tmp_path):
+    shelf = db.ensure_shelf(conn, 1, clock.iso())
+    args = dict(source="upload", source_ref="", expected_package=None, expected_signer="", name_hint="", icon=None,
+                allow_older=True)
+    candidate = tmp_path / "candidate.apk"
+    shutil.copyfile(DATA / "v2-6.apk", candidate)
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args) == (PACKAGE, "updated")
+    current = dict(db.current_version(conn, shelf.id, PACKAGE))
+    shutil.copyfile(DATA / "v2-5.apk", candidate)
+    assert fetch.store_apk(ctx.env, conn, shelf, candidate, **args) == (PACKAGE, "saved")
+    assert [v["version_code"] for v in db.list_apps(conn, shelf.id)[0].versions] == [6, 5]
+    shutil.copyfile(DATA / "v2-5.apk", candidate)
+    damaged(candidate, "v2")
+    with pytest.raises(apk.ApkError, match="криптографическая"):
+        fetch.store_apk(ctx.env, conn, shelf, candidate, **args)
+    assert dict(db.current_version(conn, shelf.id, PACKAGE)) == current
+    assert len(list((cfg.archive / shelf.shelf).iterdir())) == 2
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(120)
 def test_verified_rotation_is_manual_pending_with_android_9_compatibility(ctx, cfg, conn, clock, tmp_path):
     shelf = db.ensure_shelf(conn, 1, clock.iso())
     old, rotated = tmp_path / "old.apk", tmp_path / "rotated.apk"

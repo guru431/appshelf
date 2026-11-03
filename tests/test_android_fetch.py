@@ -193,6 +193,37 @@ def test_same_or_lower_version_is_same(ctx, cfg, conn, clock, tmp_path, code):
     assert sorted(p.name for p in (cfg.archive / shelf.shelf).iterdir()) == [f"{PKG}-5"]
 
 
+@pytest.mark.parametrize("kind", ["add", "upload"])
+@pytest.mark.parametrize("code", [3, 5])
+def test_manual_import_keeps_older_build_and_latest_source(ctx, cfg, conn, clock, tmp_path, kind, code):
+    shelf = shelf_of(conn, clock)
+    latest = "https://4pda.to/forum/dl/post/10/latest.apk"
+    older = "https://4pda.to/forum/dl/post/11/older.apk"
+    ctx.sources.apks[latest] = make_apk(tmp_path / "latest.apk", version_code=5, version_name="5.0")
+    run(ctx, conn, shelf, "add", clock, source="fourpda", ref=latest)
+    old = make_apk(tmp_path / "old.apk", version_code=code, version_name="old-build")
+    ctx.sources.apks[older] = old
+
+    def imported():
+        if kind == "add":
+            return run(ctx, conn, shelf, kind, clock, source="fourpda", ref=older)
+        import shutil
+        upload = tmp_path / "upload.apk"
+        shutil.copyfile(old, upload)
+        return run(ctx, conn, shelf, kind, clock, package=PKG, path=str(upload))
+
+    assert imported()["status"] == "done"
+    view = db.list_apps(conn, shelf.id)[0]
+    assert view.current["version_name"] == "5.0" and view.source_ref == latest
+    saved = [v for v in view.versions if v["version_name"] == "old-build"]
+    assert len(saved) == 1 and saved[0]["role"] == "kept"
+    path = cfg.archive / shelf.shelf / saved[0]["dir"] / fetch.apk_name(PKG, "old-build")
+    assert path.read_bytes() == old.read_bytes()
+    duplicate = imported()
+    assert duplicate["status"] == "error" and "уже" in duplicate["error"]
+    assert len(db.list_apps(conn, shelf.id)[0].versions) == 2
+
+
 def test_rustore_check_without_newer_does_not_download(ctx, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v5.apk", version_code=5))
     ctx.sources._latest[PKG] = Latest(5, "", True)
@@ -200,6 +231,19 @@ def test_rustore_check_without_newer_does_not_download(ctx, conn, clock, tmp_pat
     assert run(ctx, conn, shelf, "check", clock, package=PKG)["status"] == "done"
     assert ctx.sources.calls == [("latest", "rustore", PKG)]
     assert db.get_app(conn, shelf.id, PKG)["check_result"] == "same"
+
+
+def test_pending_fourpda_attachment_tracks_latest_but_not_archived_build(ctx, cfg, conn, clock, tmp_path):
+    shelf = shelf_of(conn, clock)
+    for code, cert in ((5, b"CERT-A"), (6, b"CERT-B"), (3, b"CERT-C")):
+        ref = f"https://4pda.to/forum/dl/post/{code}/app.apk"
+        ctx.sources.apks[ref] = make_apk(tmp_path / f"{code}.apk", version_code=code, cert=cert)
+        assert run(ctx, conn, shelf, "add", clock, source="fourpda", ref=ref)["status"] == "done"
+        if code != 5:
+            assert db.accept_pending(conn, cfg.archive / shelf.shelf, shelf.id, PKG)
+    view = db.list_apps(conn, shelf.id)[0]
+    assert view.current["version_code"] == 6 and view.source_ref.endswith("/6/app.apk")
+    assert [v["version_code"] for v in view.versions] == [6, 5, 3]
 
 
 def test_check_downloads_newer_and_rotates(ctx, cfg, conn, clock, tmp_path):
@@ -409,15 +453,17 @@ def test_store_page_file_of_other_package_refused(ctx, conn, clock, tmp_path):
     assert db.get_app(conn, shelf.id, "ru.bank") is None
 
 
-def test_newer_same_signer_drops_stale_pending(ctx, cfg, conn, clock, tmp_path):
-    """После pending (чужая подпись, v2) пришла v3 с прежней подписью: «Принять» v2 был бы откатом."""
+def test_newer_same_signer_keeps_pending_as_historical_option(ctx, cfg, conn, clock, tmp_path):
+    """Старая pending остаётся доступна для решения, но её принятие не понижает текущую."""
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk"), signer="")
     for code, cert in ((2, b"CERT-B"), (3, b"CERT-A")):
         ctx.sources.apks[PKG] = make_apk(tmp_path / f"{code}.apk", version_code=code, cert=cert)
         ctx.sources._latest[PKG] = Latest(code, "", True)
         run(ctx, conn, shelf, "check", clock, package=PKG)
-    assert versions(conn, shelf) == {"current": 3, "previous": 1}
-    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-3"]
+    assert versions(conn, shelf) == {"current": 3, "previous": 1, "pending": 2}
+    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-2", f"{PKG}-3"]
+    assert db.accept_pending(conn, cfg.archive / shelf.shelf, shelf.id, PKG)
+    assert versions(conn, shelf) == {"current": 3, "previous": 1, "kept": 2}
 
 
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):
@@ -546,10 +592,12 @@ def test_store_apk_on_deleted_shelf_is_app_gone(ctx, cfg, conn, clock, tmp_path)
 
 
 def test_upload_of_same_version_is_error_and_card_not_stuck(ctx, cfg, conn, clock, tmp_path):
-    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    import shutil
+    original = make_apk(tmp_path / "v1.apk")
+    shelf, _ = add_rustore(ctx, conn, clock, original)
     up = cfg.tmp_dir / "web" / "up-same.apk"
     up.parent.mkdir(parents=True, exist_ok=True)
-    make_apk(up)
+    shutil.copyfile(original, up)
     job = run(ctx, conn, shelf, "upload", clock, path=str(up), name="", package=PKG)
     assert job["status"] == "error" and "уже на полке" in job["error"]
     app = db.get_app(conn, shelf.id, PKG)

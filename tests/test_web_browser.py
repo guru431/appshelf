@@ -6,6 +6,8 @@ import pytest
 from helpers import seed_app
 from test_fourpda import local_chromium
 from test_web_context import android_app
+from appshelf.android import db, fetch, pin
+from apk_factory import png_bytes
 
 
 @pytest.mark.integration
@@ -77,5 +79,79 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
                     if state == "active":
                         page.mouse.move(0, 0)
                         page.mouse.up()
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [320, 390, 1280])
+@pytest.mark.parametrize("path", ["/android", "/android/public", "/p"])
+def test_android_version_picker_updates_download_details_and_qr(web, make_web, conn, cfg, clock, acct,
+                                                               width, path, local_chromium):
+    pkg = "ru.example.history"
+    shelves = (db.ensure_shelf(conn, acct.user_id, clock.iso()), db.ensure_public_shelf(conn, clock.iso()))
+    for shelf in shelves:
+        db.put_app(conn, shelf.id, pkg, "History app", "link", "https://example.org/history.apk", clock.iso())
+        root = fetch.shelf_root(cfg, shelf)
+        for code, signer in ((3, "a" * 64), (2, "a" * 64), (1, "b" * 64)):
+            folder = root / f"{pkg}-{code}"
+            folder.mkdir(parents=True)
+            (folder / "icon.png").write_bytes(png_bytes(40))
+            db.add_version(conn, root, shelf.id, pkg, db.NewApk(f"{code}.0", code, 23 if code == 1 else 28,
+                           22 if code == 1 else 35, "", signer, "link", 10485760, str(code) * 64,
+                           folder.name, True), clock.iso())
+        assert db.accept_pending(conn, root, shelf.id, pkg)
+    pin.set_pin(conn, "482913", clock.iso())
+    guest = make_web(cfg, conn)
+    guest.client.post("/p", data={"pin": "482913"})
+    active = guest.client if path == "/p" else web.client
+
+    def route(target):
+        request = target.request
+        u = urlsplit(request.url)
+        if u.path.startswith("/d/") and u.path.endswith("/icon.png"):
+            target.fulfill(status=200, content_type="image/png", body=png_bytes(40))
+            return
+        result = active.request(request.method, u.path + ("?" + u.query if u.query else ""),
+                                content=request.post_data_buffer,
+                                headers={"user-agent": request.headers.get("user-agent", "")})
+        target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844},
+                                    user_agent=("Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile"
+                                                if width < 700 else "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"))
+            errors = []
+            page.on("pageerror", lambda error: errors.append(error))
+            page.route("https://apps.example/**", route)
+            for theme in ("light", "dark"):
+                active.get(f"/theme?set={theme}")
+                page.goto("https://apps.example" + path)
+                select = page.get_by_label("Версия History app", exact=True)
+                assert "3.0" in select.locator("option:checked").inner_text()
+                choices = select.locator("option").evaluate_all("options => options.map(o => o.value)")
+                assert len(choices) == 3
+                select.select_option(choices[-1])
+                card = select.locator("xpath=ancestor::div[contains(@class, 'card')]")
+                assert card.get_by_role("link", name="Скачать APK", exact=True).get_attribute("href") == choices[-1]
+                assert "1.0 · Android 6+" in card.locator("[data-apk-meta]").inner_text()
+                warning = card.locator("[data-apk-warning]")
+                assert warning.is_visible() and "Другая подпись" in warning.inner_text()
+                assert "Android 15+" in warning.inner_text()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert select.bounding_box()["height"] >= 44
+                if width >= 700 or path == "/android/public":
+                    card.get_by_role("button", name="Показать QR-код для History app").click()
+                    assert "?version=" in card.locator(".app-qr a").get_attribute("href")
+                    assert "?version=" in card.locator(".app-qr img").get_attribute("src")
+                if path == "/android":
+                    assert "?version=" in card.locator(".more [data-copy]").get_attribute("data-copy")
+                    page.screenshot(path=str(cfg.data_dir / f"versions-{width}-{theme}.png"), full_page=True)
+                page.reload()
+                assert "3.0" in page.get_by_label("Версия History app", exact=True).locator("option:checked").inner_text()
+            assert not errors
         finally:
             browser.close()

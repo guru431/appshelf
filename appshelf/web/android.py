@@ -227,31 +227,32 @@ def register_routes(app, w) -> None:
         return guest_page(request, 429)  # closed: страница сама скажет «ввод временно закрыт»
 
     @app.get("/apk/{token}/{file}")
-    def app_link(token: str, file: str):
-        """Постоянная ссылка на приложение («Скопировать ссылку»): переадресация на файл текущей версии. Без входа,
+    def app_link(token: str, file: str, version: int = 0):
+        """Ссылка на приложение: последняя версия либо явно выбранная сохранённая. Без входа,
         как сами файлы /d/: секрет — токен каталога полки, его смена (rotate-token, смена PIN) гасит и ссылку."""
         package = file.removesuffix(".apk")
         if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
-            v = db.current_version(c, shelf.id, package) if shelf is not None and not shelf.shelf_next else None
+            v = db.downloadable_version(c, shelf.id, package, version) if shelf is not None and not shelf.shelf_next else None
         if v is None:
             return PlainTextResponse("not found", status_code=404)
         return RedirectResponse(fetch.file_url(cfg, shelf, v["dir"], fetch.apk_name(package, v["version_name"])),
                                 status_code=302)
 
     @app.get("/apk/{token}/{file}/qr.png")
-    def app_qr(token: str, file: str):
+    def app_qr(token: str, file: str, version: int = 0):
         package = file.removesuffix(".apk")
         if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
             if (shelf is None or shelf.shelf_next
-                    or db.current_version(c, shelf.id, package) is None):
+                    or db.downloadable_version(c, shelf.id, package, version) is None):
                 return PlainTextResponse("not found", status_code=404)
-        return Response(_qr_png(fetch.app_url(cfg, shelf, package)), media_type="image/png",
+        link = fetch.app_url(cfg, shelf, package) + (f"?version={version}" if version else "")
+        return Response(_qr_png(link), media_type="image/png",
                         headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/android/status")

@@ -65,9 +65,9 @@ def _space(env, c) -> None:
 
 
 def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: str, expected_package: str | None,
-              expected_signer: str, name_hint: str, icon: bytes | None, google_account_id: int | None = None,
-              paid: bool = False, signer_from: str = "") -> tuple[str, str]:
-    """APK из path — на полку: (пакет, "updated" | "pending" | "same"). path переносится на полку или остаётся
+               expected_signer: str, name_hint: str, icon: bytes | None, google_account_id: int | None = None,
+               paid: bool = False, signer_from: str = "", allow_older: bool = False) -> tuple[str, str]:
+    """APK из path — на полку: (пакет, "updated" | "saved" | "pending" | "same"). path переносится на полку или остаётся
     вызывающему. expected_package — карточка уже есть (RuStore, проверка, новая версия файлом): нет её — AppGone;
     без него карточка появляется, когда пакет стал известен (ссылка, свой файл). signer_from — чья подпись
     expected_signer, если не самого источника (APKPure сверяется с RuStore)."""
@@ -83,13 +83,13 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         raise store.AppGone(info.package)
     roles = {r["role"]: r["version_code"] for r in c.execute(
         "SELECT role, version_code FROM android_versions WHERE shelf_id=? AND package=?", (shelf.id, info.package))}
-    if "current" in roles and info.version_code <= roles["current"]:
+    if not allow_older and "current" in roles and info.version_code <= roles["current"]:
         return info.package, "same"
     size = path.stat().st_size
     digest = ipa.sha256(path)  # по локальному файлу в tmp: с шары читать вдвое дольше
     if db.rejected_apk(c, shelf.id, info.package, digest):
         return info.package, "same"
-    if c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='pending' AND sha256=?",
+    if c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND sha256=?",
                  (shelf.id, info.package, digest)).fetchone():
         return info.package, "same"
     rotation = apk.verified_rotation(path, app["signer"], info.signer) if app is not None else 0
@@ -131,7 +131,7 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
         shutil.rmtree(partial, ignore_errors=True)
         shutil.rmtree(final, ignore_errors=True)
         raise
-    return info.package, "updated" if role == "current" else "pending"
+    return info.package, {"current": "updated", "kept": "saved", "pending": "pending"}[role]
 
 
 def _account(c, source: str, gid: int | None):
@@ -165,7 +165,7 @@ def play_expired(env, c, gid: int) -> None:
 
 
 def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, expected_package: str | None,
-              name_hint: str, account=None, ack: bool = False) -> tuple[str, str, str]:
+              name_hint: str, account=None, ack: bool = False, allow_older: bool = False) -> tuple[str, str, str]:
     """Скачать из источника в рабочий каталог и положить на полку — под замком скачивания: (пакет, итог, метка
     карточки). account — Google-аккаунт источника play. Сверка с RuStore (план этапа 5): APKPure — подпись обязана
     совпасть, нет пакета в RuStore — нужна галочка ack (у приложения на полке подпись уже задана) и метка «не
@@ -206,12 +206,19 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                                         expected_package=expected_package, expected_signer=expected,
                                         name_hint=name_hint or got.name, icon=got.icon,
                                         google_account_id=account.id if account is not None else None, paid=got.paid,
-                                        signer_from=signer_from)
-            if notice and result != "same":
+                                        signer_from=signer_from, allow_older=allow_older)
+            if notice and result in ("updated", "pending"):
                 db.set_status(c, shelf.id, package, "ok", notice)
             app = db.get_app(c, shelf.id, package)
-            if source == "fourpda" and app is not None and app["source"] == "fourpda" and result != "same":
-                db.set_source(c, shelf.id, package, source, ref)
+            if source == "fourpda" and app is not None and app["source"] == "fourpda":
+                track_attachment = result == "updated"
+                if result == "pending":
+                    pending = c.execute("SELECT version_code FROM android_versions WHERE shelf_id=? AND package=? "
+                                        "AND role='pending'", (shelf.id, package)).fetchone()
+                    current = db.current_version(c, shelf.id, package)
+                    track_attachment = current is None or pending["version_code"] > current["version_code"]
+                if track_attachment:
+                    db.set_source(c, shelf.id, package, source, ref)
             if got.ref and got.ref != ref and app is not None and (app["source"], app["source_ref"]) == (source, ref):
                 db.set_source(c, shelf.id, package, source, got.ref)  # AppGallery: ID со страницы → пакет
             if got.etag and app is not None and (app["source"], app["source_ref"]) == (source, ref):
@@ -366,9 +373,11 @@ def run_job(env, c, job) -> None:
             db.set_status(c, shelf.id, package, "downloading")
         if job["kind"] == "add":
             gid = payload.get("account") or gid
-            _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
-                      name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid),
-                      ack=payload.get("ack") is True)
+            _, result, _ = _download(env, c, shelf, payload["source"], payload["ref"], work, expected_package=package or None,
+                                    name_hint=payload.get("name", ""), account=_account(c, payload["source"], gid),
+                                    ack=payload.get("ack") is True, allow_older=True)
+            if result == "same":
+                raise apk.ApkError("этот APK уже на полке или был отклонён — выберите другую сборку")
         elif job["kind"] == "copy":
             _copy_to_public(env, c, shelf, package, payload["from_shelf"], work)
         elif job["kind"] == "upload":
@@ -376,9 +385,9 @@ def run_job(env, c, job) -> None:
                 _space(env, c)
                 _, result = store_apk(env, c, shelf, Path(payload["path"]), source="upload", source_ref="",
                                       expected_package=package or None, expected_signer="",
-                                      name_hint=payload.get("name", ""), icon=None)
+                                      name_hint=payload.get("name", ""), icon=None, allow_older=True)
             if result == "same":  # файл не лёг на полку — человек должен это увидеть, а карточка — не «скачивается»
-                raise apk.ApkError("эта или более новая версия уже на полке — загрузите версию новее")
+                raise apk.ApkError("этот APK уже на полке или был отклонён — выберите другую сборку")
         else:
             app = db.get_app(c, shelf.id, package)
             if app is None:

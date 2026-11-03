@@ -2,6 +2,17 @@
    «Принять новую подпись», «Скопировать ссылку»; prefix — адреса форм области. Из контекста: fresh, sources, notices,
    android_version, apk_name, app_url (постоянная ссылка на приложение; нужна при edit или qr). Метка сверки с
    RuStore (notices) живёт в last_error — это не ошибка. #}
+{% macro version_meta(a, v) -%}
+{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
+ · {{ sources.get(v['source'], v['source']) }} · подпись {{ v['signer'][:4] }}…{{ v['signer'][-4:] }}{{ ' · закреплена' if v['pinned'] }}
+{%- endmacro %}
+
+{% macro version_warning(a, v) -%}
+{%- if v['target_sdk'] < 24 %}Android 15+ не поставит: приложение собрано под старые версии (targetSdk {{ v['target_sdk'] }}). {% endif -%}
+{%- if v['signer'] != a.signer %}Другая подпись: установка может потребовать удаления приложения вместе с данными.
+{%- elif v['id'] != a.current['id'] %}Прошлая версия: Android может потребовать удаления более новой вместе с данными.{% endif -%}
+{%- endmacro %}
+
 {% macro card(a, url, edit, prefix, qr=False) %}
 {% set v = a.current %}
 {% set notice = a.last_error if a.last_error in notices else '' %}
@@ -19,15 +30,28 @@
     {% if a.paid %}<div class="meta">Купленное в Google Play: может потребовать Play Store для проверки лицензии.</div>{% endif %}
     {% if notice %}<div class="meta">{{ notice }}</div>{% endif %}
     {% if v %}
-    <div class="meta">{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
-      · {{ sources.get(a.source, a.source) }} · подпись {{ a.signer[:4] }}…{{ a.signer[-4:] }}
-      {%- if v['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
+    <div class="meta" data-apk-meta>{{ version_meta(a, v) }}</div>
     {% endif %}
     </div>
     {% if v %}
-    {% if v['target_sdk'] < 24 %}<div class="err">Android 15+ не поставит: приложение собрано под старые версии (targetSdk {{ v['target_sdk'] }}).</div>{% endif %}
+    {% if a.versions | length > 1 %}
+    <label class="apk-version">Версия
+      <select aria-label="Версия {{ a.name }}" data-apk-select>
+      {% for x in a.versions %}
+        {% set link = app_url(a.package) ~ ('?version=' ~ x['id'] if x['id'] != v['id'] else '') %}
+        <option value="{{ url(x['dir'], apk_name(a.package, x['version_name'])) }}"{% if x['id'] == v['id'] %} selected{% endif %}
+          data-icon="{{ url(x['dir'], 'icon.png') }}?v=2" data-meta="{{ version_meta(a, x) }}"
+          data-warning="{{ version_warning(a, x) }}" data-link="{{ link }}"
+          data-qr="{{ app_url(a.package) }}/qr.png{{ '?version=' ~ x['id'] if x['id'] != v['id'] else '' }}">
+          {{ x['version_name'] }} · {{ sources.get(x['source'], x['source']) }}{{ ' · последняя' if x['id'] == v['id'] }}{{ ' · другая подпись' if x['signer'] != a.signer }}
+        </option>
+      {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    {% set warning = version_warning(a, v) %}<div class="err" data-apk-warning{% if not warning %} hidden{% endif %}>{{ warning }}</div>
     <div class="install"><div class="download-actions{{ ' with-qr' if qr }}">
-      <a class="btn pill" href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
+      <a class="btn pill" data-apk-download href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
       {% if qr %}<button type="button" class="sm secondary qr-toggle" data-qr-toggle aria-controls="qr-{{ a.package }}"
         aria-expanded="false" aria-label="Показать QR-код для {{ a.name }}" title="Показать QR-код">
         <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
@@ -35,15 +59,12 @@
           <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
         </svg>
       </button>{% endif %}
-    </div><a class="meta" href="#install-help" data-help>Как установить</a>
-      {% if a.previous %}{% set p = a.previous %}<span class="meta">предыдущая: <a href="{{ url(p['dir'], apk_name(a.package, p['version_name'])) }}" download>{{ p['version_name'] }}</a>
-        {%- if p['signer'] != a.signer %} (другая подпись){% endif %}
-        {%- if p['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</div>
+    </div><a class="meta" href="#install-help" data-help>Как установить</a></div>
     {% endif %}
-    {% if a.kept %}{% set k = a.kept %}<div class="meta">сохранённая: <a href="{{ url(k['dir'], apk_name(a.package, k['version_name'])) }}" download>{{ k['version_name'] }}</a> · {{ (k['size'] / 1048576) | round | int }} МБ</div>{% endif %}
     {% if a.pending and edit %}{% set p = a.pending %}
     {% if p['rotation_min_sdk'] %}<p class="meta">Ключ обновлён разработчиком. Обновление с сохранением данных поддерживается начиная с Android {{ android_version(p['rotation_min_sdk']) }}; на старых системах совместимость не подтверждена.</p>
-    {% else %}<p class="err">Новая версия {{ p['version_name'] }} подписана другим ключом. Совместимость обновления не подтверждена: может потребоваться удаление приложения вместе с данными. Пока решение не принято, доступна прежняя версия.</p>{% endif %}
+    {% else %}<p class="err">Версия {{ p['version_name'] }} подписана другим ключом. Совместимость обновления не подтверждена: может потребоваться удаление приложения вместе с данными. Пока решение не принято, доступна прежняя версия.</p>{% endif %}
+    {% if v and p['version_code'] <= v['version_code'] %}<p class="meta">После подтверждения эта сборка появится в списке версий. По умолчанию останется последняя.</p>{% endif %}
     <p class="install"><button type="button" class="sm tint" data-dialog="signer-{{ a.package }}">Сравнить версии и решить</button></p>
     {% endif %}
     {% if a.status == 'queued' %}<div class="meta">в очереди{% if waiting %} · {{ waiting.get(a.package, '') }}{% endif %}</div>
@@ -86,9 +107,9 @@
   {% if v %}<dialog id="versions-{{ a.package }}" aria-labelledby="versions-title-{{ a.package }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
     <h2 id="versions-title-{{ a.package }}">Версии · {{ a.name }}</h2>
-    {% for x in (a.current, a.previous, a.kept) if x %}
+    {% for x in a.versions %}
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/' ~ ('unpin' if x['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ x['version_name'] }}{% if x['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
-    {% endfor %}<p class="hint">При откате приложения могут быть несовместимы с данными более новой версии.</p>
+    {% endfor %}<p class="hint">Все сохранённые версии доступны в списке на карточке; снятие закрепления их не удаляет. При откате приложения могут быть несовместимы с данными более новой версии.</p>
   </dialog>{% endif %}
   <dialog id="source-{{ a.package }}" aria-labelledby="source-title-{{ a.package }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
@@ -101,7 +122,7 @@
       <label class="check" data-source-warning{% if a.source != 'apkpure' %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск APKPure: без сверки с RuStore подлинность источника не подтверждена</label>
       <p class="install"><button>Сменить источник</button></p>
     </form>
-    <h3>Загрузить новую версию своим файлом</h3>
+    <h3>Добавить версию своим файлом</h3>
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/upload') }}" enctype="multipart/form-data">
       <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label><button>Загрузить</button>
     </form>

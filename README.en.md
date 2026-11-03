@@ -21,7 +21,7 @@ The web UI is in Russian.
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
   appshelf checks which of them your Apple ID holds a license for.
-- Catalog with an "Install" button; the current and the previous version are kept, and one of them can be pinned to
+- iPhone catalog with an "Install" button; the current and the previous version are kept, and one of them can be pinned to
   survive later updates. iOS does not install over an installed app — offload it first (see "Updating an installed
   app").
 - Nightly check for new versions (versions downloaded this week are marked in the catalog: apps removed from the
@@ -318,16 +318,22 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   "Install"; the first time Android asks to allow installs from the browser. A site cannot install right away: the
   browser only downloads the file, and the person opens the installer. Updating is the same "Download APK" over the installed app, its data stays. A browser installs only one
   whole APK: bundles (split APK, XAPK, APKS) are refused when added. "Copy link" in the card's "⋯" gives a permanent address
-  `<site address>/apk/<shelf token>/<package>.apk`: always the current version, opens without signing in (like the
-  files themselves); changing the shelf token (`rotate-token`, a new PIN of the public shelf) disables it too.
+  `<site address>/apk/<shelf token>/<package>.apk`: without parameters it follows the latest version; selecting an older
+  build adds `?version=<id>`. It opens without signing in (like the files themselves); changing the shelf token
+  (`rotate-token`, a new PIN of the public shelf) disables it too.
 - **Signature.** Before publication, `apksigner` verifies the APK signature and its content integrity; a failed
   check preserves the working version. The first version sets the expected certificate. A different signer
   remains pending: "Сравнить версии и решить" compares versions, sources, full fingerprints and verification
   results. Accept it with confirmation, or reject the build. Without confirmed compatibility, installation
   may require removing the app and its data. A verified v3 key rotation chain is labelled "Ключ обновлён разработчиком"
   with the minimum Android version; the decision stays manual. A matching key alone does not guarantee a safe app.
-- **Versions** — as with IPAs: current, previous, pinned. "⋯" opens a short menu; versions and source management
-  (alternatives, link, own file) have separate panels. Layout:
+- **Versions.** Each card lists all saved APKs and selects the latest accepted `versionCode` by default.
+  Add older builds by link, search or file upload; they keep the latest version and its update source in place.
+  Updates preserve the history, and identical APKs are not added twice. A different signature requires confirmation;
+  accepting an older build adds it to the list while keeping the latest as the default. Selecting a version updates
+  the download, details, shared link and QR code; reloading selects the latest again. Android may require removing
+  the newer app and its data before installing an older build. "⋯" manages pins and sources; unpinning keeps the APK.
+  Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
 - **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore, Google Play, AppGallery and
   APKPure by `versionCode`, F-Droid by the suggested version, GitHub by its latest stable release, the F-Droid

@@ -53,6 +53,38 @@ def test_qr_unavailable_for_private_missing_and_rotating_shelves(web, anon, cfg,
     assert anon.client.get(fetch.app_url(cfg, shelf, PKG) + "/qr.png").status_code == 404
 
 
+def test_version_links_and_qr_select_exact_build_within_shelf(web, anon, cfg, conn, clock, shelf, tmp_path):
+    old = db.current_version(conn, shelf.id, PKG)
+    for code in (2, 3):
+        web.sources.apks[URL] = make_apk(tmp_path / f"v{code}.apk", version_code=code, version_name=f"{code}.0")
+        web.client.post("/android/public/add/link", data={"url": URL})
+        fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    link = fetch.app_url(cfg, shelf, PKG)
+    selected = f"{link}?version={old['id']}"
+    response = anon.client.get(f"{link}/qr.png?version={old['id']}")
+    decoded = zxingcpp.read_barcode(Image.open(io.BytesIO(response.content)))
+    assert decoded is not None and decoded.text == selected
+    assert anon.client.get(selected, follow_redirects=False).headers["location"] == \
+        fetch.file_url(cfg, shelf, old["dir"], fetch.apk_name(PKG, "1.0"))
+    assert anon.client.get(link, follow_redirects=False).headers["location"].endswith(f"/{PKG}-3.0.apk")
+
+    # A version ID from another shelf or a pending signature never grants access.
+    web.client.post("/android/add/link", data={"url": URL})
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    foreign = db.current_version(conn, db.shelf_for_user(conn, 1).id, PKG)
+    web.sources.apks[URL] = make_apk(tmp_path / "pending.apk", version_code=4, cert=b"CERT-B")
+    web.client.post("/android/public/add/link", data={"url": URL})
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    for vid in (foreign["id"], pending["id"], -1, 999999, 1 << 100):
+        for suffix in ("", "/qr.png"):
+            assert anon.client.get(f"{link}{suffix}?version={vid}", follow_redirects=False).status_code == 404
+    other = fetch.app_url(cfg, shelf, "ru.other")
+    assert anon.client.get(f"{other}?version={old['id']}", follow_redirects=False).status_code == 404
+    db.set_shelf_next(conn, shelf.id, "f" * 32)
+    assert anon.client.get(selected, follow_redirects=False).status_code == 404
+
+
 @pytest.fixture(autouse=True)
 def fast_hash(monkeypatch):
     """Сто неверных PIN по 200 000 итераций — десятки секунд."""
