@@ -7,9 +7,61 @@ from helpers import seed_app
 from test_fourpda import local_chromium
 from test_web_context import PKG, android_app
 from appshelf.android import db, fetch, pin
-from apk_factory import png_bytes
+from apk_factory import make_apk, png_bytes
 from android_fakes import FakeHttp
 from appshelf.android.sources import Sources
+from test_web_android import work
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("prefix", ["/android", "/android/public"])
+def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix, local_chromium):
+    """Android file providers may report APKs as binary data or ZIP archives."""
+    package = "ru.example.upload"
+
+    def route(target):
+        request = target.request
+        url = urlsplit(request.url)
+        result = web.client.request(request.method, url.path + ("?" + url.query if url.query else ""),
+                                    content=request.post_data_buffer,
+                                    headers={"user-agent": request.headers.get("user-agent", ""),
+                                             "content-type": request.headers.get("content-type", "")},
+                                    follow_redirects=False)
+        target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844},
+                                    user_agent="Mozilla/5.0 (Linux; Android 14) Chrome/130.0 Mobile")
+            page.route("https://apps.example/**", route)
+            page.goto("https://apps.example" + prefix + "/add")
+            for code, mime in ((1, "application/octet-stream"), (2, "application/zip")):
+                if code == 2:
+                    page.get_by_label("Действия с Upload app", exact=True).click()
+                    page.get_by_role("button", name="Сменить источник", exact=True).click()
+                form = page.locator('form[enctype="multipart/form-data"]')
+                with page.expect_file_chooser() as opened:
+                    form.locator('input[type="file"]').click()
+                chooser = opened.value
+                # A narrow accept filter makes APKs with a generic MIME type unselectable on Android.
+                assert chooser.element.get_attribute("accept") in (None, "", "*/*")
+                path = make_apk(tmp_path / f"upload-{code}.apk", package=package,
+                                version_code=code, version_name=f"{code}.0", label="Upload app")
+                chooser.set_files({"name": f"Приложение {code}.apk", "mimeType": mime, "buffer": path.read_bytes()})
+                form.get_by_role("button", name="Загрузить", exact=True).click()
+                page.wait_for_url("https://apps.example" + prefix)
+                work(web, conn)
+                page.reload()
+                assert page.get_by_label("Действия с Upload app", exact=True).is_visible()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            shelf = db.public_shelf(conn) if prefix.endswith("/public") else db.shelf_for_user(conn, 1)
+            view = db.list_apps(conn, shelf.id)[0]
+            assert (view.current["version_code"], view.previous["version_code"]) == (2, 1)
+            assert not list((cfg.tmp_dir / "web").glob("up-*.apk"))
+        finally:
+            browser.close()
 
 
 @pytest.mark.integration

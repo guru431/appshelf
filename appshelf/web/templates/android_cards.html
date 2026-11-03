@@ -136,7 +136,8 @@
     </form>
     <h3>Добавить версию своим файлом</h3>
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/upload') }}" enctype="multipart/form-data">
-      <label>Файл APK<input name="file" type="file" accept=".apk,application/vnd.android.package-archive" required></label><button>Загрузить</button>
+      {# Keep the picker unrestricted for Android file providers; validate on the server. #}
+      <label>Файл APK<input name="file" type="file" required></label><button>Загрузить</button>
     </form>
   </dialog>
   {% if a.pending %}
