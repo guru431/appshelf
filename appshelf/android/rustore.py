@@ -50,7 +50,10 @@ def apk_url(http: Http, app_id: int) -> str:
     urls = body.get("downloadUrls")
     if isinstance(urls, list) and len(urls) > 1:
         raise SourceError("RuStore отдаёт набор файлов, а не один APK")
-    if not isinstance(urls, list) or not urls or not isinstance(urls[0], dict) or not isinstance(urls[0].get("url"), str):
+    if isinstance(urls, list) and not urls:
+        raise SourceError("RuStore не предлагает единый APK для этого приложения — выберите другой источник "
+                          "или установите через RuStore")
+    if not isinstance(urls, list) or not isinstance(urls[0], dict) or not isinstance(urls[0].get("url"), str):
         raise SourceError(UNKNOWN)
     url = urls[0]["url"]
     return url[:-len(".zip")] + ".apk" if url.endswith(".zip") else url

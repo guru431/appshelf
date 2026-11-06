@@ -74,6 +74,20 @@ def test_unknown_format_is_source_error():
         rustore.apk_url(bad, 1)
 
 
+def test_rustore_without_universal_apk_explains_unavailable_download(tmp_path):
+    # ONLYOFFICE 10.0.0: withoutSplits=true returns OK with an empty downloadUrls list.
+    package = "com.onlyoffice.documents"
+    overall = fixture("overall")
+    overall["body"].update(appId=2063666097, packageName=package, appName="Документы",
+                           versionName="10.0.0", versionCode=779)
+    http = FakeHttp({f"{rustore.BASE}/applicationData/overallInfo/{package}": overall,
+                     LINK: fixture("download_no_universal")})
+    dest = tmp_path / "app.apk"
+    with pytest.raises(sources.SourceError, match="RuStore не предлагает единый APK"):
+        sources.Sources(http, sleep=lambda _: None).fetch("rustore", package, dest)
+    assert not dest.exists() and all(call[0] == "json" for call in http.calls)
+
+
 def test_rustore_fetch_returns_signature_name_and_icon(tmp_path):
     src = sources.Sources(rustore_http(), sleep=lambda s: None)
     got = src.fetch("rustore", "ru.sberbankmobile", tmp_path / "a.apk")
