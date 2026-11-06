@@ -11,11 +11,24 @@ from appshelf.android import db, fetch, net
 from appshelf.android.sources import RUSTORE_DOWN, SPLIT_TEXT, Got, Latest, SplitOnly
 from appshelf.config import GB
 
+pytestmark = pytest.mark.usefixtures("acct")
+
 PKG = "ru.example.app"
 
 
 def shelf_of(conn, clock, uid=1):
     return db.ensure_shelf(conn, uid, clock.iso())
+
+
+def test_store_apk_refuses_personless_shelf(ctx, conn, clock, tmp_path):
+    shelf = shelf_of(conn, clock)
+    path = make_apk(tmp_path / 'orphan.apk')
+    conn.execute('DELETE FROM users WHERE id=?', (shelf.user_id,))
+    with pytest.raises(store.AppGone):
+        fetch.store_apk(ctx.env, conn, shelf, path, source='upload', source_ref='', expected_package=None,
+                        expected_signer='', name_hint='', icon=None)
+    assert path.is_file() and not fetch.shelf_root(ctx.env.cfg, shelf).exists()
+    assert not db.list_apps(conn, shelf.id)
 
 
 def run(ctx, conn, shelf, kind, clock, package="", **payload) -> dict:

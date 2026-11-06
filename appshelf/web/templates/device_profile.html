@@ -1,0 +1,19 @@
+<details class="card" data-device-profile>
+<summary>Для какого устройства</summary>
+<p class="hint">Необязательный профиль хранится только в этом браузере. Проверяем известные требования APK;
+успешную установку и совместимость с уже установленным приложением подтвердит Android.</p>
+<form data-device-form>
+<label>Android <select name="sdk" aria-label="Android устройства">
+<option value="">Не указан</option>
+{% for sdk, label in [(23,'6'),(24,'7'),(25,'7.1'),(26,'8'),(27,'8.1'),(28,'9'),(29,'10'),(30,'11'),(31,'12'),(32,'12L'),(33,'13'),(34,'14'),(35,'15'),(36,'16')] %}
+<option value="{{ sdk }}">{{ label }}</option>{% endfor %}
+</select></label>
+<label>Поддерживаемая архитектура <select name="abi" aria-label="Архитектура устройства">
+<option value="">Не указана</option><option value="arm64-v8a">ARM64 (только 64 бит)</option>
+<option value="arm64-v8a,armeabi-v7a,armeabi">ARM64 с поддержкой 32 бит</option>
+<option value="armeabi-v7a,armeabi">ARM32</option><option value="x86_64">x86_64 (только 64 бит)</option>
+<option value="x86_64,x86">x86_64 и x86</option><option value="x86">x86</option>
+</select></label>
+<p class="install"><button>Сохранить профиль</button><button type="button" class="secondary" data-device-reset>Сбросить</button></p>
+<p class="meta" role="status" data-device-saved></p>
+</form></details>

@@ -76,12 +76,14 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         return w.page(request, "apple.html", "apple", groups=groups, links=links)
 
     def link_page(request: Request, keep, gone, error: str = "", status_code: int = 200, refused: bool = False):
+        with w.conn() as c:
+            conflicts, digest = jobs.link_conflicts(c, keep.id, gone.id)
         return w.page(request, "confirm.html", "apple", status_code,
                       question=f"Связать «{gone.name}» с «{keep.name}»? Google-аккаунты и Android-полка «{gone.name}» "
                                f"перейдут к «{keep.name}», вход любым их аккаунтом откроет все полки «{keep.name}». "
                                "Связку не отменить; аккаунт, которым пользуются несколько человек, не связывайте.",
                       action="/apple/link", button="Связать", cancel="/apple", error=error, refused=refused,
-                      hidden={"a": keep.id, "b": gone.id})
+                      hidden={"a": keep.id, "b": gone.id, "conflicts": digest}, conflicts=conflicts)
 
     def link_pair(request: Request, a: int, b: int):
         """Оба — среди вошедших в этом браузере: так человек доказал, что владеет обоими. → (A, B, роли) или None."""
@@ -103,7 +105,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         return link_page(request, keep, gone)
 
     @app.post("/apple/link", response_class=HTMLResponse)
-    def link(request: Request, a: int = Form(0), b: int = Form(0)):
+    def link(request: Request, a: int = Form(0), b: int = Form(0), conflicts: str = Form("")):
         found = link_pair(request, a, b)
         if found is None:
             return PlainTextResponse("not found", status_code=404)
@@ -113,7 +115,9 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         keep, gone = (ua, ub) if roles[0] == a else (ub, ua)
         try:
             with w.conn() as c:
-                jobs.link_users(w.cfg, c, keep.id, gone.id)
+                jobs.link_users(w.cfg, c, keep.id, gone.id, confirmed_conflicts=conflicts)
+        except jobs.LinkConfirmationChanged:
+            return link_page(request, keep, gone, "Список удаляемых версий изменился. Проверьте его и подтвердите заново", 409)
         except jobs.LinkRefused as e:  # у уходящего появился Apple ID, пока шёл запрос
             return link_page(request, keep, gone, str(e) if "4PDA" in str(e) else BOTH_APPLE, 400, refused=True)
         except jobs.ArchiveUnavailable:

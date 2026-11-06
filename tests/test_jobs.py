@@ -200,7 +200,7 @@ def test_expired_job_recovers_on_next_tick_after_failed_requeue(ctx, cfg, conn, 
 
 @pytest.mark.parametrize("invalid_payload", [False, True])
 def test_failed_android_upload_result_is_recovered_without_missing_file(ctx, cfg, conn, clock, monkeypatch,
-                                                                      invalid_payload):
+                                                                      invalid_payload, acct):
     shelf = android_db.ensure_shelf(conn, 1, clock.iso())
     up = cfg.tmp_dir / "web" / "up.apk"
     up.parent.mkdir(parents=True)

@@ -299,7 +299,7 @@ class Sources:
         info = apk.read_apk(dest)
         if info.package != app.package or info.version_code != build.code:
             raise SourceError("APK из F-Droid не совпал с пакетом и версией в каталоге")
-        if info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
+        if "@" not in ref and info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
             raise SourceError("в F-Droid нет сборки для ARM")
         return Got(app.name, build.signer, None, f"{source}:{build.code}")
 

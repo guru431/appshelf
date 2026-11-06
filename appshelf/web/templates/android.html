@@ -2,21 +2,8 @@
 {% from "android_cards.html" import card, install_hints with context %}
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
+{% include 'device_profile.html' %}
 {% if guest %}
-<h2>Гостевой доступ</h2>
-<div class="card">
-  <p>Адрес для гостей: <a href="{{ guest.url }}">{{ guest.url }}</a> — гость вводит PIN и видит только этот список.</p>
-  {% if not guest.set_at %}<p class="err">Задайте PIN — до этого гости ничего не видят.</p>
-  {% else %}<p class="meta">PIN задан {{ guest.set_at[:16] | replace('T', ' ') }} UTC.</p>{% endif %}
-  {% if guest.closed %}<p class="err">Ввод PIN закрыт до {{ guest.closed[:16] | replace('T', ' ') }} UTC: за сутки слишком
-    много неверных PIN. Гости, уже вводившие PIN, полку видят.</p>
-  <form method="post" action="{{ post_url('/android/public/pin/reopen') }}"><button class="tint">Открыть ввод PIN</button></form>{% endif %}
-  <form method="post" action="{{ post_url('/android/public/pin') }}" class="field">
-    <input name="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="6 цифр" aria-label="PIN" required>
-    <button>{{ 'Сменить PIN' if guest.set_at else 'Задать PIN' }}</button></form>
-  {% if guest.set_at %}<p class="hint">Смена PIN: гостям придётся ввести новый, а прежние ссылки на файлы перестанут
-    работать — у полки будет новый адрес каталога.</p>{% endif %}
-</div>
 <p><a class="btn pill" href="{{ prefix }}/add">Добавить в публичную</a></p>
 {% endif %}
 {% for j in jobs %}
@@ -41,6 +28,21 @@
 {% if not apps and not total and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
   {%- if edit %} <a href="{{ prefix }}/add">Добавьте приложение</a> — из RuStore, по ссылке с сайта или своим файлом.{% endif %}</p>{% endif %}
 {% for a in apps %}{{ card(a, url, edit, prefix, qr=public or device == 'desktop') }}{% endfor %}
+{% if guest %}
+<details class="card"><summary>Гостевой доступ</summary>
+  <p>Адрес для гостей: <a href="{{ guest.url }}">{{ guest.url }}</a> — гость вводит PIN и видит только этот список.</p>
+  {% if not guest.set_at %}<p class="err">Задайте PIN — до этого гости ничего не видят.</p>
+  {% else %}<p class="meta">PIN задан {{ guest.set_at[:16] | replace('T', ' ') }} UTC.</p>{% endif %}
+  {% if guest.closed %}<p class="err">Ввод PIN закрыт до {{ guest.closed[:16] | replace('T', ' ') }} UTC: за сутки слишком
+    много неверных PIN. Гости, уже вводившие PIN, полку видят.</p>
+  <form method="post" action="{{ post_url('/android/public/pin/reopen') }}"><button class="tint">Открыть ввод PIN</button></form>{% endif %}
+  <form method="post" action="{{ post_url('/android/public/pin') }}" class="field">
+    <input name="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="6 цифр" aria-label="PIN" required>
+    <button>{{ 'Сменить PIN' if guest.set_at else 'Задать PIN' }}</button></form>
+  {% if guest.set_at %}<p class="hint">Смена PIN: гостям придётся ввести новый, а прежние ссылки на файлы перестанут
+    работать — у полки будет новый адрес каталога.</p>{% endif %}
+</details>
+{% endif %}
 <div class="hint">
   {% if public %}<p>Публичная полка — одна на сервер: её видят все участники и гости по PIN, наполняет владелец.</p>{% endif %}
   {{ install_hints() }}

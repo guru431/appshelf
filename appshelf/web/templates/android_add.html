@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
+{% include 'device_profile.html' %}
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
 {% if public %}
 <h2>Из моей полки</h2>
@@ -14,10 +15,7 @@
   {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>{% endif %}
   {% if a.paid %}<span class="meta">Купленное — только на своей полке</span>
   {% else %}<details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
-    <div class="sheet"><form method="post" action="{{ post_url(prefix ~ '/add/from-shelf') }}">
-      <input type="hidden" name="package" value="{{ a.package }}">
-      {% if a.package in on_shelf %}<input type="hidden" name="sync_history" value="1">{% endif %}
-      <button class="tint">{{ 'Добавить версии в публичную' if a.package in on_shelf else 'Добавить в публичную' }}</button></form></div>
+    <div class="sheet"><a class="btn tint" href="{{ post_url(prefix ~ '/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a></div>
   </details>{% endif %}
 </div>
 {% endfor %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block main %}
+<h2>Аккаунты и подключения</h2>
+<nav class="card shelves" aria-label="Настройки">
+  <a href="/apple">Аккаунты Apple ID и Google</a>
+  {% if who %}<a href="/fourpda/{{ who.id }}/connect">Подключение 4PDA · {{ who.name }}</a>{% endif %}
+  {% if users and users | selectattr('role', 'equalto', 'owner') | first %}<a href="/admin">Участники</a>{% endif %}
+</nav>
+<h2>Оформление</h2>
+<nav class="card shelves" aria-label="Оформление">
+{% for value, label in [('auto', 'Как в системе'), ('light', 'Светлая'), ('dark', 'Тёмная')] %}
+<a href="/theme?set={{ value }}&amp;back=/settings"{% if theme == value or (not theme and value == 'auto') %} class="on" aria-current="true"{% endif %}>{{ label }}</a>
+{% endfor %}
+{% if not theme %}<p class="meta" data-effective-theme></p>{% endif %}
+</nav>
+{% include 'device_profile.html' %}
+<h2>Выход</h2>
+<form method="post" action="{{ post_url('/logout') }}"><button class="secondary">Выйти из всех участников этого браузера</button></form>
+{% endblock %}

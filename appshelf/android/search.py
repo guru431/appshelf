@@ -30,6 +30,7 @@ class Option:
     versions: tuple[tuple[str, str], ...] = ()
     account: int = 0
     related_package: str = ""   # APK автора может иметь другой пакет: не подменять карточку магазина
+    builds: tuple[fdroid_index.Build, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -164,7 +165,8 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         for app in found or ():
             build = app.select()
             choices = tuple((b.name, f"{app.package}@{b.code}") for b in app.choices())
-            add(Option(source, app.package, app.package, app.name, build.name, versions=choices))
+            add(Option(source, app.package, app.package, app.name, build.name, versions=choices,
+                       builds=tuple(sorted(app.builds, key=lambda b: (-b.code, b.arm_rank)))))
             if app.upstream:
                 author_links.setdefault(app.package, []).append(app.upstream)
         yield Update("results", result=snapshot())

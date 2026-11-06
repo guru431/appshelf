@@ -64,7 +64,7 @@ def damaged(path: Path, scheme: str) -> None:
 @pytest.mark.integration
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize("scheme", ["v1", "v2", "v3"])
-def test_real_signatures_and_tamper_preserve_working_version(ctx, cfg, conn, clock, tmp_path, scheme):
+def test_real_signatures_and_tamper_preserve_working_version(ctx, cfg, conn, clock, tmp_path, scheme, acct):
     shelf = db.ensure_shelf(conn, 1, clock.iso())
     good = tmp_path / "good.apk"
     shutil.copyfile(DATA / f"{scheme}-5.apk", good)
@@ -115,7 +115,7 @@ def test_manual_old_build_is_verified_and_preserves_latest(ctx, cfg, conn, clock
 
 @pytest.mark.integration
 @pytest.mark.timeout(120)
-def test_verified_rotation_is_manual_pending_with_android_9_compatibility(ctx, cfg, conn, clock, tmp_path):
+def test_verified_rotation_is_manual_pending_with_android_9_compatibility(ctx, cfg, conn, clock, tmp_path, acct):
     shelf = db.ensure_shelf(conn, 1, clock.iso())
     old, rotated = tmp_path / "old.apk", tmp_path / "rotated.apk"
     shutil.copyfile(DATA / "v3-5.apk", old)

@@ -45,6 +45,35 @@ def add_link(web, conn, tmp_path, url=URL, **apk):
     work(web, conn)
 
 
+def test_multipart_does_not_recreate_deleted_person(web, conn, cfg, tmp_path):
+    path = make_apk(tmp_path / "deleted.apk")
+
+    def body():
+        with web.app.state.w.conn() as current:
+            current.execute("DELETE FROM users WHERE id=1")
+        yield (b'--boundary\r\nContent-Disposition: form-data; name="file"; filename="app.apk"\r\n'
+               b'Content-Type: application/octet-stream\r\n\r\n' + path.read_bytes() + b'\r\n--boundary--\r\n')
+
+    result = web.client.post("/android/add/upload?person=1", content=body(),
+                             headers={"Content-Type": "multipart/form-data; boundary=boundary"},
+                             follow_redirects=False)
+    assert result.status_code == 404
+    assert db.shelf_for_user(conn, 1) is None
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+    assert not list((cfg.tmp_dir / "web").glob("up-*.apk"))
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_change_source_refuses_active_job(web, conn, tmp_path, status):
+    add_link(web, conn, tmp_path)
+    web.client.post(f"/android/apps/{PKG}/check")
+    conn.execute("UPDATE android_jobs SET status=? WHERE status='queued'", (status,))
+    result = web.client.post(f"/android/apps/{PKG}/source", data={"source": "rustore"}, follow_redirects=False)
+    assert result.status_code == 409
+    row = db.get_app(conn, shelf(conn).id, PKG)
+    assert (row["source"], row["source_ref"]) == ("link", URL)
+
+
 def test_default_section():
     from appshelf.web.android import default_section
     assert default_section(UA_ANDROID, "apple", None) == "android"

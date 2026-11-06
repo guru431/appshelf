@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import re
 import secrets
 import urllib.parse
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
@@ -113,7 +115,7 @@ def _fresh(apps, now: str) -> set[str]:
 def _lock_mail(until: str, base: str) -> str:
     return (f"За сутки на публичной Android-полке введено {pin.ALL_LIMIT} неверных PIN с разных адресов: ввод PIN "
             f"закрыт для новых гостей до {until[:16].replace('T', ' ')} UTC. Гости, уже вводившие PIN, полку видят.\n\n"
-            f"Открыть сразу — «Открыть ввод PIN» на вкладке Android → «Публичная» ({base}/android/public) или смена "
+            f"Открыть сразу — «Открыть ввод PIN» на публичной полке: Android → меню «Полка» → «Публичная» ({base}/android/public) или смена "
             f"PIN там же; если PIN мог утечь — смените его.")
 
 
@@ -129,9 +131,55 @@ def register_routes(app, w) -> None:
     public_page = _register_scope(app, w, PUBLIC)
     cfg, owner = w.cfg, [Depends(owner_only)]
 
-    @app.post("/android/public/add/from-shelf", dependencies=owner)
-    def add_from_shelf(request: Request, package: str = Form(""), sync_history: str = Form("")):
+    def copy_preview(c, source, target, package):
+        original = db.get_app(c, source.id, package)
+        current = db.get_app(c, target.id, package) if target else None
+        incoming = [dict(v) for v in c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? "
+                                              "AND role!='pending' ORDER BY (role='current') DESC,version_code,id",
+                                              (source.id, package))]
+        saved = [dict(v) for v in c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? ORDER BY id",
+                                           (target.id, package))] if target else []
+        hashes = {v['sha256'] for v in saved}
+        pending = any(v['role'] == 'pending' for v in saved)
+        signer = current['signer'] if current else ''
+        rows, rejected = [], []
+        for v in incoming:
+            denied = target is not None and db.rejected_apk(c, target.id, package, v['sha256'])
+            rejected.append(denied)
+            different = bool(signer and signer != v['signer'])
+            state = ('Уже есть по SHA-256' if v['sha256'] in hashes else 'Ранее отклонена' if denied else
+                     'Ждёт решения по существующей подписи' if different and pending else
+                     'Проверка новой подписи; возможно потребуется решение' if different else 'Будет добавлена')
+            add = v['sha256'] not in hashes and not denied and not (different and pending)
+            rows.append({'v': v, 'state': state, 'add': add})
+            if add and different:
+                pending = True
+            if add and not signer:
+                signer = v['signer']
+        snapshot = {'source': dict(original), 'target': dict(current) if current else None,
+                    'incoming': incoming, 'saved': saved, 'rejected': rejected}
+        digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+        return {'original': original, 'target': current, 'rows': rows, 'count': sum(r['add'] for r in rows),
+                'snapshot': digest, 'saved': saved}
+
+    def preview_page(request, package, error='', status=200):
         with w.conn() as c:
+            c.execute("BEGIN")  # One read snapshot for the comparison, without creating or modifying shelves.
+            source = _owner_shelf(c, request)
+            original = db.get_app(c, source.id, package) if source else None
+            if original is None:
+                return PlainTextResponse('not found', status_code=404)
+            plan = copy_preview(c, source, db.public_shelf(c), package)
+        return w.page(request, 'public_copy.html', 'a_public', status, package=package, plan=plan,
+                      error=error, sources=SOURCES)
+
+    @app.get('/android/public/add/from-shelf', dependencies=owner)
+    def preview_from_shelf(request: Request, package: str = ''):
+        return preview_page(request, package)
+
+    @app.post("/android/public/add/from-shelf", dependencies=owner)
+    def add_from_shelf(request: Request, package: str = Form(""), sync_history: str = Form(""), snapshot: str = Form("")):
+        with w.conn() as c, store.tx(c):
             source = db.shelf_for_user(c, request.state.who.id) if request.state.who.role == people.OWNER else None
             original = db.get_app(c, source.id, package) if source is not None else None
             if original is None:
@@ -141,15 +189,16 @@ def register_routes(app, w) -> None:
             if db.current_version(c, source.id, package) is None:
                 return public_page(request, 409, "Сначала дождитесь скачивания приложения на свою полку")
             target = db.ensure_public_shelf(c, w.now())
-            with store.tx(c):
-                existing = db.get_app(c, target.id, package)
-                if existing is None:
-                    db.put_app(c, target.id, package, original["name"], original["source"], original["source_ref"],
-                               w.now(), google_account_id=original["google_account_id"])
-                    c.execute("UPDATE android_apps SET source_page=? WHERE shelf_id=? AND package=?",
-                              (original["source_page"], target.id, package))
-                if (existing is None or sync_history == "1") and not db.active_for(c, target.id, package):
-                    db.enqueue(c, target.id, "copy", w.now(), package=package, payload={"from_shelf": source.id})
+            if snapshot and copy_preview(c, source, target, package)['snapshot'] != snapshot:
+                return preview_page(request, package, 'Версии изменились. Проверьте сравнение и подтвердите заново', 409)
+            existing = db.get_app(c, target.id, package)
+            if existing is None:
+                db.put_app(c, target.id, package, original["name"], original["source"], original["source_ref"],
+                           w.now(), google_account_id=original["google_account_id"])
+                c.execute("UPDATE android_apps SET source_page=? WHERE shelf_id=? AND package=?",
+                          (original["source_page"], target.id, package))
+            if (existing is None or sync_history == "1") and not db.active_for(c, target.id, package):
+                db.enqueue(c, target.id, "copy", w.now(), package=package, payload={"from_shelf": source.id})
         return back(PUBLIC.prefix)
 
     @app.post("/android/public/pin", response_class=HTMLResponse, dependencies=owner)
@@ -438,9 +487,9 @@ def _register_scope(app, w, scope: Scope):
         галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего. previous —
         прежние (source, ref, etag) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
         package = app["package"]
-        if app["source"] == "upload" or db.active_for(c, shelf.id, package):
-            return
-        with store.tx(c):
+        with nullcontext() if c.in_transaction else store.tx(c):
+            if app["source"] == "upload" or db.active_for(c, shelf.id, package):
+                return
             db.set_status(c, shelf.id, package, "queued")
             if db.has_current(c, shelf.id, package):
                 db.enqueue(c, shelf.id, "check", w.now(), package=package,
@@ -488,8 +537,8 @@ def _register_scope(app, w, scope: Scope):
                     account: int | None = None, ref: str | None = None, paid: bool = False):
         """Карточка пакета и задание add (payload — к source и ref); пакет уже на полке — второго не ставим."""
         with w.conn() as c:
-            shelf = ensure(c, request)
             with store.tx(c):
+                shelf = ensure(c, request)
                 if db.get_app(c, shelf.id, package) is None:
                     db.put_app(c, shelf.id, package, name or package, source, ref or package, w.now(),
                                google_account_id=account, paid=paid)
@@ -545,7 +594,7 @@ def _register_scope(app, w, scope: Scope):
             payload["ack"] = ack == "1"
         if package and source != "apkpure":
             return add_package(request, source, package, name, payload, ref=ref)
-        with w.conn() as c:
+        with w.conn() as c, store.tx(c):
             db.enqueue(c, ensure(c, request).id, "add", w.now(), payload=payload)
         return back(p)
 
@@ -604,7 +653,7 @@ def _register_scope(app, w, scope: Scope):
         payload = {"source": source, "ref": ref, "name": name}
         if source == "apkpure":
             payload["ack"] = ack == "1"
-        with w.conn() as c:
+        with w.conn() as c, store.tx(c):
             shelf = ensure(c, request)
             db.enqueue(c, shelf.id, "add", w.now(), payload=payload)
         return back(p)
@@ -614,9 +663,13 @@ def _register_scope(app, w, scope: Scope):
         path, err = save_upload(file)
         if err:
             return add_page(request, status_code=err[0], error=err[1])
-        with w.conn() as c:
-            shelf = ensure(c, request)
-            db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200]})
+        try:
+            with w.conn() as c, store.tx(c):
+                shelf = ensure(c, request)
+                db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200]})
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
         return back(p)
 
     @app.post(p + "/apps/{package}/upload", response_class=HTMLResponse, dependencies=deps)
@@ -628,8 +681,15 @@ def _register_scope(app, w, scope: Scope):
         path, err = save_upload(file)
         if err:
             return catalog_page(request, err[0], err[1])
-        with w.conn() as c:
-            db.enqueue(c, shelf.id, "upload", w.now(), package=package, payload={"path": str(path), "name": ""})
+        try:
+            with w.conn() as c, store.tx(c):
+                current, app_row = own(c, request, package)
+                if app_row is None or current.id != shelf.id:
+                    raise store.AppGone(package)
+                db.enqueue(c, shelf.id, "upload", w.now(), package=package, payload={"path": str(path), "name": ""})
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
         return back(p)
 
     @app.post(p + "/apps/{package}/retry", dependencies=deps)
@@ -716,8 +776,12 @@ def _register_scope(app, w, scope: Scope):
                 return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
             return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")
-        with w.conn() as c:
+        with w.conn() as c, store.tx(c):
             old = db.get_app(c, shelf.id, package)
+            if old is None:
+                return not_found()
+            if db.active_for(c, shelf.id, package):
+                return catalog_page(request, 409, "Идёт проверка или скачивание — смените источник после завершения")
             db.set_source(c, shelf.id, package, source, ref)
             requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1",
                     previous=[old["source"], old["source_ref"], old["source_etag"], old["source_page"]])

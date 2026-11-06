@@ -74,6 +74,10 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     cfg, now = env.cfg, env.now()
     info = apk.read_apk(path)
     info = replace(info, signer=apk.verify_apk(path))
+    live = db.get_shelf(c, shelf.id)
+    if (live is None or live.user_id != shelf.user_id or live.shelf != shelf.shelf
+            or live.user_id is not None and people.get_user(c, live.user_id) is None):
+        raise store.AppGone(info.package)
     if expected_package and info.package != expected_package:
         raise apk.ApkError(f"в файле приложение {info.package}, а на карточке — {expected_package}")
     if expected_signer and info.signer != expected_signer:

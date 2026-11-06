@@ -348,7 +348,8 @@ def test_theme_switch_sets_cookie(web):
 def test_theme_switch_returns_without_referer(web):
     # Apache шлёт Referrer-Policy: no-referrer — браузер Referer не отправит, путь возврата — в ссылке
     page = web.client.get("/history", params={"q": "x", "sort": "date"}).text
-    assert "/theme?set=dark&amp;back=/history%3Fq%3Dx%26sort%3Ddate" in page
+    assert 'href="/settings"' in page
+    assert '/theme?set=dark&amp;back=/settings' in web.client.get('/settings').text
     r = web.client.get("/theme", params={"set": "dark", "back": "/history?q=x&sort=date"}, follow_redirects=False)
     assert r.headers["location"] == "/history?q=x&sort=date"
     r = web.client.get("/theme", params={"set": "dark", "back": "https://evil.example/"}, follow_redirects=False)

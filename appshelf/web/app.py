@@ -96,6 +96,11 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     app = FastAPI(title="appshelf", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.w, app.state.worker = w, worker
+
+    @app.exception_handler(store.AppGone)
+    async def app_gone(request, error):
+        return PlainTextResponse("Полка или приложение больше не существует", status_code=404)
+
     site = urlsplit(cfg.public_base).netloc.lower()
 
     @app.middleware("http")
@@ -157,6 +162,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     @app.get("/privacy", response_class=HTMLResponse)
     def privacy(request: Request):
         return w.page(request, "privacy.html", "guest")
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings(request: Request):
+        return w.page(request, "settings.html", "settings")
+
+    @app.get("/pwa/device-profile.js")
+    def device_profile_script():
+        from pathlib import Path
+        return Response((Path(__file__).parent / "templates" / "device-profile.js").read_text(encoding="utf-8"),
+                        media_type="application/javascript")
 
     @app.get("/pwa/manifest.webmanifest")
     def pwa_manifest():

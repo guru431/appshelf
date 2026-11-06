@@ -1,5 +1,6 @@
 """«Аккаунты» с Google-аккаунтами, удаление Google-аккаунта, «Связать», Google у участников (spec 2026-10-28 §5, §10)."""
 from dataclasses import replace
+import re
 
 import pytest
 from starlette.testclient import TestClient
@@ -58,6 +59,26 @@ def test_link_needs_both_signed_in(gweb, conn, cfg, clock):
     assert gweb.client.get(f"/apple/link?a=1&b={uid}").status_code == 404
     assert gweb.client.post("/apple/link", data={"a": 1, "b": uid}).status_code == 404
     assert people.get_user(conn, uid) is not None
+
+
+def test_link_lists_lost_versions_and_requires_fresh_confirmation(gweb, conn, cfg, clock):
+    from test_link import put_version
+    uid, _ = google_only(conn, clock)
+    for person in (1, uid):
+        sign_in(gweb.client, cfg, conn, clock, person)
+    keep = put_version(cfg, conn, clock, 1, "ru.conflict", 5)
+    gone = put_version(cfg, conn, clock, uid, "ru.conflict", 7, signer="B")
+    conn.execute("UPDATE android_versions SET pinned=1 WHERE shelf_id=?", (gone.id,))
+    page = gweb.client.get(f"/apple/link?a=1&b={uid}")
+    assert "Вся история уходящей полки" in page.text and "закреплённых — 1" in page.text
+    digest = re.search(r'name="conflicts" value="([a-f0-9]+)"', page.text).group(1)
+    put_version(cfg, conn, clock, uid, "ru.conflict", 8, signer="B")
+    result = gweb.client.post("/apple/link", data={"a": 1, "b": uid, "conflicts": digest})
+    assert result.status_code == 409 and "подтвердите заново" in result.text
+    assert people.get_user(conn, uid) is not None and db.current_version(conn, keep.id, "ru.conflict")["version_code"] == 5
+    fresh = re.search(r'name="conflicts" value="([a-f0-9]+)"', result.text).group(1)
+    result = gweb.client.post("/apple/link", data={"a": 1, "b": uid, "conflicts": fresh}, follow_redirects=False)
+    assert result.status_code == 303 and people.get_user(conn, uid) is None
 
 
 def test_delete_last_google_of_google_only_person_signs_out_only_him(gweb, conn, cfg, clock):

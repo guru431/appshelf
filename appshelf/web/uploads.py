@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from .. import apk
+from .. import apk, store
 from ..android.uploads import CHUNK_SIZE, UploadError, Uploads
 from .admin import owner_only
 
@@ -54,6 +54,8 @@ def register(app, w, scope, shelf_of, ensure):
                 return JSONResponse(result, headers={"Cache-Control": "no-store"})
         except UploadError as error:
             return JSONResponse({"error": error.message}, status_code=error.status)
+        except store.AppGone:
+            return JSONResponse({"error": "Полка больше не существует"}, status_code=404)
         except OSError:
             return JSONResponse({"error": "Не удалось сохранить часть файла. Повторите отправку позднее"}, status_code=503)
 

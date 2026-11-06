@@ -126,7 +126,11 @@ def filter_shelf(apps, request: Request, fresh: set, *, android: bool = False):
     """Filter saved apps independently from remote store search."""
     q = request.query_params.get("q", "").strip()[:200]
     mode = request.query_params.get("filter", "all")
-    mode = mode if mode in ("all", "recent", "errors", "pending") else "all"
+    modes = [("all", "Все"), ("recent", "Недавно обновлены"), ("errors", "Ошибки"),
+             ("active", "В очереди / скачиваются")]
+    if android:
+        modes.append(("pending", "Требуют решения"))
+    mode = mode if mode in dict(modes) else "all"
     source = request.query_params.get("source", "") if android else ""
     total = len(apps)
     def matches(a):
@@ -136,8 +140,10 @@ def filter_shelf(apps, request: Request, fresh: set, *, android: bool = False):
                 and (not source or a.source == source)
                 and (mode != "recent" or key in fresh)
                 and (mode != "errors" or a.status in ("error", "nolicense") or a.check_result == "error")
-                and (mode != "pending" or (bool(a.pending) if android else a.status in ("queued", "downloading"))))
-    return [a for a in apps if matches(a)], {"q": q, "filter_mode": mode, "source_filter": source, "total": total}
+                and (mode != "active" or a.status in ("queued", "downloading"))
+                and (mode != "pending" or bool(a.pending)))
+    return [a for a in apps if matches(a)], {"q": q, "filter_mode": mode, "source_filter": source,
+                                          "total": total, "filter_options": modes}
 
 
 def back(path: str = "/") -> RedirectResponse:

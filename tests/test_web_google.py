@@ -124,7 +124,9 @@ def test_orphan_google_row_treated_as_new(gw, conn, cfg, clock):
     token_dir = play.token_dir(cfg, gid)
     token_dir.mkdir(parents=True)
     (token_dir / "aas").write_text("aas_et/old")
+    conn.execute("INSERT INTO users(id,name,role,created_at) VALUES (99,'Legacy','member',?)", (clock.iso(),))
     shelf = db.ensure_shelf(conn, 99, clock.iso())
+    conn.execute("DELETE FROM users WHERE id=99")  # Explicitly construct the legacy orphan after normal creation.
     root = cfg.archive / shelf.shelf
     root.mkdir()
     r = google_login(gw)

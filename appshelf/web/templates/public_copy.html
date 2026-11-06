@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block main %}
+<h2>{{ plan.original.name }} · {{ package }}</h2>
+{% if error %}<p class="banner">{{ error }}</p>{% endif %}
+<div class="card">
+<p>Личная полка: {% for row in plan.rows if row.v.role == 'current' %}{{ row.v.version_name }} ({{ row.v.version_code }}){% endfor %}.
+Публичная: {% for v in plan.saved if v.role == 'current' %}{{ v.version_name }} ({{ v.version_code }}){% else %}ещё нет{% endfor %}.</p>
+{% for row in plan.rows %}<div class="card">
+<b>{{ row.v.version_name }} ({{ row.v.version_code }})</b>{{ ' · закреплена на личной полке' if row.v.pinned }}
+<p class="meta">SHA-256: <code>{{ row.v.sha256 }}</code><br>Подпись: <code>{{ row.v.signer }}</code></p>
+<p>{{ row.state }}</p></div>{% endfor %}
+<p>Ночные обновления публичной полки продолжит источник
+{{ sources.get(plan.target.source if plan.target else plan.original.source, 'свой файл') }}.
+Сохраняются текущая, предыдущая и одна закреплённая версия; старые незакреплённые APK удаляются при успешном обновлении.
+Закрепления личной полки не переносятся. При другой подписи APK может ждать решения владельца и до него гостям недоступен.</p>
+<p>Pending-версии и купленные Play-приложения исключены. Новые личные загрузки автоматически гостям не передаются.</p>
+{% if plan.original.paid %}<p class="err">Купленное — только на своей полке.</p>
+{% elif plan.count %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
+<input type="hidden" name="package" value="{{ package }}"><input type="hidden" name="sync_history" value="1">
+<input type="hidden" name="snapshot" value="{{ plan.snapshot }}">
+<button>Добавить версии: {{ plan.count }}</button></form>
+{% else %}<p>Версии совпадают или требуют решения по подписи; новых доступных для копирования APK нет.</p>{% endif %}
+<p class="install"><a href="/android/public">Открыть публичную полку</a><a href="/android/public/add">Отмена</a></p>
+</div>
+{% endblock %}

@@ -1,4 +1,5 @@
 import json
+import re
 from html.parser import HTMLParser
 
 import pytest
@@ -21,6 +22,28 @@ def add_personal(web, conn, tmp_path, source="link"):
         web.client.post("/android/add/link", data={"url": URL})
     work(web, conn)
     return db.shelf_for_user(conn, 1)
+
+
+def test_public_copy_preview_compares_hashes_and_refuses_stale_versions(web, conn, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    page = web.client.get('/android/public/add/from-shelf', params={'package': PKG})
+    assert page.status_code == 200 and 'Добавить версии: 1' in page.text
+    assert 'Ночные обновления' in page.text and db.public_shelf(conn) is None  # Preview is read-only.
+    snapshot = re.search(r'name="snapshot" value="([a-f0-9]+)"', page.text).group(1)
+    version = make_apk(tmp_path / 'newer.apk', version_code=2, version_name='2.0')
+    web.client.post('/android/add/upload', files={'file': ('newer.apk', version.read_bytes())})
+    work(web, conn)
+    result = web.client.post('/android/public/add/from-shelf', data={'package': PKG, 'snapshot': snapshot, 'sync_history': '1'})
+    assert result.status_code == 409 and 'подтвердите заново' in result.text
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='copy'").fetchone()[0] == 0
+    snapshot = re.search(r'name="snapshot" value="([a-f0-9]+)"', result.text).group(1)
+    result = web.client.post('/android/public/add/from-shelf', data={'package': PKG, 'snapshot': snapshot, 'sync_history': '1'},
+                             follow_redirects=False)
+    assert result.status_code == 303
+    work(web, conn)
+    page = web.client.get('/android/public/add/from-shelf', params={'package': PKG})
+    assert 'Версии совпадают' in page.text and 'Уже есть по SHA-256' in page.text
+    assert 'name="snapshot"' not in page.text
 
 
 @pytest.fixture(autouse=True)
@@ -110,7 +133,7 @@ def test_copy_personal_apk_to_public_without_download(web, cfg, conn, tmp_path, 
     original_dir = fetch.shelf_root(cfg, mine) / current["dir"]
     original_apk = original_dir / fetch.apk_name(PKG, current["version_name"])
     calls = list(web.sources.calls)
-    assert "Добавить в публичную" in web.client.get("/android").text
+    assert "Сравнить и добавить в публичную" in web.client.get("/android").text
     choices = web.client.get("/android/public/add").text
     assert "Из моей полки" in choices and "Личное приложение" in choices
     response = web.client.post("/android/public/add/from-shelf", data={"package": PKG}, follow_redirects=False)

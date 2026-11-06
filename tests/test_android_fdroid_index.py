@@ -44,8 +44,7 @@ def test_archive_search_versions_abi_and_cache():
     now[0] += index.TTL
     archive.search("telegram")
     assert len(http.calls) == 2
-    with pytest.raises(net.SourceError, match="для ARM"):
-        archive.info(PKG + "@2")
+    assert archive.info(PKG + "@2")[1].abis == ("x86_64",)  # Explicit device-specific choice remains possible.
 
 
 def test_archive_fallback_download_and_nightly_mark(tmp_path, conn, clock, acct):

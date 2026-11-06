@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from .. import jobs, people, webauth
+from .. import jobs, people, store, webauth
 from ..android import db, fourpda
 from ..android.net import FetchError, SourceError
 from ..ipatool import IpatoolError
@@ -131,7 +131,8 @@ def register_routes(app, w, sessions, browser):
                 raise SourceError("Сессия слишком большая (не более 32 КБ)")
             data = json.loads(raw)
             if isinstance(data, list):
-                if any(not isinstance(c, dict) or c.get("domain", "").lstrip(".") != "4pda.to" for c in data):
+                if any(not isinstance(c, dict) or not isinstance(c.get("domain"), str)
+                       or c["domain"].lstrip(".") != "4pda.to" for c in data):
                     raise SourceError("В файле должны быть только cookies 4pda.to")
                 data = {"cookies": {c["name"]: c["value"] for c in data},
                         "user_agent": user_agent or request.headers.get("user-agent", "")}
@@ -198,7 +199,7 @@ def register_routes(app, w, sessions, browser):
             sessions.client(request.state.who.id).who()
         except (FetchError, SourceError) as e:
             return catalog(request, error=str(e), status=400)
-        with w.conn() as c:
+        with w.conn() as c, store.tx(c):
             shelf = db.ensure_shelf(c, request.state.who.id, w.now())
             db.enqueue(c, shelf.id, "add", w.now(), payload={"source": "fourpda", "ref": ref,
                        "name": name.strip()[:200], "source_page": page})

@@ -10,6 +10,7 @@ import json
 import re
 import secrets
 import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,9 +83,13 @@ def shelf_for_user(c, user_id: int) -> Shelf | None:
 
 def ensure_shelf(c, user_id: int, now: str) -> Shelf:
     """Полка появляется при первом добавлении; токен каталога — случайный, как accounts.shelf."""
-    c.execute("INSERT OR IGNORE INTO android_shelves (user_id, shelf, created_at) VALUES (?, ?, ?)",
-              (user_id, secrets.token_hex(16), now))
-    return shelf_for_user(c, user_id)
+    c.execute("INSERT OR IGNORE INTO android_shelves (user_id, shelf, created_at) "
+              "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id=?)",
+              (user_id, secrets.token_hex(16), now, user_id))
+    shelf = shelf_for_user(c, user_id)
+    if shelf is None or not c.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
+        raise AppGone("участник удалён")
+    return shelf
 
 
 def public_shelf(c) -> Shelf | None:
@@ -93,7 +98,7 @@ def public_shelf(c) -> Shelf | None:
 
 def ensure_public_shelf(c, now: str) -> Shelf:
     """Публичная полка — одна; UNIQUE на NULL не срабатывает, поэтому поиск и вставка — в одной транзакции."""
-    with tx(c):
+    with nullcontext() if c.in_transaction else tx(c):
         shelf = public_shelf(c)
         if shelf is None:
             c.execute("INSERT INTO android_shelves (user_id, shelf, created_at) VALUES (NULL, ?, ?)",
@@ -372,10 +377,14 @@ def remove_dirs(root: Path, names) -> None:
 
 def enqueue(c, shelf_id: int, kind: str, now: str, package: str = "", payload: dict | None = None) -> int:
     """add — payload {source, ref, name}; upload — {path, name, package?}; check — package."""
-    return c.execute("INSERT INTO android_jobs (shelf_id, kind, package, payload, status, created_at) "
-                     "VALUES (?, ?, ?, ?, 'queued', ?)",
+    result = c.execute("INSERT INTO android_jobs (shelf_id, kind, package, payload, status, created_at) "
+                     "SELECT ?, ?, ?, ?, 'queued', ? FROM android_shelves s WHERE s.id=? "
+                     "AND (s.user_id IS NULL OR EXISTS (SELECT 1 FROM users WHERE id=s.user_id))",
                      (shelf_id, kind, package, json.dumps(payload, ensure_ascii=False) if payload else "",
-                      now)).lastrowid
+                      now, shelf_id))
+    if not result.rowcount:
+        raise AppGone("полка удалена")
+    return result.lastrowid
 
 
 def take_job(c):

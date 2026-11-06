@@ -24,7 +24,7 @@ def test_admin_only_for_owner(web, conn, cfg, clock):
     assert member.get("/admin").status_code == 403
     assert member.post("/admin/invites", data={"label": "x"}).status_code == 403
     assert member.post("/admin/users/1/delete").status_code == 403 and people.get_user(conn, 1)
-    assert "Участники" not in member.get("/").text and "Участники" in web.client.get("/").text
+    assert 'href="/admin"' not in member.get('/settings').text and 'href="/admin"' in web.client.get('/settings').text
 
 
 def test_invite_link_shown_once_and_stored_as_hash(web, conn):
@@ -161,7 +161,8 @@ def test_admin_follows_the_owner_not_the_active_shelf(web, conn, cfg, clock):
     sign_in(web.client, cfg, conn, clock, p.user_id)
     web.client.get(f"/acct/{p.id}")
     page = web.client.get("/").text
-    assert '<span class="on">petr@example</span>' in page and 'href="/admin"' in page
+    assert '<span class="on" aria-current="true">petr@example</span>' in page
+    assert 'href="/admin"' in web.client.get('/settings').text
     admin = web.client.get("/admin")
     assert admin.status_code == 200
     assert f"/admin/users/{p.user_id}/delete" in admin.text and "/admin/users/1/delete" not in admin.text

@@ -11,6 +11,117 @@ from apk_factory import make_apk, png_bytes
 from android_fakes import FakeHttp
 from appshelf.android.sources import Sources
 from test_web_android import work
+from appshelf import people
+from helpers import sign_in
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [320, 390, 1280])
+def test_short_screen_menu_settings_and_device_profile(web, conn, cfg, clock, tmp_path, width, local_chromium):
+    from appshelf.android.fdroid_index import Build
+    from appshelf.android.search import Option
+    package = 'org.example.device'
+    web.sources.found = [Option('fdroid', package, package, 'Device choice', '9', builds=(
+        Build('9', 9, 'nine.apk', 'a' * 64, '', ('arm64-v8a',), 36, 35),
+        Build('8', 8, 'eight.apk', 'b' * 64, '', ('x86',), 26, 35),
+        Build('7', 7, 'seven.apk', 'c' * 64, '', ('arm64-v8a',), 26, 35)))]
+    for code, minimum, target, abis, cert in [(1, 35, 22, ('x86',), b'CERT-A'),
+                                             (2, 26, 35, ('arm64-v8a',), b'CERT-A'),
+                                             (3, 26, 35, ('arm64-v8a',), b'CERT-B')]:
+        path = make_apk(tmp_path / f'profile-{code}.apk', label='Device app', version_code=code,
+                        version_name=f'{code}.0', min_sdk=minimum, target_sdk=target, abis=abis, cert=cert)
+        web.client.post('/android/add/upload', files={'file': ('app.apk', path.read_bytes())})
+        work(web, conn)
+    for n in range(8):
+        uid = people.create_user(conn, f'Участник с длинным именем {n}', 'member', None, clock.iso())
+        sign_in(web.client, cfg, conn, clock, uid)
+    web.client.get('/who/1?back=/android')
+
+    def route(target):
+        req, url = target.request, urlsplit(target.request.url)
+        if url.path.startswith('/d/'):
+            target.fulfill(status=200, content_type='image/png', body=png_bytes(40))
+            return
+        result = web.client.request(req.method, url.path + ('?' + url.query if url.query else ''),
+                                    content=req.post_data_buffer,
+                                    headers={'content-type': req.headers.get('content-type', '')}, follow_redirects=False)
+        target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=['--disable-gpu'])
+        try:
+            page = browser.new_page(viewport={'width': width, 'height': 568})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.route('https://apps.example/**', route)
+            for theme in ('light', 'dark'):
+                web.client.get(f'/theme?set={theme}')
+                page.goto('https://apps.example/android')
+                page.get_by_label('Выбрать полку', exact=True).click()
+                sheet = page.locator('.acct .sheet')
+                page.wait_for_function("document.querySelector('.acct .sheet').style.getPropertyValue('--sheet-top') !== ''")
+                assert sheet.evaluate('e => e.scrollHeight > e.clientHeight')
+                last = sheet.get_by_role('link', name='Публичная', exact=True)
+                last.focus()
+                assert last.evaluate('e => e.getBoundingClientRect().bottom < innerHeight - 60')
+                page.keyboard.press('Enter')
+                page.wait_for_url('**/android/public')
+                assert page.locator('.tabs [aria-current="page"]').inner_text() == 'Каталог'
+                page.get_by_role('link', name='Настройки', exact=True).click()
+                page.wait_for_url('**/settings')
+                assert page.get_by_role('navigation', name='Оформление').locator('[aria-current="true"]').inner_text() == ('Светлая' if theme == 'light' else 'Тёмная')
+                assert page.get_by_role('link', name='Аккаунты Apple ID и Google').is_visible()
+                page.locator('[data-device-profile] > summary').click()
+                page.get_by_label('Android устройства').select_option('35')
+                page.get_by_label('Архитектура устройства').select_option('arm64-v8a')
+                page.get_by_role('button', name='Сохранить профиль', exact=True).click()
+                page.goto('https://apps.example/android')
+                box = page.locator('[data-compatibility]')
+                assert box.locator('summary').inner_text() == 'Совместима по известным требованиям'
+                select = page.locator('[data-apk-select]')
+                select.select_option(index=1)
+                assert box.locator('summary').inner_text() == 'Есть ограничения'
+                box.locator('summary').click()
+                assert 'targetSdk 22' in box.inner_text() and 'APK: x86' in box.inner_text()
+                page.reload()
+                assert box.locator('summary').inner_text() == 'Совместима по известным требованиям'
+                assert page.evaluate("JSON.parse(localStorage.getItem('appshelf-device-profile')).sdk") == 35
+                select.select_option(index=1)
+                assert page.locator('[data-apk-warning]').is_visible()
+                for tag in page.locator('.app .tag, .app [data-apk-warning], .app [data-compatibility] summary').all():
+                    ratio = tag.evaluate('''e => {
+                      const rgba = x => x.match(/[\\d.]+/g).map(Number);
+                      let chain = [], el = e;
+                      while(el) { chain.unshift(rgba(getComputedStyle(el).backgroundColor)); el=el.parentElement; }
+                      let bg=[255,255,255];
+                      for(const c of chain) { const a=c.length>3?c[3]:1; bg=bg.map((x,i)=>c[i]*a+x*(1-a)); }
+                      const fg=rgba(getComputedStyle(e).color);
+                      const lum=c=>c.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((a,x,i)=>a+x*[.2126,.7152,.0722][i],0);
+                      return (Math.max(lum(bg),lum(fg))+.05)/(Math.min(lum(bg),lum(fg))+.05);
+                    }''')
+                    assert ratio >= 4.5, (theme, ratio)
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                page.screenshot(path=str(cfg.data_dir / f'settings-profile-{width}-{theme}.png'), full_page=True)
+                page.goto('https://apps.example/android/add?q=device')
+                builds = page.locator('[data-fdroid-builds]')
+                page.wait_for_selector('[data-fdroid-builds]', timeout=5000)
+                page.wait_for_function("document.querySelector('[data-fdroid-builds]')?.value.endsWith('@7')", timeout=5000)
+                builds.select_option(package + '@8')
+                assert builds.input_value() == package + '@8'
+                assert 'Есть ограничения' in page.locator('[data-build-hint]').inner_text()
+                page.locator('[data-device-profile] > summary').click()
+                page.get_by_label('Android устройства').select_option('36')
+                page.get_by_role('button', name='Сохранить профиль', exact=True).click()
+                assert builds.input_value() == package + '@8'  # Manual selection survives profile changes.
+                page.get_by_role('button', name='Сбросить', exact=True).click()
+                assert page.evaluate("localStorage.getItem('appshelf-device-profile')") is None
+                page.goto('https://apps.example/android/public/add/from-shelf?person=1&package=ru.example.app')
+                assert page.get_by_role('button', name='Добавить версии: 2').is_visible()
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            assert not errors
+        finally:
+            browser.close()
 
 
 @pytest.mark.integration
@@ -206,9 +317,9 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
                     link = menu.get_by_role("link", name=label, exact=True)
                     assert link.is_visible() and link.bounding_box()["height"] >= 44
                     assert link.get_attribute("target") == "_blank"
-                sync = menu.get_by_role("button", name="Добавить версии в публичную", exact=True)
+                sync = menu.get_by_role("link", name="Сравнить и добавить версии", exact=True)
                 assert sync.is_visible() and sync.bounding_box()["height"] >= 44
-                assert sync.locator("xpath=..").locator('input[name="sync_history"]').get_attribute("value") == "1"
+                assert "/android/public/add/from-shelf" in sync.get_attribute("href")
                 assert menu.get_by_role("link", name="Тема на 4PDA").get_attribute("href") == topic
                 page.screenshot(path=str(cfg.data_dir / f"source-menu-{width}-{theme}.png"), full_page=True)
                 with page.expect_popup() as opened:

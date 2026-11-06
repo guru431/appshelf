@@ -43,6 +43,7 @@
         <option value="{{ url(x['dir'], apk_name(a.package, x['version_name'])) }}"{% if x['id'] == v['id'] %} selected{% endif %}
           data-icon="{{ url(x['dir'], 'icon.png') }}?v=2" data-meta="{{ version_meta(a, x) }}"
           data-warning="{{ version_warning(a, x) }}" data-link="{{ link }}"
+          data-min="{{ x['min_sdk'] }}" data-target="{{ x['target_sdk'] }}" data-abis="{{ x['abis'] }}" data-rotation="{{ x['rotation_min_sdk'] }}"
           data-qr="{{ app_url(a.package) }}/qr.png{{ '?version=' ~ x['id'] if x['id'] != v['id'] else '' }}">
           {{ x['version_name'] }} · {{ sources.get(x['source'], x['source']) }}{{ ' · последняя' if x['id'] == v['id'] }}{{ ' · другая подпись' if x['signer'] != a.signer }}
         </option>
@@ -50,6 +51,9 @@
       </select>
     </label>
     {% endif %}
+    <details data-compatibility data-min="{{ v['min_sdk'] }}" data-target="{{ v['target_sdk'] }}" data-abis="{{ v['abis'] }}" data-rotation="{{ v['rotation_min_sdk'] }}" hidden>
+      <summary>Неизвестно</summary><p class="meta" data-compatibility-reasons></p>
+    </details>
     {% set warning = version_warning(a, v) %}<div class="err" data-apk-warning{% if not warning %} hidden{% endif %}>{{ warning }}</div>
     <div class="install"><div class="download-actions{{ ' with-qr' if qr }}">
       <a class="btn pill" data-apk-download href="{{ url(v['dir'], apk_name(a.package, v['version_name'])) }}" download>Скачать APK</a>
@@ -100,11 +104,8 @@
       {% endif %}
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
-        {% if not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
-          <input type="hidden" name="package" value="{{ a.package }}"><input type="hidden" name="sync_history" value="1">
-          <button class="tint">Добавить версии в публичную</button></form>{% endif %}
-        {% elif not a.paid %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
-          <input type="hidden" name="package" value="{{ a.package }}"><button class="tint">Добавить в публичную</button></form>{% endif %}
+        {% if not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить версии</a>{% endif %}
+        {% elif not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a>{% endif %}
       {%- endif %}
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>

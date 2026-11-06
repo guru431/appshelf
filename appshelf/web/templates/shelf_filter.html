@@ -6,7 +6,7 @@
   <button class="secondary">Найти</button></div>
   <div class="shelf-filter-options">
   <select name="filter" aria-label="Состояние приложений" onchange="this.form.submit()">
-  {% for value, label in [('all', 'Все'), ('recent', 'Недавно обновлены'), ('errors', 'Ошибки'), ('pending', 'Ожидают решения')] %}
+  {% for value, label in filter_options %}
     <option value="{{ value }}"{% if filter_mode == value %} selected{% endif %}>{{ label }}</option>
   {% endfor %}</select>
   {% if sources %}<select name="source" aria-label="Источник" onchange="this.form.submit()"><option value="">Все источники</option>

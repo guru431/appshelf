@@ -2,6 +2,13 @@
 {% block main %}
 <div class="card">
 <p>{{ question }}</p>
+{% if conflicts %}
+<div class="banner"><p>У совпадающих приложений останется версия принимающей полки. Вся история уходящей полки,
+включая закреплённые APK, будет удалена:</p>
+<ul>{% for app in conflicts %}<li>{{ app.name }} ({{ app.package }}): версий — {{ app.count }}, закреплённых — {{ app.pinned }}.
+{% for v in app.versions %}{{ v.version_name }} ({{ v.version_code }}){{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}</ul>
+<p>Чтобы сохранить нужные APK, отмените связку и сначала скачайте их с уходящей полки.</p></div>
+{% endif %}
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
 {% if refused %}<div class="bar"><a class="btn secondary" href="{{ cancel }}">Назад</a></div>
 {% else %}<form method="post" action="{{ post_url(action) }}">

@@ -184,6 +184,17 @@ def test_clipboard_import_rejects_invalid_input_without_replacing_session(connec
     assert result.status_code == 403
 
 
+@pytest.mark.parametrize("domain", [None, 1, True, [], {}])
+@pytest.mark.parametrize("as_file", [False, True])
+def test_cookie_domain_type_is_validated(connected, domain, as_file):
+    raw = json.dumps([{"domain": domain, "name": "pass_hash", "value": COOKIE}])
+    kwargs = {"files": {"file": ("cookies.json", raw)}} if as_file else {"data": {"session_json": raw}}
+    result = connected.client.post("/fourpda/1/import", **kwargs)
+    assert result.status_code == 400 and COOKIE not in result.text
+    assert connected.sessions.load(1) == session()
+    assert not connected.sessions.http.calls
+
+
 def test_general_search_opens_topic_files_with_personal_scope(connected, monkeypatch):
     import html
     import re

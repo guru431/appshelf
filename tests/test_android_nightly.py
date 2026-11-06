@@ -1,7 +1,7 @@
 import pytest
 
 from apk_factory import cert_sha, make_apk
-from appshelf import nightly, store
+from appshelf import nightly, people, store
 from appshelf.android import db, fetch, net
 from appshelf.android.sources import Latest
 from helpers import owner
@@ -12,6 +12,8 @@ URL = "https://bank.example/a.apk"
 
 def card(ctx, conn, clock, tmp_path, package, source, ref, code=1):
     """Карточка с текущей версией code — как после добавления."""
+    if people.get_user(conn, 1) is None:
+        people.create_user(conn, 'Владелец', 'owner', None, clock.iso())
     shelf = db.ensure_shelf(conn, 1, clock.iso())
     ctx.sources.apks[ref] = make_apk(tmp_path / f"{package}-{code}.apk", package=package, version_code=code)
     db.put_app(conn, shelf.id, package, package, source, ref, clock.iso())
@@ -60,7 +62,7 @@ def test_nightly_android_runs_without_apple_login(ctx, cfg, conn, clock, tmp_pat
 
 
 @pytest.mark.parametrize("public", [False, True])
-def test_nightly_prunes_old_apks_but_keeps_pin_and_downloads_new_versions(ctx, cfg, conn, clock, tmp_path, public):
+def test_nightly_prunes_old_apks_but_keeps_pin_and_downloads_new_versions(ctx, cfg, conn, clock, tmp_path, public, acct):
     shelf = db.ensure_public_shelf(conn, clock.iso()) if public else db.ensure_shelf(conn, 1, clock.iso())
     db.put_app(conn, shelf.id, "ru.a", "Банк", "rustore", "ru.a", clock.iso())
     ctx.sources.apks["ru.a"] = make_apk(tmp_path / "v1.apk", package="ru.a", version_code=1)

@@ -17,19 +17,19 @@
 <style>
 /* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в меню Apple ID */
 :root { color-scheme: dark; --bg: #000; --card: #1c1c1e; --raised: #2c2c2e; --bar: rgba(20,20,22,.74);
-        --line: rgba(255,255,255,.1); --fg: #f5f5f7; --muted: #98989f; --accent: #0a84ff; --link: #4da3ff;
+        --line: rgba(255,255,255,.1); --fg: #f5f5f7; --muted: #a1a1a8; --accent: #0a84ff; --link: #4da3ff;
         --tint: rgba(10,132,255,.22); --fill: rgba(120,120,128,.26); --seg: #636366; --err: #ff6961;
         --errtint: rgba(255,69,58,.2); --ok: #30d158; --warn: #ffd60a; --banner: rgba(255,214,10,.13);
         --shadow: inset 0 1px 0 rgba(255,255,255,.06); --pop: 0 0 0 1px rgba(255,255,255,.1), 0 18px 44px rgba(0,0,0,.6); }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
-        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #6c6c70; --accent: #0071e3; --link: #0066cc;
+        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #606064; --accent: #0071e3; --link: #0066cc;
         --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
         --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
         --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
 }
 :root[data-theme="light"] { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
-        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #6c6c70; --accent: #0071e3; --link: #0066cc;
+        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #606064; --accent: #0071e3; --link: #0066cc;
         --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
         --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
         --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
@@ -57,7 +57,9 @@ header { position: -webkit-sticky; position: sticky; top: 0; z-index: 10; displa
 .pop > summary { display: block; list-style: none; cursor: pointer; -webkit-user-select: none; user-select: none; }
 .pop > summary::-webkit-details-marker { display: none; }
 .sheet { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; width: max-content; max-width: calc(100vw - 32px);
-         padding: 8px; border-radius: 18px; background: var(--raised); box-shadow: var(--pop); }
+         padding: 8px; border-radius: 18px; background: var(--raised); box-shadow: var(--pop);
+         max-height: max(80px, calc(100dvh - var(--sheet-top, 140px) - 88px - env(safe-area-inset-bottom)));
+         overflow-y: auto; overscroll-behavior: contain; }
 .os { display: flex; flex: none; padding: 2px; border-radius: 10px; background: var(--fill); font-size: 13px; }
 .os a { padding: 5px 9px; border-radius: 8px; color: var(--fg); font-weight: 500; }
 .os a.on { background: var(--seg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
@@ -272,6 +274,10 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 .theme-entry { max-width: 720px; margin: 12px auto 0; padding: 0 16px; text-align: right; }
 .theme-entry .pop { display: inline-block; text-align: left; }
 .desktop-transfer { margin-top: 8px; }
+[data-device-form] select { display: block; width: 100%; min-height: 44px; padding: 8px;
+  font: inherit; color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
+[data-device-form] label { display: block; margin: 12px 0; }
+.card code { overflow-wrap: anywhere; word-break: break-word; }
 .menu-heading { margin: 10px 12px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 @media (max-width: 460px) {
   header { flex-wrap: wrap; gap: 8px; }
@@ -283,29 +289,29 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 </head>
 <body>
 {% macro tab(href, key, label, icon) -%}
-  <a href="{{ href }}" class="{{ 'on' if nav == key }}"><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
+  <a href="{{ href }}" class="{{ 'on' if nav == key }}"{% if nav == key %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
 {%- endmacro %}
 {% if nav not in ('login', 'guest') %}
 {% set android = section == 'android' %}
 <header>
   <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Аккаунты', 'admin': 'Участники',
-         'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная'}[nav] }}</h1>
-  <nav class="os" aria-label="Раздел"><a href="/?os=apple"{% if not android %} class="on"{% endif %}>Apple</a><a href="/android"{% if android %} class="on"{% endif %}>Android</a></nav>
+         'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная', 'settings': 'Настройки'}[nav] }}</h1>
+  <nav class="os" aria-label="Раздел"><a href="/?os=apple"{% if not android %} class="on" aria-current="true"{% endif %}>Apple</a><a href="/android"{% if android %} class="on" aria-current="true"{% endif %}>Android</a></nav>
   <details class="pop acct">
     {%- if android %}
     {# Android-раздел: полка одного из вошедших (/who/<id>) или публичная #}
-    <summary><span class="chip"><span class="who">{{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
+    <summary aria-label="Выбрать полку"><span class="chip"><span class="who">Полка: {{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
       <div class="menu-heading">Полка</div><div class="shelves">
-        {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
-        {%- if nav == 'a_public' %}<span class="on">Публичная</span>{% else %}<a href="/android/public">Публичная</a>{% endif -%}
+        {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on" aria-current="true">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
+        {%- if nav == 'a_public' %}<span class="on" aria-current="true">Публичная</span>{% else %}<a href="/android/public">Публичная</a>{% endif -%}
       </div>
     {%- else %}
-    <summary><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">{{ acct.email if acct else who.name if who else 'Меню' }}</span></span></summary>
+    <summary aria-label="Выбрать полку"><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">Полка: {{ acct.email if acct else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
       {%- if accounts %}
       <div class="menu-heading">Полка</div><div class="shelves">
-        {%- for a in accounts %}{% if a.id == acct.id %}<span class="on">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
+        {%- for a in accounts %}{% if a.id == acct.id %}<span class="on" aria-current="true">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
       </div>
       {%- endif %}
     {%- endif %}
@@ -316,39 +322,28 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
         {%- else %}нет входа{% endif -%}
       </div>
       {%- endif %}
-      <div class="menu-heading">Аккаунты и подключения</div>
-      <div class="shelves"><a href="/apple">Аккаунты</a>{% if android and who %}<a href="/fourpda/{{ who.id }}/connect">4PDA</a>{% endif %}</div>
-      <div class="menu-heading">Оформление</div><div class="seg" aria-label="Оформление">
-        <a href="/theme?set=auto&amp;back={{ here | urlencode }}"{% if not theme %} class="on"{% endif %}>авто</a>
-        <a href="/theme?set=light&amp;back={{ here | urlencode }}"{% if theme == 'light' %} class="on"{% endif %}>светлая</a>
-        <a href="/theme?set=dark&amp;back={{ here | urlencode }}"{% if theme == 'dark' %} class="on"{% endif %}>тёмная</a>
-      </div>
-      <div class="menu-heading">Выход</div><form method="post" action="{{ post_url('/logout') }}"><button class="secondary">Выйти из всех участников этого браузера</button></form>
     </div>
   </details>
 </header>
 {% set grid = '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>' %}
 <nav class="tabs">
   {%- if android %}
-  {{ tab('/android', 'a_catalog', 'Каталог', grid) }}
-  {{ tab('/android/add', 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}
-  {{ tab('/android/public', 'a_public', 'Публичная', '<circle cx="12" cy="12" r="8.2"/><path d="M3.8 12h16.4M12 3.8c2.2 2.3 3.3 5 3.3 8.2s-1.1 5.9-3.3 8.2c-2.2-2.3-3.3-5-3.3-8.2s1.1-5.9 3.3-8.2z"/>') }}
-  {{ tab('/apple', 'apple', 'Аккаунты', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
+  {{ tab('/android/public' if nav == 'a_public' else '/android', 'a_public' if nav == 'a_public' else 'a_catalog', 'Каталог', grid) }}
+  {% if nav != 'a_public' or edit %}{{ tab('/android/public/add' if nav == 'a_public' else '/android/add', 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}{% endif %}
   {%- else %}
   {# ?os=apple: на телефоне Android «/» открыл бы Android-раздел #}
   {{ tab('/?os=apple', 'catalog', 'Каталог', grid) }}
   {{ tab('/history', 'history', 'История', '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l2.9 1.8"/>') }}
   {{ tab('/blocked', 'blocked', 'Удалённые', '<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>') }}
-  {{ tab('/apple', 'apple', 'Аккаунты', '<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.6c1-3.4 3.8-5.2 7.2-5.2s6.2 1.8 7.2 5.2"/>') }}
   {%- endif %}
-  {% if users and users | selectattr('role', 'equalto', 'owner') | first %}{{ tab('/admin', 'admin', 'Участники', '<circle cx="9" cy="9" r="3.1"/><path d="M3 19c.7-3 3-4.7 6-4.7s5.3 1.7 6 4.7"/><circle cx="17.2" cy="9.6" r="2.4"/><path d="M17 14.4c2.2.2 3.6 1.5 4.2 3.8"/>') }}{% endif %}
+  {{ tab('/settings', 'settings', 'Настройки', '<circle cx="12" cy="12" r="8"/><path d="M8 9h8M8 15h8"/>') }}
 </nav>
 {% endif %}
 {% if nav in ('login', 'guest') %}
 <div class="theme-entry"><details class="pop"><summary class="btn sm secondary">Оформление: {{ {'light': 'светлая', 'dark': 'тёмная'}.get(theme, 'как в системе') }}</summary>
 <div class="sheet"><nav class="shelves" aria-label="Оформление">
 {% for value, label in [('auto', 'Как в системе'), ('light', 'Светлая'), ('dark', 'Тёмная')] %}
-<a href="/theme?set={{ value }}&amp;back={{ here | urlencode }}"{% if theme == value or (not theme and value == 'auto') %} aria-current="true"{% endif %}>{{ label }}</a>
+<a href="/theme?set={{ value }}&amp;back={{ here | urlencode }}"{% if theme == value or (not theme and value == 'auto') %} class="on" aria-current="true"{% endif %}>{{ label }}</a>
 {% endfor %}</nav></div></details></div>
 {% endif %}
 <main>
@@ -356,6 +351,16 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
+<script src="/pwa/device-profile.js?v=1"></script>
+<script>
+function fitSheets() {
+  document.querySelectorAll('details.pop[open] > .sheet').forEach(function(sheet) {
+    sheet.style.setProperty('--sheet-top', Math.ceil(sheet.getBoundingClientRect().top) + 'px');
+  });
+}
+addEventListener('toggle', fitSheets, true);
+addEventListener('resize', fitSheets);
+</script>
 <script>
 addEventListener('change', function (e) {
   if (!e.target.matches('[data-apk-select]')) return;

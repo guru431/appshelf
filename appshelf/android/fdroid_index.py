@@ -57,6 +57,8 @@ class Build:
     sha256: str
     signer: str
     abis: tuple[str, ...]
+    min_sdk: int = 0
+    target_sdk: int = 0
 
     @property
     def arm_rank(self) -> int:
@@ -81,7 +83,7 @@ class App:
 
     def select(self, code: int | None = None) -> Build:
         if code is not None:
-            found = next((b for b in self.builds if b.code == code and b.arm_rank < 3), None)
+            found = next((b for b in self.builds if b.code == code), None)
         else:
             suggested = next((b.name for b in self.builds if b.code == self.suggested), "")
             found = next((b for b in self.choices() if b.name == suggested), None)
@@ -284,7 +286,8 @@ def parse(raw: bytes) -> dict[str, App]:
                         or signer and not SHA256_RE.fullmatch(signer):
                     continue
                 builds.append(Build(str(b["versionName"]), int(b["versionCode"]), filename, digest,
-                                    signer, tuple(b.get("nativecode") or ())))
+                                    signer, tuple(b.get("nativecode") or ()), int(b.get("minSdkVersion") or 0),
+                                    int(b.get("targetSdkVersion") or 0)))
             localized = meta.get("localized") or {}
             name = next((localized[k].get("name") for k in ("ru", "ru-RU", "en-US", "en")
                          if localized.get(k, {}).get("name")), None)
@@ -318,7 +321,9 @@ def parse_v2(raw: bytes) -> dict[str, App]:
                         or not SHA256_RE.fullmatch(digest) or not SHA256_RE.fullmatch(signer):
                     continue
                 builds.append(Build(str(manifest["versionName"]), int(manifest["versionCode"]), filename,
-                                    digest, signer, tuple(manifest.get("nativecode", ()))))
+                                    digest, signer, tuple(manifest.get("nativecode", ())),
+                                    int((manifest.get("usesSdk") or {}).get("minSdkVersion") or 0),
+                                    int((manifest.get("usesSdk") or {}).get("targetSdkVersion") or 0)))
             names = meta.get("name", {})
             name = next((names[k] for k in ("ru", "ru-RU", "en-US", "en") if names.get(k)), None)
             name = name or next(iter(names.values()), package)

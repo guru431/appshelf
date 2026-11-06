@@ -185,8 +185,11 @@ One browser can be signed in as several people at once: every further sign-in �
 with another person's Apple ID, an invite, a fallback link — adds that person to those already signed in, and the
 Apple ID menu in the header switches between everyone's shelves. This is how a shared Apple ID is used: it stays a
 separate person, and signing in with it alone opens only its shelf. "Remove from this device" (the "Accounts" page)
-removes one person from the browser, "Sign out" (the same menu) removes all; "Sign out on all devices" revokes one
+removes one person from the browser, "Sign out" in Settings removes all; "Sign out on all devices" revokes one
 person everywhere.
+
+The header's Shelf menu selects the current shelf. Settings contains accounts, connections, people, theme
+(System / Light / Dark) and sign-out. Apple History and Removed apps remain directly accessible in the bottom bar.
 
 When a store token expires there is a banner on the shelf and "Sign in again"; the owner gets an email about
 their Apple ID. If Apple breaks sign-in, use a fallback link (one-time, 24 h; it opens a page with a "Sign in"
@@ -332,12 +335,18 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   with the minimum Android version; the decision stays manual. A matching key alone does not guarantee a safe app.
 - **Versions.** Each card lists all saved APKs and selects the latest accepted `versionCode` by default.
   Add older builds by link, search or file upload; they keep the latest version and its update source in place.
-  Updates preserve the history, and identical APKs are not added twice. A different signature requires confirmation;
+  Successful updates keep the current, previous and one pinned APK; older unpinned builds are removed only after
+  the database commit succeeds. Identical APKs are not added twice. A different signature requires confirmation;
   accepting an older build adds it to the list while keeping the latest as the default. Selecting a version updates
   the download, details, shared link and QR code; reloading selects the latest again. Android may require removing
-  the newer app and its data before installing an older build. "⋯" manages pins and sources; unpinning keeps the APK.
+  the newer app and its data before installing an older build. "⋯" manages pins and sources; unpinning removes
+  protection, so the next successful update may delete that APK.
   Layout:
   `<archive>/<Android shelf token>/<package>-<versionCode>/{<package>-<version>.apk, icon.png}`.
+- **Device compatibility.** The optional "Для какого устройства" profile stores Android and supported ABIs only in
+  this browser. Choosing a saved APK updates its known compatibility, including minimum Android, old target SDK
+  install restrictions and the verified key rotation threshold. Missing data is marked unknown; Android makes the
+  final installation decision. F-Droid suggests a suitable build, while keeping an explicit manual selection.
 - **Nightly check** — after the Apple IDs, and without any Apple ID sign-in too: RuStore, Google Play, AppGallery and
   APKPure by `versionCode`, F-Droid by the suggested version, GitHub by its latest stable release, the F-Droid
   archive by the selected version (an exact version stays unchanged), a link by `ETag`, `Last-Modified`, `Content-Length`;
@@ -427,19 +436,22 @@ its package. The signature of every downloaded version is compared with RuStore.
 
 ### Public shelf
 
-One Android shelf per server for people without a panel sign-in. The owner fills it (Android → **Публичная** →
-"Добавить в публичную": the same sources), people see it on the same tab without a PIN and without
+One Android shelf per server for people without a panel sign-in. The owner fills it (Android → Shelf menu → **Публичная** →
+"Добавить в публичную": the same sources), people select it in that menu without a PIN and without
 actions, a guest opens `<site address>/p` and enters the PIN — and sees only the list with "Download APK" and the
 hints, search and filters; guests cannot manage the shelf.
 
-- **From my shelf** — "Добавить в публичную" lets the owner select an app already downloaded on their personal
-  Android shelf; "Добавить в публичную" is in the app's "⋯" menu, including on eligible personal cards. It copies
-  the current APK without downloading it again and keeps its update source. Deleting the personal copy leaves the
-  public copy intact. Paid apps cannot be copied.
+- **From my shelf** — "Сравнить и добавить в публичную" lets the owner select an app already downloaded on their personal
+  Android shelf; it is in the app's "⋯" menu, including on eligible personal cards. It copies
+  accepted saved APKs without downloading them again. A comparison shows versions, content hashes, pins and possible
+  signature decisions before confirmation; repeat copying adds missing builds while preserving the public update
+  source. Pending and paid builds are excluded. The public shelf has the same retention policy; personal pins are
+  not inherited. Deleting the personal copy leaves the public copy intact. New personal downloads are never
+  automatically published.
 - **QR code** — the QR icon button to the right of "Скачать APK" reveals it on each public app, including on the
   guest page after entering the PIN. It links directly to the current APK; updates keep the link, while changing
   the PIN or shelf token invalidates old codes.
-- **PIN** — 6 digits, set and changed by the owner in the "Гостевой доступ" block of the public tab. Until a PIN is
+- **PIN** — 6 digits, set and changed by the owner in the collapsed "Гостевой доступ" block below public apps. Until a PIN is
   set, `/p` shows guests nothing. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie
   signed with `cookie-key`).
@@ -451,9 +463,15 @@ hints, search and filters; guests cannot manage the shelf.
   reset them. The guest's address is the last element of `X-Forwarded-For`, which Apache appends: there must be no
   other proxy in front of it, or all guests share one counter.
 - **The "ввод PIN публичной полки закрыт" mail** — one per episode: someone is guessing the PIN. To reopen entry
-  right away — "Открыть ввод PIN" on the public tab; if the PIN may have leaked, change it (that reopens entry too).
+  right away — "Открыть ввод PIN" on the public shelf; if the PIN may have leaked, change it (that reopens entry too).
 - File links, as with IPAs, work without the PIN: the PIN guards the page, not the files. Purchased apps never go to
   the public shelf.
+
+## Home Screen (PWA)
+
+Safari → Share → Add to Home Screen opens the shelf without the address bar. The upload service worker transfers
+APK chunks and can resume when the browser returns. It does not cache pages or guarantee continuous background
+execution: Android or the browser may stop it. The selected file is kept in IndexedDB until transfer or cancellation.
 
 ## New shelf token
 

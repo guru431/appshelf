@@ -3,6 +3,7 @@
 свои. Всё — по Apple ID: свой ipatool (Env.tools), своя полка в архиве (cfg.shelf_root)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -443,7 +444,27 @@ def _google_apps_gone(c, gid: int) -> None:
                               (note + "\n" if note else "") + android_sources.ACCOUNT_GONE)
 
 
-def link_users(cfg: Config, c, keep_uid: int, gone_uid: int) -> None:
+def link_conflicts(c, keep_uid: int, gone_uid: int) -> tuple[list[dict], str]:
+    """The exact incoming versions discarded by the existing duplicate-package policy."""
+    rows = []
+    for app in c.execute("SELECT a.* FROM android_apps a JOIN android_shelves s ON s.id=a.shelf_id "
+                         "WHERE s.user_id=? AND EXISTS (SELECT 1 FROM android_apps b JOIN android_shelves d "
+                         "ON d.id=b.shelf_id WHERE d.user_id=? AND b.package=a.package) ORDER BY a.package",
+                         (gone_uid, keep_uid)).fetchall():
+        versions = [dict(v) for v in c.execute("SELECT id,version_code,version_name,sha256,signer,pinned,role "
+                                               "FROM android_versions WHERE shelf_id=? AND package=? ORDER BY id",
+                                               (app["shelf_id"], app["package"]))]
+        rows.append({"package": app["package"], "name": app["name"], "versions": versions,
+                     "count": len(versions), "pinned": sum(v["pinned"] for v in versions)})
+    digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest() if rows else ""
+    return rows, digest
+
+
+class LinkConfirmationChanged(Exception):
+    pass
+
+
+def link_users(cfg: Config, c, keep_uid: int, gone_uid: int, *, confirmed_conflicts: str | None = None) -> None:
     """«Связать» (spec 2026-10-28 §5): Google-аккаунты и Android-полка уходящего — остающемуся; уходящий удаляется
     вместе со своими запасными ссылками входа. Под замком скачивания — store_apk не пишет в полки посреди переноса
     (не дождались — AccountBusy); строки — одной транзакцией. Сбой переноса каталога — перенесённые каталоги
@@ -456,6 +477,8 @@ def link_users(cfg: Config, c, keep_uid: int, gone_uid: int) -> None:
             moved: list[tuple[Path, Path]] = []  # (откуда, куда) — для возврата при сбое
             try:
                 with store.tx(c):
+                    if confirmed_conflicts is not None and link_conflicts(c, keep_uid, gone_uid)[1] != confirmed_conflicts:
+                        raise LinkConfirmationChanged()
                     if c.execute("SELECT 1 FROM android_uploads WHERE user_id IN (?,?) AND job_id IS NULL LIMIT 1",
                                  (keep_uid, gone_uid)).fetchone():
                         raise AccountBusy("загрузка APK: завершите или отмените передачу перед связыванием")

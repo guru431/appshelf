@@ -80,11 +80,16 @@ def test_old_copy_to_public_keeps_explicit_owner_source(web, conn, cfg, clock, a
     sign_in(web.client, cfg, conn, clock, other.user_id)
     mine = android_app(conn, cfg, clock, acct.user_id)
     android_app(conn, cfg, clock, other.user_id)
-    action = form_action(web.client.get("/android").text, "/android/public/add/from-shelf")
+    link = html.unescape(next(h for h in re.findall(r'<a[^>]*href="([^"]+)"', web.client.get('/android').text)
+                              if '/android/public/add/from-shelf' in h))
+    preview = web.client.get(link)
+    action = form_action(preview.text, "/android/public/add/from-shelf")
     web.client.get(f"/who/{other.user_id}", follow_redirects=False)
-    assert f"person={acct.user_id}" in form_action(web.client.get("/android/public/add").text,
-                                                "/android/public/add/from-shelf")
-    response = web.client.request("POST", action, data={"package": PKG}, follow_redirects=False)
+    assert f"person={acct.user_id}" in next(h for h in re.findall(r'<a[^>]*href="([^"]+)"',
+                                                                  web.client.get('/android/public/add').text)
+                                          if '/android/public/add/from-shelf' in h)
+    response = web.client.request("POST", action, data={"package": PKG, 'snapshot': preview.context['plan']['snapshot']},
+                                   follow_redirects=False)
     assert response.status_code == 303
     public = db.public_shelf(conn)
     job = conn.execute("SELECT payload FROM android_jobs WHERE shelf_id=? AND kind='copy'", (public.id,)).fetchone()
@@ -119,6 +124,23 @@ def test_saved_shelf_filters_keep_busy_state(web, conn, cfg, clock):
     assert response.context["total"] == 2 and response.context["busy"]
     response = web.client.get("/?os=apple&filter=errors")
     assert response.context["apps"] == [] and response.context["total"] == 2
+
+
+def test_active_jobs_and_signature_decisions_are_independent_filters(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, app_id=123, name="Ready")
+    seed_app(conn, cfg, clock, app_id=456, name="Loading")
+    store.set_app_status(conn, 1, 123, "ok")
+    store.set_app_status(conn, 1, 456, "downloading")
+    page = web.client.get('/?os=apple&filter=active')
+    assert [a.app_id for a in page.context['apps']] == [456]
+    assert 'pending' not in dict(page.context['filter_options'])
+    shelf = android_app(conn, cfg, clock, 1)
+    db.put_app(conn, shelf.id, 'ru.queued', 'Queued', 'rustore', 'ru.queued', clock.iso())
+    db.set_status(conn, shelf.id, PKG, 'ok')
+    page = web.client.get('/android?filter=pending')
+    assert [a.package for a in page.context['apps']] == [PKG]
+    page = web.client.get('/android?filter=active')
+    assert [a.package for a in page.context['apps']] == ['ru.queued']
 
 
 def test_platform_and_public_theme_work_without_apple_selection(web):

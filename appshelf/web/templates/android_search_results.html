@@ -11,7 +11,10 @@
       {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
       {%- else %}<form method="post" action="{{ post_url(prefix ~ '/add/source') }}" class="source-choice">
         <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">
-        {% if s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
+        {% if s.builds %}<select name="ref" data-fdroid-builds aria-label="Версия {{ s.name }} · {{ sources[s.source] }}">
+        <option value="{{ s.ref }}">Рекомендуемая · {{ s.version }} · автообновления</option>
+        {% for b in s.builds %}<option value="{{ s.package }}@{{ b.code }}" data-min="{{ b.min_sdk }}" data-target="{{ b.target_sdk }}" data-abis="{{ b.abis | join(',') }}">{{ b.name }} ({{ b.code }}) · {{ b.abis | join(', ') or 'универсальная' }}</option>{% endfor %}</select><span class="meta" data-build-hint></span>
+        {% elif s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
         {% else %}<input type="hidden" name="ref" value="{{ s.ref }}">{% endif %}
         {% if s.source == 'apkpure' %}<label><input type="checkbox" name="ack" value="1"> Понимаю риск APKPure: если пакета нет в RuStore, подпись не с чем сверить</label>{% endif %}
         <button class="sm tint">Добавить · {{ sources[s.source] }}</button></form>{% endif %}

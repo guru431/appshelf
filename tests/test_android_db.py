@@ -3,8 +3,10 @@ import sqlite3
 
 import pytest
 
-from appshelf import store
+from appshelf import people, store
 from appshelf.android import db
+
+pytestmark = pytest.mark.usefixtures("acct")
 
 NOW = "2026-10-28T00:00:00+00:00"
 A, B = "a" * 64, "b" * 64
@@ -205,7 +207,8 @@ def test_jobs_take_in_order_and_requeue(conn):
     assert db.take_job(conn)["id"] == second
     assert db.take_job(conn) is None
     db.finish_job(conn, second, "done", NOW)
-    other = db.ensure_shelf(conn, 2, NOW)
+    uid = people.create_user(conn, "Другой", "member", None, NOW)
+    other = db.ensure_shelf(conn, uid, NOW)
     assert not db.dismiss_job(conn, other.id, first)                            # чужая полка
     assert db.dismiss_job(conn, shelf.id, first)
     assert db.open_jobs(conn, shelf.id) == [] and not db.has_active(conn, shelf.id)
@@ -216,7 +219,8 @@ def test_shelf_token_is_random_and_stable(conn):
     shelf = db.ensure_shelf(conn, 1, NOW)
     assert re.fullmatch(r"[0-9a-f]{32}", shelf.shelf) and shelf.user_id == 1 and shelf.shelf_next == ""
     assert db.ensure_shelf(conn, 1, NOW) == shelf == db.get_shelf(conn, shelf.id) == db.shelf_for_user(conn, 1)
-    other = db.ensure_shelf(conn, 2, NOW)
+    uid = people.create_user(conn, "Другой", "member", None, NOW)
+    other = db.ensure_shelf(conn, uid, NOW)
     assert other.shelf != shelf.shelf
     assert db.all_shelves(conn) == [shelf, other]
 
