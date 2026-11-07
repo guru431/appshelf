@@ -7,13 +7,11 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import signal
 import subprocess
-import sys
 import time
-from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 LOGIN_TIMEOUT = 120.0
@@ -141,62 +139,6 @@ def _last_json(out: str):
     return None
 
 
-def _recover_login_cookies(home: Path) -> None:
-    """После обрыва входа вернуть cookies прежней сессии до любого вызова ipatool."""
-    backup = home / ".ipatool" / "cookies.before-login"
-    if backup.exists():
-        os.replace(backup, backup.with_name("cookies"))
-
-
-def recover_logins(home: Path, lock: Path) -> None:
-    """После перезапуска web незавершённых шагов уже нет; сохранить прежнюю сессию и убрать их cookies."""
-    with hold(lock, 0):
-        _recover_login_cookies(home)
-        for path in (home / ".ipatool").glob("cookies.login-*"):
-            path.unlink(missing_ok=True)
-
-
-@contextmanager
-def _login_cookies(home: Path, pending: Path, resume: bool):
-    """Новый вход — с чистыми cookies, шаг 2 — с cookies шага 1; прежняя сессия живёт до успеха."""
-    root = home / ".ipatool"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    cookies, backup = root / "cookies", root / "cookies.before-login"
-    prepared = committed = False
-    try:
-        if cookies.exists():
-            os.replace(cookies, backup)
-        prepared = True
-        if resume and pending.exists():
-            os.replace(pending, cookies)
-        else:
-            pending.unlink(missing_ok=True)
-        # libcurl opens this jar for writing; create it with private permissions.
-        fd = os.open(cookies, os.O_CREAT | os.O_WRONLY, 0o600)
-        os.close(fd)
-        try:
-            yield
-        except AuthCodeRequired:
-            cookies.chmod(0o600)
-            os.replace(cookies, pending)
-            raise
-        except BaseException:
-            pending.unlink(missing_ok=True)
-            raise
-        else:
-            cookies.chmod(0o600)
-            committed = True
-    finally:
-        if prepared:
-            if not committed:
-                cookies.unlink(missing_ok=True)
-                if backup.exists():
-                    os.replace(backup, cookies)
-            else:
-                backup.unlink(missing_ok=True)
-                pending.unlink(missing_ok=True)
-
-
 @dataclass
 class Ipatool:
     argv0: list[str]       # [/var/_sh/appshelf/bin/ipatool]; в тестах [python, fake_ipatool.py]
@@ -204,11 +146,6 @@ class Ipatool:
     lock: Path             # блокировка Apple ID: его вызовы по одному, другие Apple ID не ждут
     proxy: str = ""
     device_mac: str = ""   # IPATOOL_DEVICE_MAC (патч 05); пусто — настоящий MAC сервера
-    _login_id: str = field(default_factory=lambda: secrets.token_hex(12), init=False, repr=False)
-
-    @property
-    def login_cookies(self) -> Path:
-        return self.home / ".ipatool" / f"cookies.login-{self._login_id}"
 
     def run(self, args: list[str], timeout: float, stdin: str = "", lock_wait: float | None = None):
         env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
@@ -219,45 +156,27 @@ class Ipatool:
         if self.device_mac:
             env["IPATOOL_DEVICE_MAC"] = self.device_mac
         with hold(self.lock, lock_wait):
-            login = args[:2] == ["auth", "login"]
+            proc = subprocess.Popen([*self.argv0, "--format", "json", *args], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True,
+                                    encoding="utf-8", errors="replace", start_new_session=os.name == "posix")
             try:
-                _recover_login_cookies(self.home)
-                jar = _login_cookies(self.home, self.login_cookies, "--auth-code" in args) if login else nullcontext()
-                with jar:
-                    proc = subprocess.Popen([*self.argv0, "--format", "json", *args], stdin=subprocess.PIPE,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True,
-                                            encoding="utf-8", errors="replace", start_new_session=os.name == "posix")
-                    try:
-                        out, err = proc.communicate(stdin, timeout=timeout)
-                    except subprocess.TimeoutExpired:
-                        _kill(proc)
-                        proc.communicate()
-                        raise IpatoolError("timeout", f"ipatool не уложился в {timeout:.0f} с") from None
-                    data = _last_json(out)
-                    if proc.returncode == 0:
-                        if data is None:
-                            raise IpatoolError("bad_output", "ipatool не вернул JSON: " + _tail(out + err))
-                        return data
-                    error = message = ""
-                    if isinstance(data, dict):
-                        error, message = str(data.get("error", "")), str(data.get("message", ""))
-                    if error == "error" and message == "account is disabled":
-                        error = "account_disabled"
-                    raise BY_EXIT.get(proc.returncode, IpatoolError)(
-                        error or "error", message or _tail(err) or f"код выхода {proc.returncode}")
-            except OSError:
-                if login:
-                    raise IpatoolError("save_failed", "Не удалось подготовить или сохранить вход") from None
-                raise
-
-    def discard_login_cookies(self) -> None:
-        """Отменённый/истёкший шаг 2: временные cookies этого входа больше не нужны."""
-        try:
-            with hold(self.lock, 0):
-                _recover_login_cookies(self.home)
-                self.login_cookies.unlink(missing_ok=True)
-        except (OSError, IpatoolError):
-            print("appshelf: временные cookies входа не удалены", file=sys.stderr)
+                out, err = proc.communicate(stdin, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill(proc)
+                proc.communicate()
+                raise IpatoolError("timeout", f"ipatool не уложился в {timeout:.0f} с") from None
+        data = _last_json(out)
+        if proc.returncode == 0:
+            if data is None:
+                raise IpatoolError("bad_output", "ipatool не вернул JSON: " + _tail(out + err))
+            return data
+        error = message = ""
+        if isinstance(data, dict):
+            error, message = str(data.get("error", "")), str(data.get("message", ""))
+        if error == "error" and message == "account is disabled":  # Apple «Your account is disabled.» на вход
+            error = "account_disabled"
+        raise BY_EXIT.get(proc.returncode, IpatoolError)(
+            error or "error", message or _tail(err) or f"код выхода {proc.returncode}")
 
     def login(self, email: str, password: str, auth_code: str = "",
               lock_wait: float | None = LOGIN_LOCK_WAIT) -> dict:

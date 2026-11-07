@@ -60,7 +60,7 @@ def login_error_text(e: IpatoolError) -> str:
 def log_login_error(e: IpatoolError, step: int) -> None:
     """Только известный код и HTTP-статус; ответ Apple может содержать секреты."""
     code = e.error if e.error in LOGIN_ERRORS else "error"
-    status = re.search(r"\bHTTP ([1-5][0-9]{2})\b", e.message)
+    status = re.search(r"\b(?:HTTP |status=)([1-5][0-9]{2})\b", e.message)
     print(f"appshelf: Apple login step={step} error={code} http={status[1] if status else 'unknown'}",
           file=sys.stderr, flush=True)
 

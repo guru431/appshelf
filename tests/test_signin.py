@@ -213,7 +213,9 @@ def test_edge_rejection_text_not_counted_as_wrong_password(make_web, cfg, conn, 
 
 def test_login_diagnostics_never_print_untrusted_error_or_message(capsys):
     signin.log_login_error(IpatoolError("secret-token", "password=secret; HTTP 403; cookie=private"), 2)
-    assert capsys.readouterr().err == "appshelf: Apple login step=2 error=error http=403\n"
+    signin.log_login_error(IpatoolError("error", "something went wrong (status=301)"), 1)
+    assert capsys.readouterr().err == ("appshelf: Apple login step=2 error=error http=403\n"
+                                    "appshelf: Apple login step=1 error=error http=301\n")
 
 
 @pytest.mark.parametrize("error", ["invalid_credentials", "account_disabled"])
