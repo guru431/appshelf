@@ -13,6 +13,67 @@ from appshelf.android.sources import Sources
 from test_web_android import work
 from appshelf import people
 from helpers import sign_in
+from test_version_removal import saved_versions
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [320, 1280])
+def test_old_version_removal_confirmation_and_cancel(web, conn, cfg, saved_versions, width, local_chromium):
+    from pathlib import Path
+    s = saved_versions
+    path = "/" if s.platform == "apple" else "/android/public" if s.platform == "public" else "/android"
+    conn.execute(f"UPDATE {s.table} SET pinned=1 WHERE id=?", (s.old["id"],))
+
+    def route(target):
+        req, url = target.request, urlsplit(target.request.url)
+        if url.path.startswith("/d/"):
+            target.fulfill(status=200, content_type="image/png", body=png_bytes(40))
+            return
+        response = web.client.request(req.method, url.path + ("?" + url.query if url.query else ""),
+                                      content=req.post_data_buffer,
+                                      headers={"content-type": req.headers.get("content-type", "")},
+                                      follow_redirects=False)
+        target.fulfill(status=response.status_code, headers=dict(response.headers), body=response.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("https://apps.example/**", route)
+            for theme in ("light", "dark"):
+                web.client.get(f"/theme?set={theme}")
+                page.goto("https://apps.example" + path)
+                page.locator(".more > summary").first.click()
+                page.get_by_role("button", name="Версии и закрепления", exact=True).click()
+                dialog = page.locator("dialog[open]")
+                assert dialog.get_by_role("link", name="Удалить 2.0", exact=True).count() == 0
+                delete = dialog.get_by_role("link", name="Удалить 1.0", exact=True)
+                assert delete.is_visible()
+                assert dialog.locator(".version-row > .body").first.evaluate(
+                    "e => e.clientHeight < 48 && e.clientWidth > 150")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                screenshots = Path(__file__).resolve().parents[1] / ".work"
+                screenshots.mkdir(exist_ok=True)
+                page.screenshot(path=str(screenshots / f"version-removal-{s.platform}-{width}-{theme}.png"))
+                delete.click()
+                page.wait_for_url(lambda url: urlsplit(url).path.endswith("/remove"))
+                assert "Закрепление будет снято" in page.locator("main").inner_text()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                if theme == "light":
+                    page.get_by_role("link", name="Отмена", exact=True).click()
+                    page.wait_for_url(lambda url: "/remove" not in url)
+                    assert (s.root / s.old["dir"]).is_dir()
+                else:
+                    page.get_by_role("button", name="Удалить версию", exact=True).click()
+                    page.wait_for_url(lambda url: "/remove" not in url)
+                    assert not (s.root / s.old["dir"]).exists()
+                    assert (s.root / s.current["dir"]).is_dir()
+            assert not errors
+        finally:
+            browser.close()
 
 
 @pytest.mark.integration

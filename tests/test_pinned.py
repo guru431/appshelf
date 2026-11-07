@@ -82,7 +82,7 @@ def test_unpublish_removes_kept(conn, cfg, clock, acct):
     assert roles(conn) == {} and not (root / "123-1.0").exists()
 
 
-@pytest.mark.parametrize("change", ["pin", "unpin", "unpublish"])
+@pytest.mark.parametrize("change", ["pin", "unpin", "unpublish", "remove"])
 def test_shelf_change_reloads_account_after_obtaining_lock(conn, cfg, clock, acct, monkeypatch, change):
     seed_app(conn, cfg, clock, versions=("1.0", "2.0"), make_dirs=True)
     store.pin_version(conn, acct.id, cfg.shelf_root(acct), 123, vid(conn, "1.0"))
@@ -113,6 +113,9 @@ def test_shelf_change_reloads_account_after_obtaining_lock(conn, cfg, clock, acc
         assert jobs.pin_version(cfg, conn, acct, 123, vid(conn, "3.0"))
     elif change == "unpin":
         assert jobs.unpin_version(cfg, conn, acct, 123, vid(conn, "1.0"))
+    elif change == "remove":
+        row = store.old_version(conn, acct.id, 123, vid(conn, "1.0"))
+        assert jobs.remove_version(cfg, conn, acct, 123, row["id"], store.version_snapshot(row))
     else:
         jobs.unpublish(cfg, conn, acct, 123)
     fresh = people.get_account(conn, acct.id)

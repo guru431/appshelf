@@ -86,6 +86,9 @@ def _drop(p: _Pending) -> None:
     cancel = getattr(timer, "cancel", None)
     if cancel is not None:
         cancel()
+    cleanup = getattr(p.tool, "discard_login_cookies", None)
+    if cleanup is not None:
+        cleanup()
 
 
 @dataclass

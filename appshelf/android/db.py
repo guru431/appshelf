@@ -14,7 +14,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..store import AppGone, rmtree_logged, tx
+from ..store import AppGone, rmtree_logged, tx, version_snapshot
 
 ANDROID_DIR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+-\d+(-\d+)?$")
 PLAY_OK = "SELECT id FROM google_accounts WHERE play = 'ok'"
@@ -364,6 +364,24 @@ def unpin_version(c, root: Path, shelf_id: int, package: str, version_id: int) -
         if row is None:
             return False
         c.execute("UPDATE android_versions SET pinned=0 WHERE id=?", (version_id,))
+    return True
+
+
+def old_version(c, shelf_id: int, package: str, version_id: int):
+    return c.execute("SELECT v.*, a.name AS app_name FROM android_versions v JOIN android_apps a "
+                     "ON a.shelf_id=v.shelf_id AND a.package=v.package "
+                     "WHERE v.id=? AND v.shelf_id=? AND v.package=? AND v.role IN ('previous', 'kept')",
+                     (version_id, shelf_id, package)).fetchone()
+
+
+def remove_version(c, root: Path, shelf_id: int, package: str, version_id: int, snapshot: str) -> bool:
+    """Удалить подтверждённый старый APK, сохранив текущую и ожидающую решения версии."""
+    with tx(c):
+        row = old_version(c, shelf_id, package, version_id)
+        if row is None or version_snapshot(row) != snapshot:
+            return False
+        c.execute("DELETE FROM android_versions WHERE id=?", (version_id,))
+    remove_dirs(root, [row["dir"]])
     return True
 
 

@@ -121,10 +121,14 @@
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
     <h2 id="versions-title-{{ a.package }}">Версии · {{ a.name }}</h2>
     {% for x in a.versions %}
-    <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/' ~ ('unpin' if x['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ x['version_name'] }}{% if x['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
+    <div class="bar version-row"><span class="body">{{ x['version_name'] }}{% if x['role'] == 'current' %} · текущая{% endif %}{% if x['pinned'] %} · закреплена{% endif %}</span>
+      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/' ~ ('unpin' if x['pinned'] else 'pin')) }}"><button class="secondary">{{ 'Снять закрепление' if x['pinned'] else 'Закрепить' }} {{ x['version_name'] }}</button></form>
+      {% if x['role'] != 'current' %}<a class="btn danger" href="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/versions/' ~ x['id'] ~ '/remove') }}">Удалить {{ x['version_name'] }}</a>{% endif %}
+    </div>
     {% endfor %}<p class="hint">После успешного обновления остаются текущая, предыдущая и одна закреплённая версия.
       Закрепление защищает от автоудаления и не мешает скачивать новые версии. После снятия закрепления старая версия
-      будет удалена при следующем успешном обновлении. При откате приложения могут быть несовместимы с данными более новой версии.</p>
+      будет удалена при следующем успешном обновлении. Старую версию, включая закреплённую, можно удалить вручную.
+      При откате приложения могут быть несовместимы с данными более новой версии.</p>
   </dialog>{% endif %}
   <dialog id="source-{{ a.package }}" aria-labelledby="source-title-{{ a.package }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>

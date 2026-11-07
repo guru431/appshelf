@@ -747,6 +747,28 @@ def _register_scope(app, w, scope: Scope):
     def unpin_version(request: Request, package: str, version_id: int):
         return change(request, package, lambda c, root, sid: db.unpin_version(c, root, sid, package, version_id))
 
+    @app.get(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
+    def remove_version_page(request: Request, package: str, version_id: int):
+        with w.conn() as c:
+            shelf, app_row = own(c, request, package)
+            row = db.old_version(c, shelf.id, package, version_id) if app_row is not None else None
+        if row is None:
+            return not_found()
+        pinned = " Закрепление будет снято." if row["pinned"] else ""
+        return w.page(request, "confirm.html", scope.nav,
+                      question=f"Удалить версию {row['version_name']} приложения «{row['app_name']}»? "
+                               f"Файл APK и ссылка установки этой версии удалятся.{pinned}",
+                      action=f"{p}/apps/{package}/versions/{version_id}/remove", button="Удалить версию",
+                      cancel=p + f"?person={request.state.who.id}",
+                      hidden={"snapshot": store.version_snapshot(row)})
+
+    @app.post(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
+    def remove_version(request: Request, package: str, version_id: int, snapshot: str = Form("")):
+        if not snapshot:
+            return PlainTextResponse("Подтвердите удаление на странице версии", status_code=400)
+        return change(request, package,
+                      lambda c, root, sid: db.remove_version(c, root, sid, package, version_id, snapshot))
+
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),
                       ack: str = Form("")):

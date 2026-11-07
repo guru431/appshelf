@@ -489,6 +489,11 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     owner(conn, clock)
     (cfg.accounts_dir / ".new-0123456789abcdef" / ".ipatool").mkdir(parents=True)
     (cfg.accounts_dir / "1").mkdir()
+    jars = cfg.accounts_dir / "1" / ".ipatool"
+    jars.mkdir()
+    (jars / "cookies.before-login").write_bytes(b"working-session")
+    (jars / "cookies").write_bytes(b"interrupted-login")
+    (jars / "cookies.login-abandoned").write_bytes(b"pending-step")
     (cfg.accounts_dir / "7" / ".ipatool").mkdir(parents=True)   # Apple ID №7 удалили посреди входа
     cfg.locks_dir.mkdir(parents=True)
     for name in (".new-0123456789abcdef.lock", ".new-0123456789abcdef.wait", "1.lock", "1.wait", "7.lock", "7.wait",
@@ -497,6 +502,8 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     worker(ctx, cfg).recover()
     assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"]
     assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "1.wait", "download.lock", "download.wait"]
+    assert (jars / "cookies").read_bytes() == b"working-session"
+    assert sorted(p.name for p in jars.iterdir()) == ["cookies"]
 
 
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):

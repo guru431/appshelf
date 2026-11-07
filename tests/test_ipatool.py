@@ -58,6 +58,95 @@ def test_account_disabled_gets_own_code(tmp_path):
     assert e.value.error == "account_disabled"
 
 
+def test_login_isolates_stale_cookies_and_keeps_2fa_cookies(tmp_path):
+    tool = make_tool(tmp_path, {"auth login": {
+        "code": 4, "out": {"error": "auth_code_required"},
+        "expect_cookies": "", "write_cookies": "step-one"},
+        "list-purchases": {"code": 0, "out": [], "expect_cookies": "existing-session"}})
+    root = tool.home / ".ipatool"
+    root.mkdir()
+    cookies, account = root / "cookies", root / "account"
+    cookies.write_text("existing-session", encoding="utf-8")
+    account.write_bytes(b"encrypted-account")
+    with pytest.raises(AuthCodeRequired):
+        tool.login("owner@example", "pw")
+    assert cookies.read_text(encoding="utf-8") == "existing-session"
+    assert account.read_bytes() == b"encrypted-account"
+    assert tool.login_cookies.read_text(encoding="utf-8") == "step-one"
+    assert tool.list_purchases() == []
+    (tool.home / "scenario.json").write_text(json.dumps({"auth login": {
+        "code": 0, "out": LOGIN_OK, "expect_cookies": "step-one", "write_cookies": "new-session"}}),
+        encoding="utf-8")
+    assert tool.login("owner@example", "pw", "123456") == LOGIN_OK
+    assert cookies.read_text(encoding="utf-8") == "new-session"
+    assert not tool.login_cookies.exists() and not (root / "cookies.before-login").exists()
+
+
+@pytest.mark.parametrize("failure", ["refused", "timeout", "bad_output"])
+def test_failed_login_restores_working_cookies(tmp_path, failure):
+    step = {"code": 1, "out": {"error": "edge_rejected", "message": "HTTP 204"},
+            "expect_cookies": "", "write_cookies": "failed-attempt"}
+    if failure == "timeout":
+        step["sleep"] = 10
+    elif failure == "bad_output":
+        step.update(code=0, out=None)
+    tool = make_tool(tmp_path, {"auth login": step})
+    root = tool.home / ".ipatool"
+    root.mkdir()
+    cookies = root / "cookies"
+    cookies.write_text("working", encoding="utf-8")
+    with pytest.raises(IpatoolError):
+        tool.run(["auth", "login", "--password-stdin"], timeout=0.5 if failure == "timeout" else 5,
+                 stdin="pw\n")
+    assert cookies.read_text(encoding="utf-8") == "working"
+    assert not list(root.glob("cookies.*"))
+
+
+def test_interrupted_cookie_swap_is_recovered_before_purchases(tmp_path):
+    tool = make_tool(tmp_path, {"list-purchases": {"code": 0, "out": [], "expect_cookies": "working"}})
+    root = tool.home / ".ipatool"
+    root.mkdir()
+    (root / "cookies.before-login").write_text("working", encoding="utf-8")
+    (root / "cookies").write_text("interrupted-login", encoding="utf-8")
+    assert tool.list_purchases() == []
+    assert (root / "cookies").read_text(encoding="utf-8") == "working"
+    assert not (root / "cookies.before-login").exists()
+
+
+def test_unwritable_cookie_backup_never_deletes_original(tmp_path, monkeypatch):
+    tool = make_tool(tmp_path, {})
+    root = tool.home / ".ipatool"
+    root.mkdir()
+    cookies = root / "cookies"
+    cookies.write_text("working", encoding="utf-8")
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if src == cookies:
+            raise PermissionError("read-only directory")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(ipatool.os, "replace", replace)
+    with pytest.raises(IpatoolError, match="save_failed"):
+        tool.login("owner@example", "pw")
+    assert cookies.read_text(encoding="utf-8") == "working" and not calls(tool)
+
+
+def test_cancel_discards_only_this_flows_cookies(tmp_path):
+    from appshelf.web.login import Intent, LoginFlow
+    tool = make_tool(tmp_path, {"auth login": {"code": 4, "out": {"error": "auth_code_required"},
+                                              "write_cookies": "step-one"}})
+    other = make_tool(tmp_path, {"auth login": {"code": 4, "out": {"error": "auth_code_required"},
+                                               "write_cookies": "step-one"}})
+    flow = LoginFlow()
+    _, flow_id, _ = flow.start(tool, Intent("owner@example", account_id=1), "pw")
+    other.login_cookies.write_text("other-flow", encoding="utf-8")
+    assert tool.login_cookies.exists()
+    flow.cancel(flow_id)
+    assert not tool.login_cookies.exists()
+    assert other.login_cookies.read_text(encoding="utf-8") == "other-flow"
+
+
 def test_failure_without_json_reports_exit_code(tmp_path):
     tool = make_tool(tmp_path, {"download": {"code": 2}})
     with pytest.raises(IpatoolError) as e:

@@ -49,8 +49,12 @@
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
     <h2 id="versions-title-{{ a.app_id }}">Версии · {{ a.name }}</h2>
     {% for v in (a.current, a.previous, a.kept) if v %}
-    <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/versions/' ~ v['id'] ~ '/' ~ ('unpin' if v['pinned'] else 'pin')) }}" class="bar"><span class="body">{{ v['version'] }}{% if v['pinned'] %} · закреплена{% endif %}</span><button class="secondary">{{ 'Снять закрепление' if v['pinned'] else 'Закрепить' }} {{ v['version'] }}</button></form>
-    {% endfor %}<p class="hint">Старая версия может не принять данные от новой. Откат выполняйте после сохранения данных.</p>
+    <div class="bar version-row"><span class="body">{{ v['version'] }}{% if v['role'] == 'current' %} · текущая{% endif %}{% if v['pinned'] %} · закреплена{% endif %}</span>
+      <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/versions/' ~ v['id'] ~ '/' ~ ('unpin' if v['pinned'] else 'pin')) }}"><button class="secondary">{{ 'Снять закрепление' if v['pinned'] else 'Закрепить' }} {{ v['version'] }}</button></form>
+      {% if v['role'] != 'current' %}<a class="btn danger" href="{{ post_url('/apps/' ~ a.app_id ~ '/versions/' ~ v['id'] ~ '/remove') }}">Удалить {{ v['version'] }}</a>{% endif %}
+    </div>
+    {% endfor %}<p class="hint">Старую версию можно удалить вручную, включая закреплённую. Текущая остаётся на полке.
+      Старая версия может не принять данные от новой. Откат выполняйте после сохранения данных.</p>
   </dialog>{% endif %}
 </div>
 {% endfor %}

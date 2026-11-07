@@ -21,7 +21,7 @@ from typing import Callable
 from . import ipa, notify, people, removed, store
 from .android import db as android_db, fetch as android_fetch, fourpda, play, sources as android_sources
 from .config import GB, Config
-from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, try_lock
+from .ipatool import IpatoolError, LicenseNotFound, SessionExpired, gate_path, hold, recover_logins, try_lock
 
 RESERVE = 3 * GB         # неприкосновенный запас места: архив — общая шара
 FREE_MIN = RESERVE + GB  # + 1 ГБ на файл: размер IPA до скачивания неизвестен
@@ -276,6 +276,12 @@ def pin_version(cfg: Config, c, acct, app_id: int, version_id: int) -> bool:
 def unpin_version(cfg: Config, c, acct, app_id: int, version_id: int) -> bool:
     with shelf_change(cfg, c, acct) as fresh:
         return fresh is not None and store.unpin_version(c, fresh.id, cfg.shelf_root(fresh), app_id, version_id)
+
+
+def remove_version(cfg: Config, c, acct, app_id: int, version_id: int, snapshot: str) -> bool:
+    with shelf_change(cfg, c, acct) as fresh:
+        return fresh is not None and store.remove_version(c, fresh.id, cfg.shelf_root(fresh), app_id,
+                                                         version_id, snapshot)
 
 
 def remove_account(cfg: Config, c, acct) -> None:
@@ -669,6 +675,11 @@ class Worker:
         for home in cfg.accounts_dir.glob("*"):
             if home.name.startswith(".new-") or (home.name.isdigit() and home.name not in known):
                 shutil.rmtree(home, ignore_errors=True)
+            elif home.name in known:
+                try:
+                    recover_logins(home, cfg.locks_dir / f"{home.name}.lock")
+                except (OSError, IpatoolError):
+                    print("appshelf: восстановление cookies входа отложено", file=sys.stderr)
         for lock in [*cfg.locks_dir.glob("*.lock"), *cfg.locks_dir.glob("*.wait")]:
             if lock.stem.startswith(".new-") or (lock.stem.isdigit() and lock.stem not in known):
                 lock.unlink(missing_ok=True)

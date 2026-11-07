@@ -389,13 +389,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 return catalog_page(request, 503, UNPUBLISH_ARCHIVE_DOWN)
         return back("/")
 
-    def change_pin(request: Request, app_id: int, version_id: int, fn):
-        """Закрепление может удалить каталог прежней kept: архив недоступен — 503 и ничего не тронуто, как у unpublish."""
+    def change_version(request: Request, app_id: int, version_id: int, fn, *, archive_error=PIN_ARCHIVE_DOWN):
+        """Изменение версии может удалить файл: архив недоступен — 503 и ничего не тронуто."""
         a = request.state.acct
         try:
             jobs._archive(cfg)
         except jobs.ArchiveUnavailable:
-            return catalog_page(request, 503, PIN_ARCHIVE_DOWN)
+            return catalog_page(request, 503, archive_error)
         with w.conn() as c:
             try:
                 if not fn(cfg, c, a, app_id, version_id):
@@ -406,11 +406,33 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     @app.post("/apps/{app_id}/versions/{version_id}/pin", response_class=HTMLResponse)
     def pin(request: Request, app_id: int, version_id: int):
-        return change_pin(request, app_id, version_id, jobs.pin_version)
+        return change_version(request, app_id, version_id, jobs.pin_version)
 
     @app.post("/apps/{app_id}/versions/{version_id}/unpin", response_class=HTMLResponse)
     def unpin(request: Request, app_id: int, version_id: int):
-        return change_pin(request, app_id, version_id, jobs.unpin_version)
+        return change_version(request, app_id, version_id, jobs.unpin_version)
+
+    @app.get("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
+    def remove_version_page(request: Request, app_id: int, version_id: int):
+        with w.conn() as c:
+            row = store.old_version(c, request.state.acct.id, app_id, version_id)
+        if row is None:
+            return not_found()
+        pinned = " Закрепление будет снято." if row["pinned"] else ""
+        return w.page(request, "confirm.html", "catalog",
+                      question=f"Удалить версию {row['version']} приложения «{row['app_name']}»? "
+                               f"Файл IPA и ссылка установки этой версии удалятся.{pinned}",
+                      action=f"/apps/{app_id}/versions/{version_id}/remove", button="Удалить версию",
+                      cancel="/",
+                      hidden={"snapshot": store.version_snapshot(row)})
+
+    @app.post("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
+    def remove_version(request: Request, app_id: int, version_id: int, snapshot: str = Form("")):
+        if not snapshot:
+            return PlainTextResponse("Подтвердите удаление на странице версии", status_code=400)
+        return change_version(request, app_id, version_id,
+                              lambda cfg, c, acct, aid, vid: jobs.remove_version(cfg, c, acct, aid, vid, snapshot),
+                              archive_error="Архив недоступен — удалить версию сейчас нельзя")
 
     @app.get("/api/status")
     def api_status(request: Request):

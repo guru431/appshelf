@@ -5,6 +5,7 @@
 WAL, busy_timeout и явные транзакции BEGIN IMMEDIATE (tx). Версия схемы — PRAGMA user_version."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -687,6 +688,30 @@ def unpin_version(c, aid: int, root: Path, app_id: int, version_id: int) -> bool
             return False
         old = _unpin(c, [row]) if row["pinned"] else []
     remove_dirs(root, old)
+    return True
+
+
+def version_snapshot(row) -> str:
+    """Подтверждение относится к этому файлу: SQLite может повторно выдать удалённый id."""
+    value = [row[k] for k in ("dir", "sha256", "downloaded_at", "pinned")]
+    return hashlib.sha256(json.dumps(value).encode("utf-8")).hexdigest()
+
+
+def old_version(c, aid: int, app_id: int, version_id: int):
+    return c.execute("SELECT v.*, a.name AS app_name FROM versions v JOIN apps a "
+                     "ON a.account_id=v.account_id AND a.app_id=v.app_id "
+                     "WHERE v.id=? AND v.account_id=? AND v.app_id=? AND v.role IN ('previous', 'kept')",
+                     (version_id, aid, app_id)).fetchone()
+
+
+def remove_version(c, aid: int, root: Path, app_id: int, version_id: int, snapshot: str) -> bool:
+    """Явное удаление старой версии, включая закреплённую; текущая остаётся на полке."""
+    with tx(c):
+        row = old_version(c, aid, app_id, version_id)
+        if row is None or version_snapshot(row) != snapshot:
+            return False
+        c.execute("DELETE FROM versions WHERE id=?", (version_id,))
+    remove_dirs(root, [row["dir"]])
     return True
 
 
