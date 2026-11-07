@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -21,7 +22,7 @@ from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WHO_COOKIE, WebCtx
 from .login import TTL, Intent, LoginBusy, LoginExpired, LoginInProgress, LoginJoined, drop_home
 
 LOGIN_ERRORS = {
-    "edge_rejected": "Apple отклонил вход с этого адреса — попробуйте позже",
+    "edge_rejected": "Apple отклонил запрос входа — попробуйте позже или сообщите владельцу",
     "invalid_credentials": "Неверный пароль или код",
     "account_disabled": "Apple отказал во входе — проверьте пароль: после нескольких неверных попыток Apple на время "
                         "закрывает вход этим Apple ID",
@@ -54,6 +55,14 @@ class SaveFailed(Exception):
 
 def login_error_text(e: IpatoolError) -> str:
     return LOGIN_ERRORS.get(e.error, f"Ошибка входа: {e.message}")
+
+
+def log_login_error(e: IpatoolError, step: int) -> None:
+    """Только известный код и HTTP-статус; ответ Apple может содержать секреты."""
+    code = e.error if e.error in LOGIN_ERRORS else "error"
+    status = re.search(r"\bHTTP ([1-5][0-9]{2})\b", e.message)
+    print(f"appshelf: Apple login step={step} error={code} http={status[1] if status else 'unknown'}",
+          file=sys.stderr, flush=True)
 
 
 def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", next_: str = "/", error: str = "",
@@ -232,6 +241,7 @@ def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *
     except LoginJoined as e:  # отказ первого из двух одинаковых запросов: неудача уже посчитана
         return again(login_error_text(e.error), 400)
     except IpatoolError as e:
+        log_login_error(e, 1)
         if e.error in WRONG_PASSWORD:
             w.limiter.fail()
             w.limiter.email_fail(email)
@@ -285,6 +295,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         except LoginExpired:
             return again(EXPIRED_STEP, 400)
         except IpatoolError as e:
+            log_login_error(e, 2)
             if e.error in WRONG_PASSWORD:
                 w.limiter.fail()
                 w.limiter.email_fail(pending.email)

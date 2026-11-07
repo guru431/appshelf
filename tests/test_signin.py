@@ -197,15 +197,23 @@ def test_bad_code_format_keeps_step(make_web, cfg, conn, acct):
     assert wb.client.post("/login/code", data={"code": "123456"}, follow_redirects=False).status_code == 303
 
 
-def test_edge_rejection_text_not_counted_as_wrong_password(make_web, cfg, conn, acct):
+def test_edge_rejection_text_not_counted_as_wrong_password(make_web, cfg, conn, acct, capsys):
     wb = make_web(cfg, conn)
     tool = wb.tools.setdefault(1, FakeTool())
     for _ in range(6):
         tool.errors["login"] = IpatoolError("edge_rejected", "HTTP 301")
         r = wb.client.post("/login", data={"email": "owner@example", "password": "Xyzzy-42"})
-        assert r.status_code == 400 and "Apple отклонил вход с этого адреса" in r.text and "Xyzzy-42" not in r.text
+        assert r.status_code == 400 and "Apple отклонил запрос входа" in r.text and "Xyzzy-42" not in r.text
+    logs = capsys.readouterr().err
+    assert logs.count("Apple login step=1 error=edge_rejected http=301") == 6
+    assert "owner@example" not in logs and "Xyzzy-42" not in logs
     assert wb.client.post("/login", data={"email": "owner@example", "password": "pw"},
                           follow_redirects=False).status_code == 303
+
+
+def test_login_diagnostics_never_print_untrusted_error_or_message(capsys):
+    signin.log_login_error(IpatoolError("secret-token", "password=secret; HTTP 403; cookie=private"), 2)
+    assert capsys.readouterr().err == "appshelf: Apple login step=2 error=error http=403\n"
 
 
 @pytest.mark.parametrize("error", ["invalid_credentials", "account_disabled"])
