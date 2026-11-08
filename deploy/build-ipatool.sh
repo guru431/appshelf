@@ -45,8 +45,16 @@ trap '"${BUILD[@]}" "sudo -n rm -rf -- $W" || true' EXIT
     exit 1
   fi
   sudo "$T/bin/ipatool" help > /dev/null
+  sudo "$T/bin/ipatool-auth" --help > /dev/null
+  # Preload verified public Apple frameworks before enabling the new login path.
+  sudo install -d -o appshelf -g appshelf -m 0700 "$R/data/cache/ipatool-auth"
+  sudo install -o root -g root -m 0755 "$T/bin/ipatool-auth" "$R/bin/.ipatool-auth-preparing"
+  sudo -u appshelf env XDG_CACHE_HOME="$R/data/cache/ipatool-auth" "$R/bin/.ipatool-auth-preparing" --prepare
   # root: appshelf бинарник только исполняет — подменённый ipatool перехватывал бы пароли Apple ID
   sudo install -o root -g root -m 0755 "$T/bin/ipatool" "$T/ipatool"
   sudo mv -f "$T/ipatool" "$R/bin/ipatool"   # rename: задание, запускающее ipatool, не застанет полузаписанный файл
   sudo install -o root -g root -m 0644 "$T/bin/ipatool.src-sha256" "$R/bin/ipatool.src-sha256"
+  sudo install -o root -g root -m 0755 "$T/bin/ipatool-auth" "$T/ipatool-auth"
+  sudo mv -f "$T/ipatool-auth" "$R/bin/ipatool-auth"
+  sudo install -o root -g root -m 0644 "$T/bin/ipatool-auth.src-sha256" "$R/bin/ipatool-auth.src-sha256"
   echo "OK: $R/bin/ipatool"'

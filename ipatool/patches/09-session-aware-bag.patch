@@ -1,0 +1,79 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index 7bb78df..669df18 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -416,7 +416,7 @@ Account AppStore::login(const std::string& email,
+     std::string guid = get_guid();
+ 
+     // Fetch bag for both the auth endpoint and SAP config
+-    BagOutput bag = fetch_bag_impl(guid);
++    BagOutput bag = fetch_bag_impl(guid, true);
+ #ifdef __linux__
+     syslog(LOG_NOTICE, "appshelf: Apple transport stage=bag_ready");
+ #endif
+@@ -1607,10 +1607,12 @@ std::string AppStore::redownload_version_id(const Account& acc, const App& app,
+ 
+ // ── Bag (fetch auth + redownload endpoints) ──────────────────────────────
+ 
+-AppStore::BagOutput AppStore::fetch_bag_impl(const std::string& guid) {
++AppStore::BagOutput AppStore::fetch_bag_impl(const std::string& guid, bool authentication) {
+     std::string url = std::string("https://") + PRIVATE_INIT_DOMAIN
+-                    + PRIVATE_INIT_PATH + "?guid=" + guid;
+-    HttpResponse res = m_http.get(url, {{"Accept", "application/xml"}});
++                    + PRIVATE_INIT_PATH + (authentication ? "?ix=6&guid=" : "?guid=") + guid;
++    std::map<std::string, std::string> headers = {{"Accept", "application/xml"}};
++    if (authentication) headers["User-Agent"] = CONFIGURATOR_UA;
++    HttpResponse res = m_http.get(url, headers);
+ 
+     // Bag body is huge — log only status and size.
+     if (m_debug)
+@@ -1629,24 +1631,19 @@ AppStore::BagOutput AppStore::fetch_bag_impl(const std::string& guid) {
+ 
+     BagOutput out;
+ 
+-    // Extract redownloadProduct (simple flat lookup under urlBag)
++    // Apple serves both a nested urlBag and a flat native-client bag.
+     auto ubIt = d.find("urlBag");
+-    if (ubIt != d.end() && ubIt->second.isDict()) {
+-        out.redownloadEndpoint  = dict_str(ubIt->second.dictVal, "redownloadProduct");
+-        out.updateEndpoint      = dict_str(ubIt->second.dictVal, "updateProduct");
+-        out.entDownloadEndpoint = dict_str(ubIt->second.dictVal, "volumeStoreDownloadProduct");
+-        out.songDownloadDoneEndpoint = dict_str(ubIt->second.dictVal, "songDownloadDone");
+-        m_updateEndpoint        = out.updateEndpoint;
+-
+-        // ── SAP config fields (v2.4.0+) — must be extracted here, before
+-        //    the early returns below for the auth endpoint. ──────────────────
+-        const PlistDict& ub = ubIt->second.dictVal;
+-        out.signSapSetup     = dict_str(ub, "sign-sap-setup");
+-        out.signSapSetupCert = dict_str(ub, "sign-sap-setup-cert");
+-        std::string sapVer   = dict_str(ub, "sign-sap-version");
+-        if (!sapVer.empty()) {
+-            try { out.sapVersion = (uint32_t)std::stoul(sapVer); } catch (...) {}
+-        }
++    const PlistDict& ub = (ubIt != d.end() && ubIt->second.isDict()) ? ubIt->second.dictVal : d;
++    out.redownloadEndpoint = dict_str(ub, "redownloadProduct");
++    out.updateEndpoint = dict_str(ub, "updateProduct");
++    out.entDownloadEndpoint = dict_str(ub, "volumeStoreDownloadProduct");
++    out.songDownloadDoneEndpoint = dict_str(ub, "songDownloadDone");
++    m_updateEndpoint = out.updateEndpoint;
++    out.signSapSetup = dict_str(ub, "sign-sap-setup");
++    out.signSapSetupCert = dict_str(ub, "sign-sap-setup-cert");
++    std::string sapVer = dict_str(ub, "sign-sap-version");
++    if (!sapVer.empty()) {
++        try { out.sapVersion = (uint32_t)std::stoul(sapVer); } catch (...) {}
+     }
+ 
+     // Convert guid "AABBCCDDEEFF" → raw bytes for SapSigner::Config
+diff --git a/appstore.h b/appstore.h
+index 0694e4a..3529718 100644
+--- a/appstore.h
++++ b/appstore.h
+@@ -274,7 +274,7 @@ private:
+ 
+ 
+     // ── Bag (fetch auth + redownload endpoints) ──────────────────────────────
+-    BagOutput fetch_bag_impl(const std::string& guid);
++    BagOutput fetch_bag_impl(const std::string& guid, bool authentication = false);
+ 
+     std::string fetch_bag_auth_endpoint(const std::string& guid);
+ 

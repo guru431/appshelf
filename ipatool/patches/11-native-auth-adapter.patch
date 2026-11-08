@@ -1,0 +1,103 @@
+diff --git a/main.cpp b/main.cpp
+index 1f987c5..62e98a8 100644
+--- a/main.cpp
++++ b/main.cpp
+@@ -42,10 +42,12 @@
+ #include <nlohmann/json.hpp>
+ #include <filesystem>
+ #include <cerrno>
++#include <regex>
+ #ifndef _WIN32
+ #  include <sys/ioctl.h>
+ #  include <unistd.h>
+ #  include <fcntl.h>   // appshelf 06: open/fsync for the atomic account write
++#  include <sys/stat.h>
+ #else
+ // windows.h was previously pulled in transitively via the old ipatool.h;
+ // that header is now logic-free and no longer includes it, so main.cpp
+@@ -1461,6 +1463,57 @@ static void cmd_download(const Args& args) {
+ 
+ // appshelf (03-list-purchases): purchase history of the saved account.
+ // JSON: [{"id":…,"bundleId":"…","name":"…","version":"…","purchaseDate":"2024-01-31T10:00:00Z"}]
++static void cmd_import_account() {
++#ifdef __linux__
++    if (geteuid() == 0) fail(1, "usage", "run account import as the application user");
++#endif
++    std::string input;
++    char chunk[4096];
++    while (std::cin) {
++        std::cin.read(chunk, sizeof(chunk));
++        input.append(chunk, static_cast<size_t>(std::cin.gcount()));
++        if (input.size() > (1U << 20)) fail(1, "usage", "account import too large");
++    }
++    Account acc;
++    try {
++        json value = json::parse(input);
++        secure_zero(input.data(), input.size());
++        if (!value.is_object() || value.contains("password"))
++            fail(1, "usage", "password-free account import required");
++        acc.email = value.value("email", "");
++        acc.name = value.value("name", "");
++        acc.directoryServicesID = value.value("directoryServicesIdentifier", "");
++        acc.storeFront = value.value("storeFront", "");
++        acc.pod = value.value("pod", "");
++        const std::string token = value.value("passwordToken", "");
++        if (acc.email.empty() || token.empty() || acc.storeFront.empty()
++            || !std::regex_match(acc.directoryServicesID, std::regex("[0-9]{1,32}"))
++            || (!acc.pod.empty() && !std::regex_match(acc.pod, std::regex("[0-9]{1,3}"))))
++            fail(1, "usage", "incomplete authenticated account");
++        acc.passwordToken.set(token);
++    } catch (...) {
++        secure_zero(input.data(), input.size());
++        fail(1, "usage", "invalid authenticated account");
++    }
++    Account previous;
++    if (load_account(previous)) {
++        if (previous.directoryServicesID != acc.directoryServicesID)
++            fail(1, "usage", "account identity does not match HOME");
++        acc.kbsync = previous.kbsync;
++        acc.fserial = previous.fserial;
++        if (acc.pod.empty()) acc.pod = previous.pod;
++        if (acc.name.empty()) acc.name = previous.name;
++        acc.firstName = previous.firstName;
++        acc.lastName = previous.lastName;
++    }
++    if (!save_account(acc)) fail(1, "save_failed", "failed to save authenticated account");
++    std::string storefront;
++    try { storefront = country_code_from_storefront(acc.storeFront); }
++    catch (...) { storefront = acc.storeFront; }
++    std::cout << json{{"success", true}, {"name", acc.name}, {"email", acc.email},
++                      {"storefront", storefront}, {"passwordStored", false}}.dump() << '\n';
++}
++
+ static void cmd_list_purchases(const Args& args) {
+     std::string passphrase = get(args, "keychain-passphrase", "");
+ 
+@@ -1625,7 +1678,27 @@ int main(int argc, char** argv) {
+ 
+     if (cmd == "auth info" || cmd == "account") {
+         cmd_show_account(args);
++    } else if (cmd == "device-info") {
++        try { std::cout << json{{"guid", device_guid()}}.dump() << '\n'; }
++        catch (const std::exception& e) { fail_from(e); }
++    } else if (cmd == "auth import") {
++        cmd_import_account();
+     } else if (cmd == "auth login" || cmd == "login") {
++#ifdef __linux__
++        // Delegate before consuming stdin: the password never enters argv or files.
++        if (get(args, "password-stdin") == "true") {
++            const auto helper = std::filesystem::read_symlink("/proc/self/exe").parent_path() / "ipatool-auth";
++            struct stat metadata{};
++            if (lstat(helper.c_str(), &metadata) == 0) {
++                if (!S_ISREG(metadata.st_mode) || metadata.st_uid != 0 || (metadata.st_mode & 0002)
++                    || access(helper.c_str(), W_OK) == 0 || access(helper.parent_path().c_str(), W_OK) == 0)
++                    fail(1, "error", "native authentication helper permissions are unsafe");
++                execv(helper.c_str(), argv);
++                fail(1, "error", "native authentication helper could not start");
++            }
++            if (errno != ENOENT) fail(1, "error", "native authentication helper unavailable");
++        }
++#endif
+         cmd_login(args);
+     } else if (cmd == "auth revoke" || cmd == "revoke") {
+         cmd_revoke(args);

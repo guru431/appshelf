@@ -85,6 +85,10 @@ if [ "$want" != "$(cat "$R/bin/ipatool.src-sha256" 2>/dev/null || true)" ]; then
   echo "ВНИМАНИЕ: bin/ipatool собран не из выложенных ipatool/UPSTREAM и патчей — нужна пересборка:" >&2
   echo "  на своей машине: bash deploy/build-ipatool.sh" >&2
 fi
+want_auth="$(cat "$R/ipatool/auth/UPSTREAM" "$R"/ipatool/auth/*.go | sha256sum | cut -d' ' -f1)"
+if [ "$want_auth" != "$(cat "$R/bin/ipatool-auth.src-sha256" 2>/dev/null || true)" ]; then
+  echo "ВНИМАНИЕ: native-клиент входа требует сборки: bash deploy/build-ipatool.sh" >&2
+fi
 
 systemctl restart appshelf-web
 # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.

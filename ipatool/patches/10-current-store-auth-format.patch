@@ -1,0 +1,26 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index 669df18..58383b7 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -1804,7 +1804,7 @@ Account AppStore::do_login(const std::string& email,
+         std::string body = encode_plist_xml(payload);
+ 
+         std::map<std::string, std::string> headers = {
+-            {"Content-Type", "application/x-www-form-urlencoded"},
++            {"Content-Type", "application/x-apple-plist"},
+             {"User-Agent",   CONFIGURATOR_UA},
+         };
+ 
+diff --git a/ipatool.h b/ipatool.h
+index 81d1927..1409fd8 100644
+--- a/ipatool.h
++++ b/ipatool.h
+@@ -36,7 +36,7 @@ inline constexpr const char* HTTP_HEADER_SAP_SIGNATURE = "X-Apple-ActionSignatur
+ // User-Agent for auth endpoint — Configurator, not iTunes
+ // Source: ipatool pkg/http/constants.go DefaultUserAgent
+ inline constexpr const char* CONFIGURATOR_UA =
+-    "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6";
++    "Configurator/2.21 (Macintosh; OS X 27.0.1; 26A434) AppleWebKit/0625.2.5.11.6";
+ 
+ // User-Agent for macOS app downloads — Mac App Store client
+ // Apple returns sinfs/dpInfo only when this UA is used for macOS .pkg downloads

@@ -1,0 +1,65 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index f6ea99a..7bb78df 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -17,6 +17,9 @@
+ #include <regex>
+ #include <ctime>
+ #include <openssl/evp.h>   // MD5 (EVP) for whole-image download verification
++#ifdef __linux__
++#include <syslog.h>
++#endif
+ 
+ // ── Platform headers ──────────────────────────────────────────────────────────
+ 
+@@ -414,6 +417,9 @@ Account AppStore::login(const std::string& email,
+ 
+     // Fetch bag for both the auth endpoint and SAP config
+     BagOutput bag = fetch_bag_impl(guid);
++#ifdef __linux__
++    syslog(LOG_NOTICE, "appshelf: Apple transport stage=bag_ready");
++#endif
+     std::string loginEndpoint = endpoint.empty() ? bag.authEndpoint : endpoint;
+ 
+     // Create SAP signer — performs handshake with Apple servers (v2.4.0+).
+@@ -446,6 +452,9 @@ Account AppStore::login(const std::string& email,
+     if (!signer)
+         throw IpaError("failed to initialize SAP signer");
+     if (m_debug) fprintf(stderr, "[DEBUG] SAP signer initialized OK\n");
++#ifdef __linux__
++    syslog(LOG_NOTICE, "appshelf: Apple transport stage=sap_ready");
++#endif
+ 
+     return do_login(email, password, authCode, guid, loginEndpoint, *signer);
+ }
+@@ -1820,6 +1829,30 @@ Account AppStore::do_login(const std::string& email,
+         for (int tx = 1; tx <= 3; ++tx) {
+             if (m_debug) debug_dump_auth_request(currentURL, headers, body);
+             lastRes = m_http.post(currentURL, body, headers);
++#ifdef __linux__
++            // Fixed enums and numbers only: never log request/response bodies,
++            // credentials, cookies, signatures, or URLs supplied by Apple.
++            const char* route = "other";
++            if (currentURL.starts_with("https://auth.itunes.apple.com/auth/v1/native/fast"))
++                route = "native";
++            else if (currentURL.starts_with("https://buy.itunes.apple.com/"))
++                route = "store";
++            else if (currentURL.find("-buy.itunes.apple.com/") != std::string::npos)
++                route = "pod";
++            const auto ct = lastRes.headers.find("content-type");
++            const char* type = "other";
++            if (lastRes.body.empty()) type = "empty";
++            else if (ct != lastRes.headers.end() && ct->second.find("xml") != std::string::npos)
++                type = "xml";
++            else if (ct != lastRes.headers.end() && ct->second.find("html") != std::string::npos)
++                type = "html";
++            syslog(LOG_NOTICE,
++                "appshelf: Apple transport stage=auth attempt=%d tx=%d route=%s http=%d bytes=%zu type=%s location=%d machine_action=%d retry_after=%d",
++                attempt, tx, route, lastRes.statusCode, lastRes.body.size(), type,
++                lastRes.headers.contains("location") ? 1 : 0,
++                lastRes.headers.contains("x-apple-amd-action") ? 1 : 0,
++                lastRes.headers.contains("retry-after") ? 1 : 0);
++#endif
+             if (m_debug) debug_dump_auth_response(lastRes);
+             int sc  = lastRes.statusCode;
+             if (sc == 429)

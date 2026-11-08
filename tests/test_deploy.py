@@ -64,7 +64,9 @@ def test_code_and_binary_belong_to_root():
     install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")
     assert 'chown -R root:"$GROUP" "$NEW"' in install and "-user appshelf -exec chown -h root:root" in install
-    assert "install -o root -g root -m 0755" in build and "-o appshelf" not in build
+    file_installs = [line for line in build.splitlines() if "sudo install " in line and " -d " not in line]
+    assert file_installs and all("-o root -g root" in line for line in file_installs)
+    assert "install -o root -g root -m 0755" in build
 
 
 def test_ipatool_source_hash_matches_between_build_and_deploy():
