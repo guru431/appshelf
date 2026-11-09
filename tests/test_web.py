@@ -98,6 +98,19 @@ def test_catalog_shows_install_and_previous(web, conn, cfg, clock):
     assert "сборка 18.06.2026" in r.text and clock.iso()[:10] not in r.text  # дата версии, не публикации
 
 
+def test_ios_card_matches_android_card(web, conn, cfg, clock):
+    """QR — значком у «Установить» и только с компьютера; «Скопировать ссылку» — в «⋯» на любом устройстве."""
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    link = f'data-copy="itms-services://?action=download-manifest&amp;url=https://apps.example/d/{TOKEN}/123-1.0/manifest.plist"'
+    desktop = web.client.get("/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"}).text
+    iphone = web.client.get("/", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)"}).text
+    assert 'aria-label="Показать QR-код для' in desktop and "/apps/123/qr.png" in desktop
+    assert 'aria-label="Показать QR-код' not in iphone and "/apps/123/qr.png" not in iphone
+    for page in (desktop, iphone):
+        menu = page.split('class="sheet action-list"')[1].split("</details>")[0]
+        assert link in menu and "<button>" not in menu   # в «⋯» — только вторичные и опасная кнопки
+
+
 def test_banners_for_expired_session_and_low_space(web, conn):
     set_session(conn, 1, "expired")
     web.free["bytes"] = 2 * GB

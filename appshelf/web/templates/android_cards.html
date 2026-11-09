@@ -107,14 +107,14 @@
       {% endif %}
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
-        {% if not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить версии</a>{% endif %}
-        {% elif not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a>{% endif %}
+        {% if not a.paid %}<a class="btn secondary" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить версии</a>{% endif %}
+        {% elif not a.paid %}<a class="btn secondary" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a>{% endif %}
       {%- endif %}
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
       {%- endif %}
       {%- if v and a.status in ('ok', 'error') and a.source not in ('upload', 'fourpda') %}
-      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button>Проверить обновление</button></form>
+      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button class="secondary">Проверить обновление</button></form>
       {%- elif v and a.source == 'fourpda' and a.source_page and prefix == '/android' %}{# вложение закреплено: новое выбирают в теме #}
       <a class="btn secondary" href="{{ post_url('/android/4pda/topic') }}&amp;{{ {'url': a.source_page} | urlencode }}">Выбрать новую версию в теме</a>
       {%- endif %}
