@@ -102,7 +102,7 @@ def test_resumable_browser_pause_reload_and_retry(upload_server, conn, tmp_path,
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(server.base + "/theme?set=" + theme)
-            page.goto(server.base + "/android/add")
+            page.goto(server.base + "/android/add#add-file")  # сегмент «Файл»
             page.locator('form[data-apk-upload] input[type="file"]').set_input_files(apk)
             page.locator("form[data-apk-upload]").get_by_role("button", name="Загрузить", exact=True).click()
             page.wait_for_function("document.querySelector('form[data-apk-upload] progress').value > 0", timeout=10000)
@@ -162,7 +162,7 @@ def test_service_worker_upload_continues_without_open_page(upload_server, conn, 
             context = browser_context(browser, server)
             page = context.new_page()
             page.set_default_timeout(5000)
-            page.goto(server.base + "/android/add")
+            page.goto(server.base + "/android/add#add-file")  # сегмент «Файл»
             page.locator('form[data-apk-upload] input[type="file"]').set_input_files(apk)
             page.locator("form[data-apk-upload]").get_by_role("button", name="Загрузить", exact=True).click()
             page.wait_for_function("document.querySelector('form[data-apk-upload] progress').value > 0", timeout=10000)
@@ -202,7 +202,7 @@ def test_quota_fallback_reselects_file_without_reuploading_saved_parts(upload_se
               };""")
             page = context.new_page()
             page.set_default_timeout(5000)
-            page.goto(server.base + "/android/add")
+            page.goto(server.base + "/android/add#add-file")  # сегмент «Файл»
             form = page.locator("form[data-apk-upload]")
             form.locator('input[type="file"]').set_input_files(apk)
             form.get_by_role("button", name="Загрузить", exact=True).click()

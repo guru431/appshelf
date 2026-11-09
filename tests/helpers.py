@@ -75,8 +75,9 @@ def sign_in(client, cfg, conn, clock, uid: int = 1) -> None:
     """Человек uid вошёл в этом браузере — как после входа Apple ID: его запись добавляется к уже вошедшим
     (ключ — тот же cookie-key, что у приложения)."""
     key, now = webauth.load_key(cfg.cookie_key), int(clock.t)
-    signed = webauth.signed_users(key, client.cookies.get(AUTH) or "", now, lambda u: people.get_user(conn, u))
-    client.cookies.set(AUTH, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
+    name = AUTH if cfg.public_base.startswith("https://") else webauth.COOKIE  # __Host- — только на https
+    signed = webauth.signed_users(key, client.cookies.get(name) or "", now, lambda u: people.get_user(conn, u))
+    client.cookies.set(name, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
 
 
 def current_shelf(page: str) -> str | None:
