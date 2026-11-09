@@ -136,9 +136,7 @@ func main() {
     jar,err:=loadCookies(config,values["--auth-code"]!="")
     if err!=nil { fail(1,"save_failed","authentication cookies unavailable") }
     keychain:=&deviceState{path:filepath.Join(config,"adi-state")}
-    if _,err=keychain.Get("anisette-v4"); err!=nil && !os.IsNotExist(err) {
-        fail(1,"save_failed","existing Apple device state could not be read")
-    }
+    if keychain.usable()!=nil { fail(1,"save_failed","Apple device state cannot be saved on this machine") }
     client:=appstore.NewAppStore(appstore.Args{Keychain:keychain,CookieJar:jar,
         Machine:fixedMachine{identity.GUID,home},OperatingSystem:operatingsystem.New()})
     event("start",0)

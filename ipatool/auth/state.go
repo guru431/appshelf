@@ -15,6 +15,7 @@ import (
 
 var errState=errors.New("Apple device state storage unavailable")
 var stateMagic=[]byte("ASADI1")
+var machineIDPath="/etc/machine-id"
 type deviceState struct { path string }
 
 func atomicWrite(path string,data []byte) error {
@@ -31,7 +32,7 @@ func atomicWrite(path string,data []byte) error {
 }
 
 func stateCipher(salt []byte) (cipher.AEAD,error) {
-    identity,err:=os.ReadFile("/etc/machine-id")
+    identity,err:=os.ReadFile(machineIDPath)
     if err!=nil || len(strings.TrimSpace(string(identity)))<16 { return nil,errState }
     key,err:=pbkdf2.Key(sha256.New,string(identity)+"appshelf-native-auth-v1",salt,100000,32)
     if err!=nil { return nil,errState }
@@ -53,6 +54,15 @@ func (s *deviceState) Get(key string) ([]byte,error) {
     plain,err:=engine.Open(nil,raw[22:34],raw[34:],stateMagic)
     if err!=nil { return nil,errState }
     return plain,nil
+}
+// usable reports whether login may proceed. Unreadable existing state (another machine-id, group/other
+// permissions, corruption) is no reason to refuse: upstream ignores it and provisions anew, and a successful
+// login atomically replaces the file. Only a missing machine-id would make that save fail after Apple's answer.
+func (s *deviceState) usable() error {
+    if _,err:=s.Get("anisette-v4"); err==nil || os.IsNotExist(err) { return nil }
+    if _,err:=stateCipher(make([]byte,16)); err!=nil { return errState }
+    event("state_reset",0)
+    return nil
 }
 func (s *deviceState) Set(key string,data []byte) error {
     // Upstream supplies an account JSON containing the password. Never persist it.
