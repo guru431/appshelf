@@ -545,7 +545,8 @@ def _merge_shelves(cfg: Config, c, src, dst, moved: list) -> None:
         # решения о подписи, метка обновления и «Что нового» — вместе с пакетом
         for key in (android_db._rejected_key, android_db.pending_mail_key, android_db.updated_key,
                     android_db._whats_new_key):
-            c.execute("UPDATE state SET key=? WHERE key=?", (key(dst.id, pkg), key(src.id, pkg)))
+            # у dst карточки этого пакета нет; забытая строка прежних версий кода не должна сорвать связку
+            c.execute("UPDATE OR REPLACE state SET key=? WHERE key=?", (key(dst.id, pkg), key(src.id, pkg)))
         for v in c.execute("SELECT id, dir, version_code FROM android_versions WHERE shelf_id=? AND package=?",
                            (src.id, pkg)).fetchall():
             name = v["dir"]

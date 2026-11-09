@@ -132,6 +132,8 @@ def test_ipatool_source_hash_matches_between_build_and_deploy():
     assert SRC_HASH in install and SRC_HASH.replace("$R", "$D") in docker
     assert '"$OUT.src-sha256"' in docker
     assert '"$R/bin/ipatool.src-sha256"' in install and '"$R/bin/ipatool.src-sha256"' in build
+    # порядок файлов в глобе — побайтно, как sorted() в integrity.builds, при любой локали сервера и хоста сборки
+    assert "\nexport LC_COLLATE=C" in install and "\nexport LC_COLLATE=C" in docker
 
 
 @pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")

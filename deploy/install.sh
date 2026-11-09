@@ -3,6 +3,7 @@
 # Код, .venv и bin/ — root, группе кода — только чтение: appshelf их читает и исполняет, но не правит. Иначе любое
 # выполнение кода от appshelf (Pillow на иконке из IPA, ipatool) стало бы root при ближайшей выкладке или сборке.
 set -euo pipefail
+export LC_COLLATE=C  # глобы — побайтно, как sorted() в integrity.builds: отпечаток сборки не зависит от локали
 shopt -s nullglob  # без патчей отпечаток содержит только UPSTREAM
 R=/var/_sh/appshelf
 NEW="$R/.incoming"

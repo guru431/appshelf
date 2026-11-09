@@ -5,6 +5,7 @@
 # Пользователь appshelf в группу docker не входит (это равносильно root).
 # OpenSSL вшивается из образа на день сборки — после DSA на openssl пересобрать (ipatool/README.md).
 set -euo pipefail
+export LC_COLLATE=C  # глобы — побайтно, как sorted() в integrity.builds: отпечаток сборки не зависит от локали
 shopt -s nullglob  # пустой каталог патчей допустим и при вычислении отпечатка
 D="$(cd "$(dirname "$0")/.." && pwd)"
 . "$D/ipatool/UPSTREAM"                       # URL, COMMIT

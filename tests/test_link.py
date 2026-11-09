@@ -91,7 +91,11 @@ def test_link_carries_signature_decisions_with_package(ctx, cfg, conn, clock):
     gone = put_version(cfg, conn, clock, g, "ru.y", 1)
     for key in (db._rejected_key, db.pending_mail_key):
         conn.execute("INSERT INTO state (key, value) VALUES (?, '1')", (key(gone.id, "ru.y"),))
+    # забытая строка у остающейся полки (карточки ru.y там нет) не срывает связку
+    conn.execute("INSERT INTO state (key, value) VALUES (?, 'old')", (db.updated_key(keep.id, "ru.y"),))
+    conn.execute("INSERT INTO state (key, value) VALUES (?, '2')", (db.updated_key(gone.id, "ru.y"),))
     jobs.link_users(cfg, conn, own.user_id, g)
+    assert conn.execute("SELECT value FROM state WHERE key=?", (db.updated_key(keep.id, "ru.y"),)).fetchone()[0] == "2"
     for key in (db._rejected_key, db.pending_mail_key):   # отклонённый ключ подписи не скачается заново
         assert conn.execute("SELECT 1 FROM state WHERE key=?", (key(keep.id, "ru.y"),)).fetchone() is not None
         assert conn.execute("SELECT 1 FROM state WHERE key=?", (key(gone.id, "ru.y"),)).fetchone() is None
