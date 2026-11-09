@@ -51,6 +51,23 @@ def test_reload_after_creating_link_creates_nothing(web, conn, clock):
     assert conn.execute("SELECT COUNT(*) FROM links WHERE kind='login'").fetchone()[0] == 1
 
 
+def test_new_link_has_qr_shown_once(web, conn, clock):
+    # QR — в самой странице: ссылка не уходит ни в адрес картинки, ни в ещё один запрос
+    import base64
+    web.client.post("/admin/invites", data={"label": "коллеги"}, follow_redirects=False)
+    page = web.client.get("/admin").text
+    [png] = re.findall(r'<img src="data:image/png;base64,([\w+/=]+)"', page)
+    assert base64.b64decode(png).startswith(b"\x89PNG") and "QR-код ссылки" in page
+    assert "data:image/png" not in web.client.get("/admin").text
+
+
+def test_people_show_their_numbers(web, conn, clock):
+    # номер участника нужен для rotate-token --user-id; у владельца он тоже есть
+    p = petr(conn, clock)
+    page = web.client.get("/admin").text
+    assert "№ 1" in page and f"№ {p.user_id}" in page
+
+
 def test_disabled_invite_stops_working(web, conn, clock):
     token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
     web.client.post(f"/admin/invites/{people.list_invites(conn)[0]['id']}/disable")

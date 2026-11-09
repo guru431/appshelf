@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block main %}
 {% if created_link %}<div class="banner">Ссылка — показывается один раз, скопируйте сейчас:<br>
-  <code>{{ created_link }}</code></div>{% endif %}
+  <code>{{ created_link }}</code>
+  {% if created_qr %}<p class="hint">Или наведите на QR-код камеру телефона: ссылка откроется сразу в браузере (на iPhone — в Safari),
+    а не во встроенном браузере мессенджера.</p>
+  <img src="data:image/png;base64,{{ created_qr }}" alt="QR-код ссылки" width="196" height="196"
+       style="max-width: 100%; height: auto; background: #fff">{% endif %}</div>{% endif %}
 <h2>Приглашения</h2>
 <form method="post" action="{{ post_url('/admin/invites') }}" class="field">
   <input name="label" placeholder="подпись: коллеги, Петя…"><button>Создать ссылку</button></form>
@@ -20,7 +24,8 @@
 <h2>Люди</h2>
 {% for p in persons %}
 <div class="card">
-  <div class="title">{{ p.user.name }} <span class="tag">{{ 'владелец' if p.user.role == 'owner' else 'участник' }}</span></div>
+  <div class="title">{{ p.user.name }} <span class="tag">{{ 'владелец' if p.user.role == 'owner' else 'участник' }}</span>
+    <span class="meta" title="номер участника (rotate-token --user-id)">№ {{ p.user.id }}</span></div>
   {% for r in p.accounts %}<div class="meta body">{{ r.a.email }} ·
     {% if r.a.session == 'ok' %}вход выполнен{% elif r.a.session == 'expired' %}вход истёк{% else %}нет входа{% endif %}
     · последний вход {{ r.a.last_login_at[:10] or '—' }} · {{ r.size | gb }} ГБ</div>{% endfor %}
