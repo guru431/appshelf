@@ -339,6 +339,19 @@ def test_upload_of_garbage_shows_error(web, conn, cfg):
     assert "не APK" not in web.client.get("/android").text
 
 
+def test_unnamed_upload_job_shows_file_name(web, conn, clock):
+    """Без «Названия» задание и его ошибка подписаны именем файла, а не «Свой файл»."""
+    web.client.post("/android/add/upload", data={"name": ""}, files={"file": ("bank-2.1.apk", b"garbage")})
+    work(web, conn)
+    shelf = db.shelf_for_user(conn, 1)
+    job = db.enqueue(conn, shelf.id, "upload", clock.iso(), payload={"path": "/nonexistent", "name": ""})
+    conn.execute("INSERT INTO android_uploads (id, user_id, shelf_id, client_id, filename, size, fingerprint, "
+                 "created_at, updated_at, job_id) VALUES (?, 1, ?, ?, 'wallet.apk', 1, ?, ?, ?, ?)",
+                 ("a" * 32, shelf.id, "b" * 32, "c" * 64, clock.iso(), clock.iso(), job))
+    page = web.client.get("/android").text
+    assert "bank-2.1.apk" in page and "wallet.apk" in page and "Свой файл</b>" not in page
+
+
 def test_upload_good_file_and_new_version(web, conn, tmp_path):
     files = {"file": ("a.apk", make_apk(tmp_path / "a.apk").read_bytes())}
     web.client.post("/android/add/upload", data={"name": ""}, files=files)

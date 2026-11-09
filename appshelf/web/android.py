@@ -97,9 +97,11 @@ def nightly_part(result: str) -> str:
     return next((p for p in result.split(SEP) if p.startswith("Android:")), "")
 
 
-def _job_view(j) -> dict:
+def _job_view(j, filename: str = "") -> dict:
+    """filename — имя файла докачки (android_uploads), если в задании его нет: подпись вместо «Свой файл»."""
     p = json.loads(j["payload"] or "{}")
-    title = p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or "Свой файл"
+    title = (p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or p.get("filename") or filename
+             or "Свой файл")
     return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title,
             "query": p.get("ref", "") if j["kind"] == "add" else "",
             "split_only": p.get("split_only", False), "alternatives": p.get("alternatives", [])}
@@ -358,7 +360,9 @@ def _register_scope(app, w, scope: Scope):
             apps = db.list_apps(c, shelf.id) if shelf is not None else []
             cards = {a.package for a in apps}
             # задания без карточки: ссылка и свой файл, пока пакет не известен, и их ошибки — до «Скрыть»
-            pending = [_job_view(j) for j in db.open_jobs(c, shelf.id)
+            files = dict(c.execute("SELECT job_id, filename FROM android_uploads WHERE shelf_id=? AND job_id IS NOT NULL",
+                                   (shelf.id,)).fetchall()) if shelf else {}
+            pending = [_job_view(j, files.get(j["id"], "")) for j in db.open_jobs(c, shelf.id)
                        if j["package"] not in cards or json.loads(j["payload"] or "{}").get("split_only")] if shelf else []
             busy = shelf is not None and db.has_active(c, shelf.id)
             waiting = {a.package: store.android_waiting_reason(c, shelf.id, a.package)
@@ -484,12 +488,16 @@ def _register_scope(app, w, scope: Scope):
 
     def requeue(c, shelf, app, ack: bool = False, previous: list | None = None) -> None:
         """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново (APKPure — с
-        галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего. previous —
+        галочкой ack из «Сменить источник»); свой файл без источника, проверка вложения 4PDA и уже ждущее задание —
+        ничего. previous —
         прежние (source, ref, etag) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
         package = app["package"]
         with nullcontext() if c.in_transaction else store.tx(c):
             if app["source"] == "upload" or db.active_for(c, shelf.id, package):
                 return
+            if app["source"] == "fourpda" and not previous and db.has_current(c, shelf.id, package):
+                return  # вложение 4PDA закреплено: проверять нечего, новую версию выбирают в теме
+
             db.set_status(c, shelf.id, package, "queued")
             if db.has_current(c, shelf.id, package):
                 db.enqueue(c, shelf.id, "check", w.now(), package=package,
@@ -666,7 +674,8 @@ def _register_scope(app, w, scope: Scope):
         try:
             with w.conn() as c, store.tx(c):
                 shelf = ensure(c, request)
-                db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200]})
+                db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200],
+                                                                    "filename": (file.filename or "")[:255]})
         except BaseException:
             path.unlink(missing_ok=True)
             raise
@@ -702,20 +711,19 @@ def _register_scope(app, w, scope: Scope):
             requeue(c, shelf, app_row)
         return back(p)
 
-    def change(request: Request, package: str, fn):
+    def change(request: Request, package: str, fn, missing=not_found):
         """Действие, которое может удалить каталоги на полке: архив недоступен — 503 и ничего не тронуто.
-        fn(c, root, shelf_id) → False — нет такой версии (404)."""
+        fn(c, root, shelf_id) → False — нет такой версии: ответ missing() (по умолчанию 404)."""
         try:
             with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT), w.conn() as c:
                 jobs._archive(cfg)
                 shelf, app_row = own(c, request, package)
-                if app_row is None or not fn(c, fetch.shelf_root(cfg, shelf), shelf.id):
-                    return not_found()
+                done = app_row is not None and fn(c, fetch.shelf_root(cfg, shelf), shelf.id)
         except jobs.ArchiveUnavailable:
             return catalog_page(request, 503, ARCHIVE_DOWN)
         except ipatool.IpatoolError:
             return catalog_page(request, 409, "Полка занята скачиванием — повторите через минуту")
-        return back(p)
+        return back(p) if done else missing()
 
     @app.post(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
     def remove(request: Request, package: str):
@@ -747,27 +755,37 @@ def _register_scope(app, w, scope: Scope):
     def unpin_version(request: Request, package: str, version_id: int):
         return change(request, package, lambda c, root, sid: db.unpin_version(c, root, sid, package, version_id))
 
-    @app.get(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
-    def remove_version_page(request: Request, package: str, version_id: int):
+    def remove_version_page(request: Request, package: str, version_id: int, status_code: int = 200, error: str = ""):
+        """Подтверждение удаления; после устаревшего подтверждения — та же страница с новым снимком (409) или,
+        если версии уже нет, страница 404 с «Назад»."""
         with w.conn() as c:
             shelf, app_row = own(c, request, package)
             row = db.old_version(c, shelf.id, package, version_id) if app_row is not None else None
+        cancel = p + f"?person={request.state.who.id}"
         if row is None:
-            return not_found()
+            return w.page(request, "confirm.html", scope.nav, 404, refused=True, cancel=cancel,
+                          question="Этой версии уже нет на полке: её удалили или заменили.")
         pinned = " Закрепление будет снято." if row["pinned"] else ""
-        return w.page(request, "confirm.html", scope.nav,
+        return w.page(request, "confirm.html", scope.nav, status_code, error=error,
                       question=f"Удалить версию {row['version_name']} приложения «{row['app_name']}»? "
                                f"Файл APK и ссылка установки этой версии удалятся.{pinned}",
                       action=f"{p}/apps/{package}/versions/{version_id}/remove", button="Удалить версию",
-                      cancel=p + f"?person={request.state.who.id}",
-                      hidden={"snapshot": store.version_snapshot(row)})
+                      cancel=cancel, hidden={"snapshot": store.version_snapshot(row)})
+
+    @app.get(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
+    def confirm_remove_version(request: Request, package: str, version_id: int):
+        return remove_version_page(request, package, version_id)
 
     @app.post(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
     def remove_version(request: Request, package: str, version_id: int, snapshot: str = Form("")):
         if not snapshot:
             return PlainTextResponse("Подтвердите удаление на странице версии", status_code=400)
         return change(request, package,
-                      lambda c, root, sid: db.remove_version(c, root, sid, package, version_id, snapshot))
+                      lambda c, root, sid: db.remove_version(c, root, sid, package, version_id, snapshot),
+                      missing=lambda: remove_version_page(
+                          request, package, version_id, 409,
+                          "Версия изменилась, пока страница была открыта (например, её закрепили в другой вкладке). "
+                          "Проверьте и подтвердите удаление заново."))
 
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),

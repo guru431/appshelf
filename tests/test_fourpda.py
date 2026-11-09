@@ -270,6 +270,30 @@ def test_selected_apk_uses_shelf_owner_and_existing_pipeline(connected, conn, cf
     assert db.current_version(conn, shelf.id, "ru.example.app")["version_code"] == 2
 
 
+def test_attachment_card_offers_topic_instead_of_update_check(connected, conn, cfg, tmp_path):
+    import html
+    import re
+    web = connected
+    web.sessions.http.files[FILE] = make_apk(tmp_path / "input.apk", package="ru.example.app").read_bytes()
+    web.app.state.w.env.sources = Sources(web.sessions.http, fourpda=web.sessions, sleep=lambda _: None, pause=0)
+    web.client.post("/android/4pda/add", data={"url": FILE, "name": "Example", "topic": TOPIC})
+    fetch.run_job(web.app.state.w.env, conn, db.take_job(conn))
+    page = web.client.get("/android").text
+    assert "Проверить обновление" not in page and "Выбрать новую версию в теме" in page
+    # «Проверить» по старой странице ничего не проверяет и «новее нет» не пишет
+    assert web.client.post("/android/apps/ru.example.app/check", follow_redirects=False).status_code == 303
+    assert db.take_job(conn) is None and not db.get_app(conn, db.shelf_for_user(conn, 1).id, "ru.example.app")["checked_at"]
+    link = html.unescape(re.search(r'href="([^"]*4pda/topic[^"]*)"', page).group(1))
+    older, newer = FILE.replace("/123/", "/122/"), FILE.replace("/123/", "/124/")
+    web.sessions.http.raw[TOPIC] = response('<title>Example - 4PDA</title>' + AUTH + "".join(
+        f'<a href="{u}">{u.rsplit("/", 2)[1]}.apk</a>' for u in (older, FILE, newer)))
+    topic = web.client.get(link).text
+    rows = {n: topic.split(f">{n}.apk</b>", 1)[1].split("</div>", 1)[0] for n in ("122", "123", "124")}
+    assert "tag" not in rows["122"] and "на полке" in rows["123"] and "новее выбранного" in rows["124"]
+    preview = web.client.get("/android/public/add/from-shelf", params={"package": "ru.example.app"}).text
+    assert "Ночные обновления" not in preview and "вложение 4PDA закреплено" in preview
+
+
 @pytest.mark.parametrize("state, message", [
     ("missing", "Подключите свой аккаунт 4PDA"),
     ("expired", "Вход в 4PDA истёк"),

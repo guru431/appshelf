@@ -63,15 +63,17 @@
     });
     results.replaceChildren(fragment.content);
   }
+  function addRow(source) {
+    var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
+    title.textContent = (names[source] || source) + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
+    row.append(title, detail); statuses.append(row); rows[source] = {row: row, detail: detail};
+    return rows[source];
+  }
   function start() {
     var query = input.value.trim(); if (!query) return;
     if (stream) stream.close(); clearInterval(timer);
     progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {};
-    {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(function (source) {
-      var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
-      title.textContent = names[source] + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
-      row.append(title, detail); statuses.append(row); rows[source] = {row: row, detail: detail};
-    });
+    {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(addRow);
     started = Date.now(); form.querySelector('button').disabled = true;
     function tick() { summary.textContent = 'Поиск идёт · ' + Math.floor((Date.now() - started) / 1000) + ' с'; }
     tick(); timer = setInterval(tick, 1000);
@@ -81,7 +83,8 @@
     var active = new EventSource(searchUrl); stream = active;
     active.addEventListener('status', function (event) {
       if (stream !== active) return;
-      var data = JSON.parse(event.data), target = rows[data.source]; if (!target) return;
+      // источника нет в списке области (4PDA на публичной полке) — его причина всё равно нужна человеку
+      var data = JSON.parse(event.data), target = rows[data.source] || addRow(data.source);
       target.row.className = data.state === 'error' ? 'err' : data.state === 'running' ? 'meta busy' : 'meta';
       target.detail.textContent = (data.state === 'running' ? 'ищем · ' : '') + data.detail;
     });

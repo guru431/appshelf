@@ -112,7 +112,9 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)
     root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
-    name = db.version_dir(c, shelf.id, root, info.package, info.version_code)
+    # другой ключ — версия ляжет pending (db.add_version): каталог со случайным именем, до решения не скачать
+    pending = app is not None and bool(app["signer"]) and app["signer"] != info.signer
+    name = db.version_dir(c, shelf.id, root, info.package, info.version_code, pending=pending)
     final, partial = root / name, root / f".{name}.partial"
     shutil.rmtree(partial, ignore_errors=True)
     try:
@@ -247,7 +249,8 @@ def _notice(error: str) -> str:
 
 def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, retry_split: bool = False) -> str:
     """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
-    AppGallery, APKPure: versionCode не больше текущего принятого — без скачивания; ссылка
+    AppGallery, APKPure: versionCode не больше текущего принятого или та же версия источника ждёт решения по подписи
+    либо отклонена — без скачивания; ссылка
     (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
     versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
     (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
@@ -261,8 +264,14 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, 
     known = current["version_code"] if current is not None else None
     split_mark = f"split:{latest.version_code}" if app["source"] == "play" else ""
     note = ""
+    pending = c.execute("SELECT source, version_code FROM android_versions WHERE shelf_id=? AND package=? "
+                        "AND role='pending'", (shelf.id, pkg)).fetchone()
+    # та же версия того же источника уже ждёт решения по подписи или отклонена — не скачивать её каждую ночь
+    decided = latest.version_code is not None and (
+        pending is not None and (pending["source"], pending["version_code"]) == (app["source"], latest.version_code)
+        or db.rejected_code(c, shelf.id, pkg, app["source"], latest.version_code))
     if not force and known is not None and (latest.version_code is not None and latest.version_code <= known
-                                            or latest.version_code is None and not latest.changed):
+                                            or latest.version_code is None and not latest.changed or decided):
         result = "same"
         note = _notice(app["last_error"])  # не скачивали — сверку с RuStore не повторяли
     elif not force and not retry_split and known is not None and split_mark and app["source_etag"] == split_mark:
@@ -277,12 +286,36 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, 
             result, note = "same", SPLIT_UPDATE
     db.set_status(c, shelf.id, pkg, "ok", note)
     db.set_checked(c, shelf.id, pkg, env.now(), result, split_mark if note == SPLIT_UPDATE else latest.etag or None)
+    if result == "pending":
+        _pending_mail(env, c, shelf, pkg)
     return result
+
+
+def _pending_mail(env, c, shelf: db.Shelf, package: str) -> None:
+    """Проверка нашла версию с другим ключом: на публичной полке и полке владельца — письмо владельцу, одно до
+    решения (db.pending_mail_key). Полки участников решают сами участники — им письма нет."""
+    user = people.get_user(c, shelf.user_id) if shelf.user_id is not None else None
+    if shelf.user_id is not None and (user is None or user.role != people.OWNER):
+        return
+    app = db.get_app(c, shelf.id, package)
+    p = c.execute("SELECT version_name, version_code, rotation_min_sdk FROM android_versions WHERE shelf_id=? "
+                  "AND package=? AND role='pending'", (shelf.id, package)).fetchone()
+    if app is None or p is None:
+        return
+    where, page = (("публичной Android-полке", "/android/public") if shelf.user_id is None
+                   else ("вашей Android-полке", "/android"))
+    chain = ("Разработчик подтвердил смену ключа подписанной цепочкой." if p["rotation_min_sdk"]
+             else "Цепочка смены ключа не подтверждена: установка может потребовать удаления приложения с данными.")
+    notify.once(c, db.pending_mail_key(shelf.id, package), f"appshelf: другая подпись у {app['name']}",
+                f"На {where} у «{app['name']}» ({package}) новая версия {p['version_name']} ({p['version_code']}) "
+                f"подписана другим ключом. {chain}\nПока решения нет, доступна прежняя версия.\n"
+                f"Сравнить и решить: {env.cfg.public_base}{page}\n", env.send, env.cfg.mail_to, env.now())
 
 
 def check_all(env, c, work: Path) -> str:
     """Ночная проверка всех Android-полок (spec §9): "" — проверять нечего; ошибка одного приложения не
-    останавливает остальные. pending считается обновлением. Google Play не принял токен аккаунта — подключение
+    останавливает остальные. pending считается обновлением; в итоге — сколько версий на всех полках ждут решения по
+    подписи (если есть). Google Play не принял токен аккаунта — подключение
     истекло: его приложения этой ночью пропускаются и в итог не идут, остальные аккаунты и источники — дальше."""
     apps = db.apps_to_check(c)
     if not apps:
@@ -311,7 +344,9 @@ def check_all(env, c, work: Path) -> str:
                 jobs.low_space(env, c, e)
             errors += 1
             app_failed(c, shelf.id, app["package"], e, env.now())
-    return f"Android: обновлено {updated}, без изменений {same}, ошибок {errors}"
+    waiting = c.execute("SELECT COUNT(*) FROM android_versions WHERE role='pending'").fetchone()[0]
+    return (f"Android: обновлено {updated}, без изменений {same}, ошибок {errors}"
+            + (f", ждут решения по подписи: {waiting}" if waiting else ""))
 
 
 def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:

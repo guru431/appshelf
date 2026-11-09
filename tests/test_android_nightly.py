@@ -164,7 +164,8 @@ def test_check_all_counts_pending_as_updated(ctx, cfg, conn, clock, tmp_path):
     card(ctx, conn, clock, tmp_path, "ru.b", "link", URL)
     ctx.sources._latest[URL] = Latest(None, "e2||", True)
     ctx.sources.apks[URL] = make_apk(tmp_path / "other.apk", package="ru.b", version_code=2, cert=b"CERT-B")
-    assert fetch.check_all(ctx.env, conn, tmp_path / "work") == "Android: обновлено 1, без изменений 0, ошибок 0"
+    waiting = ", ждут решения по подписи: 1"
+    assert fetch.check_all(ctx.env, conn, tmp_path / "work") == "Android: обновлено 1, без изменений 0, ошибок 0" + waiting
     assert codes(conn) == {("ru.b", "current"): 1, ("ru.b", "pending"): 2}
-    assert fetch.check_all(ctx.env, conn, tmp_path / "work") == "Android: обновлено 0, без изменений 1, ошибок 0"
+    assert fetch.check_all(ctx.env, conn, tmp_path / "work") == "Android: обновлено 0, без изменений 1, ошибок 0" + waiting
     assert fetch.check_all(ctx.env, conn, tmp_path / "work") != "" and not list((tmp_path / "work").iterdir())

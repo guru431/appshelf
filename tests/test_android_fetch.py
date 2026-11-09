@@ -70,6 +70,99 @@ def test_higher_pending_does_not_block_current_updates(ctx, cfg, conn, clock, tm
     assert versions(conn, shelf) == {"current": 6, "previous": 5, "pending": 1000}
 
 
+def test_pending_and_rejected_versions_are_not_downloaded_again(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    ctx.sources.got[PKG] = Got("Пример", cert_sha(b"CERT-B"), None)   # RuStore сам сменил ключ
+    ctx.sources._latest[PKG] = Latest(6, "", True)
+
+    def check():
+        ctx.sources.calls.clear()
+        result = fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "work")
+        return result, [c for c in ctx.sources.calls if c[0] == "fetch"]
+
+    assert check() == ("pending", [("fetch", "rustore", PKG)])
+    assert check() == ("same", [])                                    # ждёт решения — не качаем
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert db.reject_pending(conn, fetch.shelf_root(cfg, shelf), shelf.id, PKG, pending["id"])
+    assert check() == ("same", [])                                    # отклонена — тоже
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "next.apk", version_code=7, cert=b"CERT-B")
+    ctx.sources._latest[PKG] = Latest(7, "", True)
+    assert check() == ("pending", [("fetch", "rustore", PKG)])        # следующая версия — снова решение
+
+
+def test_owner_gets_one_mail_per_pending_decision(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    ctx.sources.got[PKG] = Got("Пример", cert_sha(b"CERT-B"), None)
+
+    def offer(code):
+        ctx.sources.apks[PKG] = make_apk(tmp_path / f"{code}.apk", version_code=code, cert=b"CERT-B")
+        ctx.sources._latest[PKG] = Latest(code, "", True)
+        return fetch.check_all(ctx.env, conn, tmp_path / "work")
+
+    assert offer(6) == "Android: обновлено 1, без изменений 0, ошибок 0, ждут решения по подписи: 1"
+    assert ctx.sent == ["appshelf: другая подпись у Пример"]
+    offer(7)                                                          # другая версия, решения всё ещё нет
+    assert len(ctx.sent) == 1
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert db.reject_pending(conn, fetch.shelf_root(cfg, shelf), shelf.id, PKG, pending["id"])
+    offer(8)
+    assert len(ctx.sent) == 2
+
+
+def test_member_shelf_pending_does_not_mail_owner(ctx, conn, clock, tmp_path):
+    from helpers import make_account
+    member = make_account(conn, clock, email="member@example", role="member", legacy=False)
+    shelf = shelf_of(conn, clock, member.user_id)
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "a.apk", version_code=5)
+    db.put_app(conn, shelf.id, PKG, "Пример", "rustore", PKG, clock.iso())
+    assert run(ctx, conn, shelf, "add", clock, package=PKG, source="rustore", ref=PKG, name="")["status"] == "done"
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")
+    ctx.sources._latest[PKG] = Latest(6, "", True)
+    assert fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "w") == "pending"
+    assert ctx.sent == []
+
+
+def test_rejection_stored_in_old_format_is_still_honoured(ctx, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    store.set_state(conn, f"android_rejected:{shelf.id}:{PKG}", json.dumps([ipa.sha256(alien)]))
+    assert db.rejected_apk(conn, shelf.id, PKG, ipa.sha256(alien))
+    assert not db.rejected_code(conn, shelf.id, PKG, "rustore", 6)
+    job = run(ctx, conn, shelf, "upload", clock, path=str(alien), name="", package=PKG)
+    assert job["status"] == "error" and "отклонён" in job["error"]
+
+
+def test_pending_version_is_not_at_predictable_path_until_accepted(ctx, cfg, conn, clock, tmp_path):
+    """Каталог полки Apache отдаёт по /d/: версия с другим ключом до решения владельца лежит под случайным именем."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    run(ctx, conn, shelf, "upload", clock, path=str(alien), name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert pending["dir"].startswith(f"{PKG}-6-p") and len(pending["dir"]) == len(f"{PKG}-6-p") + 32
+    assert db.ANDROID_DIR_RE.match(pending["dir"])
+    assert not (root / f"{PKG}-6").exists() and (root / pending["dir"] / fetch.apk_name(PKG, "1.0")).is_file()
+    assert db.accept_pending(conn, root, shelf.id, PKG)
+    current = db.current_version(conn, shelf.id, PKG)
+    assert current["dir"] == f"{PKG}-6" and (root / f"{PKG}-6" / fetch.apk_name(PKG, "1.0")).is_file()
+    assert not (root / pending["dir"]).exists()
+
+
+def test_failed_accept_puts_pending_directory_back(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    run(ctx, conn, shelf, "upload", clock, path=str(make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")),
+        name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    conn.execute("CREATE TRIGGER fail_accept AFTER UPDATE OF dir ON android_versions "
+                 "BEGIN SELECT RAISE(ABORT, 'accept failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="accept failed"):
+        db.accept_pending(conn, root, shelf.id, PKG)
+    assert (root / pending["dir"]).is_dir() and not (root / f"{PKG}-6").exists()
+    assert db.list_apps(conn, shelf.id)[0].pending["dir"] == pending["dir"]
+
+
 def test_major_version_code_transition_is_stored_and_compared_in_full(ctx, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "old.apk", version_code=5))
     ctx.sources.apks[PKG] = make_apk(tmp_path / "new.apk", version_code=1, version_code_major=1)
@@ -474,9 +567,11 @@ def test_newer_same_signer_keeps_pending_as_historical_option(ctx, cfg, conn, cl
         ctx.sources._latest[PKG] = Latest(code, "", True)
         run(ctx, conn, shelf, "check", clock, package=PKG)
     assert versions(conn, shelf) == {"current": 3, "previous": 1, "pending": 2}
-    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-2", f"{PKG}-3"]
+    dirs = on_shelf(cfg, shelf)
+    assert dirs[0] == f"{PKG}-1" and dirs[1].startswith(f"{PKG}-2-p") and dirs[2] == f"{PKG}-3"
     assert db.accept_pending(conn, cfg.archive / shelf.shelf, shelf.id, PKG)
     assert versions(conn, shelf) == {"current": 3, "previous": 1, "kept": 2}
+    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-2", f"{PKG}-3"]
 
 
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):

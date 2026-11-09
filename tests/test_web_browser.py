@@ -587,3 +587,81 @@ def test_android_version_picker_updates_download_details_and_qr(web, make_web, c
             assert not errors
         finally:
             browser.close()
+
+
+def _route_to(client):
+    """Запросы страницы — в TestClient; файлы /d/ — заглушка (иконка или APK)."""
+    def route(target):
+        request, u = target.request, urlsplit(target.request.url)
+        if u.path.startswith("/d/"):
+            target.fulfill(status=200, content_type="image/png", body=png_bytes(40))
+            return
+        result = client.request(request.method, u.path + ("?" + u.query if u.query else ""),
+                                content=request.post_data_buffer,
+                                headers={"content-type": request.headers.get("content-type", "")},
+                                follow_redirects=False)
+        target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+    return route
+
+
+@pytest.mark.integration
+def test_public_search_explains_skipped_fourpda_topic(web, local_chromium):
+    from urllib.parse import quote
+    web.app.state.w.env.sources = Sources(FakeHttp(), sleep=lambda _: None, pause=0)
+    topic = "https://4pda.to/forum/index.php?showtopic=456"
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("https://apps.example/**", _route_to(web.client))
+            page.goto("https://apps.example/android/public/add?q=" + quote(topic, safe=""))
+            page.wait_for_function("document.getElementById('search-summary').textContent.startsWith('Поиск завершён')")
+            assert "4PDA: доступен только на личной полке" in page.locator("#source-statuses").inner_text()
+            assert not errors
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("path", ["/android", "/p"])
+def test_download_mark_remembers_version_in_this_browser(web, make_web, conn, cfg, clock, acct, path, local_chromium):
+    pkg = "ru.example.mark"
+    shelf = (db.ensure_shelf(conn, acct.user_id, clock.iso()) if path == "/android"
+             else db.ensure_public_shelf(conn, clock.iso()))
+    db.put_app(conn, shelf.id, pkg, "Mark app", "link", "https://example.org/mark.apk", clock.iso())
+    root = fetch.shelf_root(cfg, shelf)
+    for code in (1, 2):
+        (root / f"{pkg}-{code}").mkdir(parents=True)
+        db.add_version(conn, root, shelf.id, pkg, db.NewApk(f"{code}.0", code, 28, 35, "", "a" * 64, "link", 1,
+                       str(code) * 64, f"{pkg}-{code}", True), clock.iso())
+    client = web.client
+    if path == "/p":
+        pin.set_pin(conn, "482913", clock.iso())
+        client = make_web(cfg, conn).client
+        client.post("/p", data={"pin": "482913"})
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844}, accept_downloads=True)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("https://apps.example/**", _route_to(client))
+            page.goto("https://apps.example" + path)
+            mark = page.locator("[data-downloaded]")
+            assert mark.is_hidden()
+            page.get_by_label("Версия Mark app", exact=True).select_option(index=1)
+            with page.expect_download():
+                page.get_by_role("link", name="Скачать APK", exact=True).click()
+            assert mark.inner_text() == "Вы скачивали 1.0 — на полке 2.0"
+            page.reload()
+            assert mark.inner_text() == "Вы скачивали 1.0 — на полке 2.0"
+            with page.expect_download():
+                page.get_by_role("link", name="Скачать APK", exact=True).click()
+            assert mark.inner_text() == "Скачана в этом браузере"
+            assert not errors
+        finally:
+            browser.close()
