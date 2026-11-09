@@ -24,9 +24,9 @@ def _tree(raw):
             count = struct.unpack_from("<I", raw, start + 8)[0]
             if count > 4096:
                 raise ValueError("drawable string pool too large")
-            strings, size = [], 0
+            strings, size, chunk = [], 0, raw[start:end]  # срез — один раз, не на каждую строку пула
             for i in range(count):
-                value = apk._string(raw[start:end], i)
+                value = apk._string(chunk, i)
                 size += len(value)
                 if size > MAX_SVG:
                     raise ValueError("drawable strings too large")
