@@ -3,6 +3,22 @@
 **Дата:** 2026-10-05 · **Статус:** реализован; вход и несколько Apple ID — [2026-10-08-multi-apple-id-design.md](2026-10-08-multi-apple-id-design.md);
 Android-полки, вход через Google, публичная полка — [2026-10-28-android-design.md](2026-10-28-android-design.md)
 
+**Что изменилось позже.** Документ — исходный дизайн; текущее поведение — [README](../../../README.md) и поздние
+спецификации ([несколько Apple ID](2026-10-08-multi-apple-id-design.md),
+[несколько участников в браузере](2026-10-12-multi-signin-design.md), [Android](2026-10-28-android-design.md)).
+Не совпадает с кодом:
+- Пользователей несколько, у каждого Apple ID своя полка и свой случайный токен каталога; вход в панель — Apple ID
+  или Google-аккаунтом. «Пароль страниц», Basic и предел «10 неудач в минуту» (§2, §9) убраны.
+- HOME ipatool — `/etc/appshelf/accounts/<id>`, не `/etc/appshelf` (§4); блокировка — своя на Apple ID
+  (`locks/<id>.lock`) и общая на скачивание (`locks/download.lock`); `ipatool.lock` (§7) удаляет `install.sh`.
+- С 2026-11-08 вход (`auth login --password-stdin`) выполняет Go-клиент закреплённого upstream ipatool
+  (`bin/ipatool-auth`, [ipatool/auth/README.md](../../../ipatool/auth/README.md)); «Go-ipatool не входит» (§2, §3) —
+  состояние на 2026-10-05. Патчей форка 11, а не 4 (§5) — перечень в [ipatool/README.md](../../../ipatool/README.md).
+- JavaScript — не только опрос (§8): диалоги, QR, докачка APK (Android-спецификация, §10).
+- Схема данных (§6) — исходная; текущая — `appshelf/store.py` (`SCHEMA_VERSION`). Кроме текущей и предыдущей
+  версий хранится закреплённая.
+- Мониторинг (§10) — ещё `status/backup.stamp` ночного снимка базы (README, «Резервная копия»).
+
 ## 1. Зачем
 
 Банки, VK и другие российские приложения удалены из App Store. Скачать их может только тот
