@@ -311,6 +311,43 @@ def test_damaged_snapshot_keeps_old_ones(tmp_path):
     assert not (tmp_path / "work").exists()
 
 
+def ipatool_tree(tmp_path, monkeypatch):
+    """Код как на сервере: bin/ рядом с ipatool/ (исходники сборки). → (cfg, bin_dir, исходники)."""
+    code = tmp_path / "code"
+    (code / "bin").mkdir(parents=True)
+    src = code / "ipatool"
+    (src / "patches").mkdir(parents=True)
+    (src / "auth").mkdir()
+    (src / "UPSTREAM").write_bytes(b"URL=x\nCOMMIT=1\n")
+    (src / "patches" / "02-b.patch").write_bytes(b"b\n")
+    (src / "patches" / "01-a.patch").write_bytes(b"a\n")
+    (src / "auth" / "UPSTREAM").write_bytes(b"URL=y\n")
+    (src / "auth" / "main.go").write_bytes(b"package main\n")
+    cfg = cli_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("APPSHELF_IPATOOL", str(code / "bin" / "ipatool"))
+    return cfg, code / "bin", src
+
+
+def test_check_shows_ipatool_build_drift_and_age(monkeypatch, tmp_path, capsys):
+    cfg, bin_dir, src = ipatool_tree(tmp_path, monkeypatch)
+    store.connect(cfg.db).close()
+    stamp = bin_dir / "ipatool.src-sha256"
+    # как deploy/install.sh: cat UPSTREAM patches/*.patch | sha256sum
+    stamp.write_text(hashlib.sha256(b"URL=x\nCOMMIT=1\na\nb\n").hexdigest() + "\n", encoding="ascii")
+    built = 1792000000                                                # 2026-10-14 UTC
+    os.utime(stamp, (built, built))
+    monkeypatch.setattr(jobs, "now_iso", lambda: "2026-11-09T03:00:00+00:00")
+    assert cli.main(["check"]) == 0                                   # сборка на код возврата не влияет
+    out = capsys.readouterr().out
+    assert "ipatool: собран 2026-10-14 из выложенных исходников" in out
+    assert "ipatool-auth: не собран" in out and "после DSA openssl или раз в квартал" in out
+    (src / "patches" / "03-c.patch").write_bytes(b"c\n")
+    monkeypatch.setattr(jobs, "now_iso", lambda: "2027-01-20T03:00:00+00:00")
+    assert cli.main(["check", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["ipatool"][0] == \
+        "ipatool: собран 2026-10-14 НЕ из выложенных исходников — пересоберите; старше 90 дней"
+
+
 def test_check_refuses_snapshot_of_other_schema(monkeypatch, tmp_path, clock, capsys):
     cfg = cli_env(monkeypatch, tmp_path)
     cli_shelf(cfg, clock, tmp_path)

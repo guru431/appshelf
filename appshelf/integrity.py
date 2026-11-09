@@ -8,6 +8,7 @@ IDEAS-archive.md). По каждой строке versions — каталог, �
 против каталогов <пакет>-<versionCode>, deep — ещё SHA-256 APK."""
 from __future__ import annotations
 
+import hashlib
 import os
 import plistlib
 import re
@@ -16,6 +17,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timezone
 from importlib.metadata import version as package_version
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from .config import TOKEN_RE, Config
 
 DAILY_RE = re.compile(r"^appshelf-\d{4}-\d{2}-\d{2}\.db$")
 STAMP = "backup.stamp"  # status/: время последнего удачного ночного снимка — для мониторинга, как nightly.stamp
+REBUILD_DAYS = 90       # ipatool пересобирается раз в квартал (и после DSA openssl)
 
 KINDS = {  # вид проблемы → подпись в кратком итоге; порядок — порядок итога
     "no_shelf": "нет каталога полки, а версии в базе есть",
@@ -370,6 +373,38 @@ def daily_backup(db: Path, dest: Path, work: Path, day: str, keep: int) -> Path:
     for old in sorted(p for p in dest.iterdir() if DAILY_RE.match(p.name))[:-keep]:
         old.unlink()
     return final
+
+
+def builds(cfg: Config, today: date) -> list[str]:
+    """Собраны ли bin/ipatool и bin/ipatool-auth из выложенных исходников и когда — для appshelf check, на его код
+    возврата не влияет. Отпечаток — как в deploy/install.sh: SHA-256 подряд UPSTREAM и патчей (у ipatool-auth —
+    UPSTREAM и *.go), дата сборки — время файла отпечатка. Исходников рядом с bin/ нет (не сервер) — пусто."""
+    src, bin_dir = cfg.ipatool_bin.parent.parent / "ipatool", cfg.ipatool_bin.parent
+    if not src.is_dir():
+        return []
+    lines = []
+    for name, parts in (("ipatool", [src / "UPSTREAM", *sorted(src.glob("patches/*.patch"), key=lambda p: p.name)]),
+                        ("ipatool-auth", [src / "auth" / "UPSTREAM",
+                                          *sorted((src / "auth").glob("*.go"), key=lambda p: p.name)])):
+        h = hashlib.sha256()
+        try:
+            for p in parts:
+                h.update(p.read_bytes())
+        except FileNotFoundError:  # исходников этой сборки в выложенном коде нет — сверять не с чем
+            continue
+        stamp = bin_dir / f"{name}.src-sha256"
+        try:
+            built = datetime.fromtimestamp(stamp.stat().st_mtime, timezone.utc).date()
+            same = stamp.read_text(encoding="ascii", errors="replace").strip() == h.hexdigest()
+        except FileNotFoundError:
+            lines.append(f"{name}: не собран")
+            continue
+        line = f"{name}: собран {built}" + (" из выложенных исходников" if same else
+                                             " НЕ из выложенных исходников — пересоберите")
+        if (today - built).days > REBUILD_DAYS:
+            line += f"; старше {REBUILD_DAYS} дней"
+        lines.append(line)
+    return lines + ["пересборка — после DSA openssl или раз в квартал: bash deploy/build-ipatool.sh (со своей машины)"]
 
 
 def outside_archive(cfg: Config, path: Path) -> None:

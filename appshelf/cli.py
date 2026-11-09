@@ -9,6 +9,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
@@ -132,7 +133,11 @@ def check(cfg, args) -> int:
     except (integrity.DbError, jobs.ArchiveUnavailable) as e:
         print(e, file=sys.stderr)
         return 2
-    print(json.dumps(rep.as_dict(), ensure_ascii=False, indent=1) if args.json else rep.text())
+    builds = integrity.builds(cfg, date.fromisoformat(jobs.now_iso()[:10]))  # на код возврата не влияет
+    if args.json:
+        print(json.dumps({**rep.as_dict(), "ipatool": builds}, ensure_ascii=False, indent=1))
+    else:
+        print("\n".join([rep.text(), *builds]))
     return 0 if rep.ok else 1
 
 
