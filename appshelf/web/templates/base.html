@@ -296,7 +296,6 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
                right: max(calc(12px + env(safe-area-inset-right)), calc(50% - 352px)); }
 .theme-entry summary { display: flex; width: 44px; padding: 0; border-radius: 50%; }
 .theme-entry summary svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; }
-.desktop-transfer { margin-top: 8px; }
 [data-device-form] select { display: block; width: 100%; min-height: 44px; padding: 8px;
   font: inherit; color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
 [data-device-form] label { display: block; margin: 12px 0; }
@@ -308,6 +307,45 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
   header .acct { flex: 1; }
   header .acct .chip { justify-content: space-between; }
 }
+
+/* содержимое страниц: галочка в форме-карточке, метки состояния «Удалённых» */
+.card > .check { margin-bottom: 14px; }
+.sortbar a.on { color: var(--fg); }   /* --link на --tint поверх фона страницы — 4.3:1 в светлой теме, ниже AA */
+.tag.state-owned { background: var(--tint); color: var(--link); }
+.tag.state-failed { background: var(--errtint); color: var(--err); }
+/* справка: «?» у карточки, диалог и страница, подсказка новичку */
+.download-actions > .help-toggle { flex: none; width: 36px; padding: 0; font-weight: 700; }
+@media (max-width: 699px) { .app .download-actions > .help-toggle { width: 44px; min-height: 44px; } }
+.help h3, .help-dialog h3 { margin: 18px 0 6px; font-size: 16px; font-weight: 600; }
+.help > :first-child { margin-top: 0; }
+.help p, .help-dialog p { font-size: 15px; line-height: 1.45; }
+.tip h2 { margin: 0 0 8px; color: var(--fg); font-size: 16px; text-transform: none; letter-spacing: 0; }
+.tip .close { float: right; margin: -6px -6px 6px 8px; }
+.tip ol { margin: 0 0 10px; padding-left: 22px; font-size: 15px; line-height: 1.45; }
+.tip li + li { margin-top: 4px; }
+.tip > .meta { margin: 0; }
+/* строка «Устройство: …» Android-страниц (полная форма — в «Настройках») */
+.device-line { display: flex; align-items: flex-start; gap: 8px; }
+.device-line > details { flex: 1; min-width: 0; }
+.device-line > button { flex: none; min-height: 44px; }
+.device-line summary > span:first-child { min-width: 0; }
+.device-body { padding: 0 12px 12px; }
+/* «Добавить» (Android): сегменты способов, подсказка под полем, кнопка выбора файла */
+.add-seg { display: flex; margin-bottom: 14px; padding: 2px; border-radius: 11px; background: var(--fill); font-size: 14px;
+           overflow-x: auto; }
+.add-seg a { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; min-height: 40px;
+             padding: 6px 10px; border-radius: 9px; color: var(--fg); white-space: nowrap; }
+.add-seg a.on { background: var(--seg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
+.segmented [data-add-part] > h2:first-child { display: none; }
+.field-hint { display: block; margin-top: 6px; font-size: 13px; font-weight: 400; line-height: 1.4; }
+.file-pick { position: relative; display: flex; width: fit-content; max-width: 100%; margin-top: 6px; }
+.file-pick input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0;
+                   opacity: 0; cursor: pointer; }
+.file-pick:focus-within .btn { outline: 2px solid var(--link); outline-offset: 2px; }
+.file-pick input:disabled { cursor: default; }
+.file-pick input:disabled + .btn { color: var(--muted); }
+/* «Есть обновление для меня» над Android-карточками (скрипт install_hints) */
+.mine-filter { margin: 0 4px 12px; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -387,7 +425,7 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
-<script src="/pwa/device-profile.js?v=1"></script>
+<script src="/pwa/device-profile.js?v=2"></script>
 <script>
 function fitSheets() {
   document.querySelectorAll('details.pop[open] > .sheet').forEach(function(sheet) {
@@ -424,9 +462,6 @@ addEventListener('click', function (e) {
 <script>
 var dialogOpener;
 addEventListener('click', function(e) {
-  if (e.target.closest && e.target.closest('[data-help]')) {
-    var help = document.getElementById('install-help'); if (help) help.open = true;
-  }
   var opener = e.target.closest && e.target.closest('[data-dialog]');
   if (opener) {
     var dialog = document.getElementById(opener.dataset.dialog);

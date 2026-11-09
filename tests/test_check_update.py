@@ -119,4 +119,4 @@ def test_without_login_job_waits(web, conn, cfg, clock):
     set_session(conn, 1, "expired")
     web.client.post("/apps/123/check")
     assert web.app.state.worker.tick() is False and web.tool.calls == []
-    assert queued(conn) == 1 and "Ждёт входа в Apple ID" in web.client.get("/").text
+    assert queued(conn) == 1 and "в очереди · ждёт входа в Apple ID" in web.client.get("/").text

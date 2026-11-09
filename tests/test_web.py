@@ -98,6 +98,19 @@ def test_catalog_shows_install_and_previous(web, conn, cfg, clock):
     assert "сборка 18.06.2026" in r.text and clock.iso()[:10] not in r.text  # дата версии, не публикации
 
 
+def test_ios_card_matches_android_card(web, conn, cfg, clock):
+    """QR — значком у «Установить» и только с компьютера; «Скопировать ссылку» — в «⋯» на любом устройстве."""
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    link = f'data-copy="itms-services://?action=download-manifest&amp;url=https://apps.example/d/{TOKEN}/123-1.0/manifest.plist"'
+    desktop = web.client.get("/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"}).text
+    iphone = web.client.get("/", headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)"}).text
+    assert 'aria-label="Показать QR-код для' in desktop and "/apps/123/qr.png" in desktop
+    assert 'aria-label="Показать QR-код' not in iphone and "/apps/123/qr.png" not in iphone
+    for page in (desktop, iphone):
+        menu = page.split('class="sheet action-list"')[1].split("</details>")[0]
+        assert link in menu and "<button>" not in menu   # в «⋯» — только вторичные и опасная кнопки
+
+
 def test_banners_for_expired_session_and_low_space(web, conn):
     set_session(conn, 1, "expired")
     web.free["bytes"] = 2 * GB
@@ -124,6 +137,18 @@ def test_catalog_explains_app_store_apple_id(web):
 
 def test_catalog_explains_update_over_installed(web):  # поверх установленного iOS не ставит: «… is Already Installed»
     assert "«Сгрузить приложение», затем «Установить» здесь" in web.client.get("/").text
+
+
+def test_help_page_and_install_dialog(web, conn, cfg, clock):
+    """Подсказки — на странице «Справка» из «Настроек»; у карточки — «?» с диалогом, новичку — закрываемая подсказка."""
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    page = web.client.get("/help")
+    assert page.status_code == 200 and "Сгружать неиспользуемые" in page.text and "Auto Blocker" in page.text
+    assert 'id="android-add"' in page.text and 'aria-current="page"' in page.text.split("Настройки</span>")[0][-300:]
+    assert 'href="/help"' in web.client.get("/settings").text
+    text = web.client.get("/").text
+    assert 'data-dialog="install-help"' in text and '<dialog id="install-help"' in text and 'data-tip="apple"' in text
+    assert "Сгружать неиспользуемые" not in text and "<details id=\"install-help\"" not in text
 
 
 def test_history_search_cyrillic_case_insensitive(web, conn, clock):
@@ -274,8 +299,22 @@ def test_blocked_page_marks_apps_missing_from_account(web, conn, clock, monkeypa
     store.mark_no_license(conn, 1, 2, clock.iso())
     r = web.client.get("/blocked")
     assert r.status_code == 200
-    assert "Есть в аккаунте: 1" in r.text and "нет в аккаунте: 1" in r.text and "не проверено: 1" in r.text
-    assert 'class="row inactive"' in r.text and "/apps/1/publish" in r.text and "/apps/2/publish" not in r.text
+    assert "Есть в аккаунте · 1" in r.text and "Нет в аккаунте · 1" in r.text and "Не проверено · 1" in r.text
+    assert "Все · 3" in r.text and "Ошибка проверки" not in r.text
+    # по умолчанию — что есть в аккаунте; остальное — своим фильтром, состояние — меткой, без серых строк
+    assert "/apps/1/publish" in r.text and "ВТБ Онлайн" not in r.text and 'row inactive' not in r.text
+    r = web.client.get("/blocked", params={"status": "missing"})
+    assert "ВТБ Онлайн" in r.text and "СберБанк Онлайн</b>" not in r.text
+    r = web.client.get("/blocked", params={"status": "all", "q": "альфа"})
+    assert "Альфа-Банк" in r.text and "ВТБ Онлайн" not in r.text and 'name="status" value="all"' in r.text
+    assert '<span class="tag state-unknown">не проверено' in r.text   # во «Все» состояние — меткой у строки
+
+
+def test_blocked_page_without_owned_apps_shows_everything(web, monkeypatch):
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 1, "name": "СберБанк Онлайн"}])
+    text = web.client.get("/blocked").text
+    assert "Есть в аккаунте · 0" in text and 'class="on" aria-current="true">Все · 1' in text and "СберБанк Онлайн" in text
 
 
 def test_history_and_removed_show_when_version_was_checked(web, conn, monkeypatch):
@@ -295,7 +334,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     monkeypatch.setattr(removed, "load", lambda: CATALOG_SBER)
     web.client.post("/blocked/add", data={"ref": "id492224193"})
     text = web.client.get("/blocked").text
-    assert "Есть в аккаунте: 0" in text and "не проверено: 1" in text
+    assert "Есть в аккаунте · 0" in text and "Не проверено · 1" in text
     assert "<b>СберБанк Онлайн</b>" in text and "App Store 492224193" not in text   # имя — из справочника
     assert "по ссылке, не подтверждено" in web.client.get("/history").text
     set_session(conn, 1, "ok")
@@ -303,7 +342,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     web.app.state.worker.tick()
     assert store.list_apps(conn, 1)[0].status == "nolicense"                  # повторять бесполезно
     text = web.client.get("/blocked").text
-    assert "Есть в аккаунте: 0" in text and "нет в аккаунте: 1" in text and "ID 492224193 · нет в аккаунте" in text
+    assert "Есть в аккаунте · 0" in text and "Нет в аккаунте · 1" in text and "state-missing" in text
     web.client.post("/apps/492224193/unpublish")
     assert store.list_purchases(conn, 1) == []                                # ложной покупки в «Истории» нет
 
@@ -316,7 +355,7 @@ def test_link_confirmed_by_download_is_owned(web, conn, monkeypatch, tmp_path):
     web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
     web.app.state.worker.tick()
     assert [r["source"] for r in store.list_purchases(conn, 1)] == ["license"]
-    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+    assert "Есть в аккаунте · 1" in web.client.get("/blocked").text
 
 
 def test_download_clears_earlier_no_license_mark(web, conn, clock, monkeypatch, tmp_path):
@@ -329,7 +368,7 @@ def test_download_clears_earlier_no_license_mark(web, conn, clock, monkeypatch, 
     web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
     web.app.state.worker.tick()
     assert store.no_license_ids(conn, 1) == set()
-    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+    assert "Есть в аккаунте · 1" in web.client.get("/blocked").text
 
 
 @pytest.mark.parametrize("catalog_row", [False, True])

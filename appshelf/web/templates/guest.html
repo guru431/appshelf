@@ -22,10 +22,10 @@
   <p class="hint">PIN сообщает владелец полки. После ввода полка открывается в этом браузере на 90 дней.</p>
 </div>
 {% else %}
-{% include 'device_profile.html' %}
 {% include 'shelf_filter.html' %}
+{% include 'device_profile.html' %}
 {% if not apps and not total %}<p class="empty">На полке пока пусто.</p>{% endif %}
 {% for a in apps %}{{ card(a, url, False, '', qr=True) }}{% endfor %}
-<div class="hint">{{ install_hints() }}</div>
+{{ install_hints() }}
 {% endif %}
 {% endblock %}

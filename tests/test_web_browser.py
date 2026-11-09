@@ -1,4 +1,5 @@
 """Real local Chromium checks for compact shelf interactions and accessible contrast."""
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
@@ -133,11 +134,15 @@ def test_short_screen_menu_settings_and_device_profile(web, conn, cfg, clock, tm
                 page.wait_for_url('**/settings')
                 assert page.get_by_role('navigation', name='Оформление').locator('[aria-current="true"]').inner_text() == ('Светлая' if theme == 'light' else 'Тёмная')
                 assert page.get_by_role('link', name='Аккаунты Apple ID и Google').is_visible()
-                page.locator('[data-device-profile] > summary').click()
+                # в «Настройках» форма открыта под своим заголовком, без раскрывашки
+                assert page.get_by_role('heading', name='Android-устройство').is_visible()
                 page.get_by_label('Android устройства').select_option('35')
                 page.get_by_label('Архитектура устройства').select_option('arm64-v8a')
                 page.get_by_role('button', name='Сохранить профиль', exact=True).click()
                 page.goto('https://apps.example/android')
+                # на Android-странице профиль — одна строка, форма в раскрывашке
+                assert page.locator('[data-device-summary]').inner_text() == 'Устройство: Android 15 · ARM64 (только 64 бит)'
+                assert page.locator('[data-device-form]').is_hidden()
                 box = page.locator('[data-compatibility]')
                 assert box.locator('summary').inner_text() == 'Совместима по известным требованиям'
                 select = page.locator('[data-apk-select]')
@@ -217,6 +222,8 @@ def test_apk_upload_progress_and_retry_after_failure(web, conn, cfg, clock, tmp_
             for theme in ("light", "dark"):
                 web.client.get(f"/theme?set={theme}")
                 page.goto("https://apps.example" + path)
+                if path == "/android/add":
+                    page.get_by_role("navigation", name="Способ добавления").get_by_role("link", name="Файл").click()
                 if path == "/android/public":
                     page.get_by_label("Действия с Shared app", exact=True).click()
                     page.get_by_role("button", name="Сменить источник", exact=True).click()
@@ -305,7 +312,7 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("requestfailed", lambda request: errors.append(request.failure))
             page.route("https://apps.example/**", route)
-            page.goto("https://apps.example" + prefix + "/add")
+            page.goto("https://apps.example" + prefix + "/add#add-file")
             for code, mime in ((1, "application/octet-stream"), (2, "application/zip")):
                 if code == 2:
                     page.get_by_label("Действия с Upload app", exact=True).click()
@@ -379,6 +386,7 @@ def test_pending_uploads_tray_link_and_plain_errors(web, conn, cfg, clock, acct,
             assert not conn.execute("SELECT 1 FROM android_uploads WHERE id=?", (left["id"],)).fetchone()
 
             refuse.append(True)
+            page.get_by_role("navigation", name="Способ добавления").get_by_role("link", name="Файл").click()
             form = page.locator("form[data-apk-upload]")
             form.locator('input[type="file"]').set_input_files(make_apk(tmp_path / "refused.apk"))
             form.get_by_role("button", name="Загрузить", exact=True).click()
@@ -638,6 +646,11 @@ def test_download_mark_remembers_version_in_this_browser(web, make_web, conn, cf
         (root / f"{pkg}-{code}").mkdir(parents=True)
         db.add_version(conn, root, shelf.id, pkg, db.NewApk(f"{code}.0", code, 28, 35, "", "a" * 64, "link", 1,
                        str(code) * 64, f"{pkg}-{code}", True), clock.iso())
+    other = "ru.example.other"   # не скачивали — фильтр «Есть обновление для меня» её прячет
+    db.put_app(conn, shelf.id, other, "Other app", "link", "https://example.org/other.apk", clock.iso())
+    (root / f"{other}-1").mkdir(parents=True)
+    db.add_version(conn, root, shelf.id, other, db.NewApk("1.0", 1, 28, 35, "", "a" * 64, "link", 1, "9" * 64,
+                   f"{other}-1", True), clock.iso())
     client = web.client
     if path == "/p":
         pin.set_pin(conn, "482913", clock.iso())
@@ -652,17 +665,124 @@ def test_download_mark_remembers_version_in_this_browser(web, make_web, conn, cf
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("https://apps.example/**", _route_to(client))
             page.goto("https://apps.example" + path)
-            mark = page.locator("[data-downloaded]")
-            assert mark.is_hidden()
+            card = page.locator(f'.app[data-package="{pkg}"]')
+            mark = card.locator("[data-downloaded]")
+            mine = page.get_by_label("Есть обновление для меня", exact=False)
+            assert mark.is_hidden() and page.locator(".mine-filter").is_hidden()
             page.get_by_label("Версия Mark app", exact=True).select_option(index=1)
             with page.expect_download():
-                page.get_by_role("link", name="Скачать APK", exact=True).click()
+                card.get_by_role("link", name="Скачать APK", exact=True).click()
             assert mark.inner_text() == "Вы скачивали 1.0 — на полке 2.0"
             page.reload()
             assert mark.inner_text() == "Вы скачивали 1.0 — на полке 2.0"
+            # фильтр только в этом браузере: оставляет карточки, где на полке новее скачанного
+            assert page.locator(".mine-filter").inner_text() == "Есть обновление для меня · 1"
+            mine.check()
+            assert card.is_visible() and page.locator(f'.app[data-package="{other}"]').is_hidden()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             with page.expect_download():
-                page.get_by_role("link", name="Скачать APK", exact=True).click()
+                card.get_by_role("link", name="Скачать APK", exact=True).click()
             assert mark.inner_text() == "Скачана в этом браузере"
+            # обновлять больше нечего — фильтр снят и спрятан, видны все карточки
+            assert page.locator(".mine-filter").is_hidden() and page.locator(f'.app[data-package="{other}"]').is_visible()
+            assert not errors
+        finally:
+            browser.close()
+
+
+# Контраст текста с фоном под ним (полупрозрачные слои складываются до белого) — WCAG AA, 4.5:1.
+CONTRAST = '''e => {
+  const rgba = x => x.match(/[\\d.]+/g).map(Number);
+  let chain = [], el = e;
+  while(el) { chain.unshift(rgba(getComputedStyle(el).backgroundColor)); el=el.parentElement; }
+  let bg=[255,255,255];
+  for(const c of chain) { const a=c.length>3?c[3]:1; bg=bg.map((x,i)=>c[i]*a+x*(1-a)); }
+  const fg=rgba(getComputedStyle(e).color);
+  const lum=c=>c.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((a,x,i)=>a+x*[.2126,.7152,.0722][i],0);
+  return (Math.max(lum(bg),lum(fg))+.05)/(Math.min(lum(bg),lum(fg))+.05);
+}'''
+NEW_TEXT = (".tip li, .tip .meta, .tip h2, .sortbar a, .tag, .add-seg a, .field-hint, [data-device-summary], .help p, "
+            ".help h3, .help-toggle, .mine-filter, .row .body .meta, .file-pick .btn")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [390, 1280])
+def test_help_tip_segments_and_removed_filter(web, conn, cfg, clock, acct, width, local_chromium, monkeypatch, tmp_path):
+    """Подсказка новичку закрывается навсегда, «?» открывает «Как установить», «Добавить» помнит раздел,
+    «Удалённые» фильтруются; новые элементы читаемы в обеих темах и не дают горизонтальной прокрутки."""
+    from appshelf import removed, store as apple_store
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 123, "name": "Test App"}, {"id": 7, "name": "ВТБ Онлайн"},
+                                                  {"id": 8, "name": "Альфа-Банк"}])
+    seed_app(conn, cfg, clock, name="Test App", versions=("1.0", "2.0"))
+    apple_store.mark_no_license(conn, 1, 7, clock.iso())
+    android_app(conn, cfg, clock, acct.user_id)
+    apk = make_apk(tmp_path / "picked.apk")
+    desktop = width >= 700
+    shots = Path(__file__).resolve().parents[1] / ".work"   # снимки для просмотра глазами, вне git
+    shots.mkdir(exist_ok=True)
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844},
+                                    user_agent=("Mozilla/5.0 (Windows NT 10.0) Chrome/130.0" if desktop
+                                                else "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Mobile/15E148"))
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            web.client.headers["user-agent"] = page.evaluate("navigator.userAgent")   # iPhone — без QR у «Установить»
+            page.route("https://apps.example/**", _route_to(web.client))
+            for theme in ("light", "dark"):
+                web.client.get(f"/theme?set={theme}")
+                for path in ("/?os=apple", "/blocked", "/android", "/android/add", "/settings", "/help"):
+                    page.goto("https://apps.example" + path)
+                    if path == "/android/add":
+                        page.get_by_role("navigation", name="Способ добавления").get_by_role("link", name="Файл").click()
+                        page.locator('#add-file input[type="file"]').set_input_files(apk)
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (path, theme)
+                    for element in page.locator(NEW_TEXT).all():
+                        if element.is_visible():
+                            ratio = element.evaluate(CONTRAST)
+                            assert ratio >= 4.5, (path, theme, element.inner_text()[:40], ratio)
+                    name = path.strip("/").replace("/", "-").replace("?os=", "") or "catalog"
+                    page.screenshot(path=str(shots / f"pages-{name}-{width}-{theme}.png"), full_page=True)
+
+            # Apple: подсказка новичку закрывается и не возвращается; «?» — диалог установки
+            page.goto("https://apps.example/?os=apple")
+            tip = page.get_by_role("complementary", name="Как ставить с полки")
+            assert tip.is_visible()
+            tip.get_by_role("button", name="Скрыть подсказку «Как ставить с полки»").click()
+            page.reload()
+            assert tip.is_hidden()
+            page.get_by_role("button", name="Как установить").first.click()
+            dialog = page.get_by_role("dialog", name="Как установить на iPhone")
+            assert dialog.is_visible() and "Сгрузить приложение" in dialog.inner_text()
+            assert dialog.evaluate("d => d.scrollWidth <= d.clientWidth")
+            page.keyboard.press("Escape")
+            assert dialog.is_hidden()
+            page.get_by_label("Действия с Test App", exact=True).click()
+            assert page.locator(".more[open]").get_by_role("button", name="Скопировать ссылку").is_visible()
+            page.keyboard.press("Escape")
+            if desktop:
+                page.get_by_role("button", name="Показать QR-код для Test App").click()
+                assert page.get_by_alt_text("QR-код установки Test App на iPhone").is_visible()
+
+            # «Добавить»: раздел запомнен, выбранный файл назван; галочка APKPure — только для его адреса
+            page.goto("https://apps.example/android/add")
+            assert page.locator("#add-file").is_visible() and page.locator("#add-search").is_hidden()
+            page.locator('#add-file input[type="file"]').set_input_files(apk)
+            assert page.locator("[data-file-name]").inner_text().startswith("picked.apk · ")
+            page.get_by_role("navigation", name="Способ добавления").get_by_role("link", name="Ссылка").click()
+            risk = page.get_by_text("Понимаю риск APKPure", exact=False)
+            assert risk.is_hidden()
+            page.get_by_label("Ссылка на приложение или APK", exact=False).fill("https://apkpure.com/k-9-mail/com.fsck.k9")
+            assert risk.is_visible()
+
+            # «Удалённые»: по умолчанию — что есть в аккаунте; остальное — фильтром
+            page.goto("https://apps.example/blocked")
+            rows = page.locator(".card.list .row")
+            assert rows.count() == 1 and "Test App" in rows.first.inner_text()
+            page.get_by_role("link", name="Нет в аккаунте · 1").click()
+            assert "ВТБ Онлайн" in rows.first.inner_text() and rows.count() == 1
             assert not errors
         finally:
             browser.close()

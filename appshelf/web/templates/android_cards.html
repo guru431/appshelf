@@ -2,8 +2,9 @@
    «Принять новую подпись», «Скопировать ссылку»; prefix — адреса форм области. Из контекста: fresh, sources, notices,
    android_version, apk_name, app_url (постоянная ссылка на приложение; нужна при edit или qr). Метка сверки с
    RuStore (notices) живёт в last_error — это не ошибка. #}
+{% from "help_parts.html" import android_steps, dialog, help_button %}
 {% macro version_meta(a, v) -%}
-{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
+{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ v['size'] | mb }} МБ
  · {{ sources.get(v['source'], v['source']) }} · подпись {{ v['signer'][:4] }}…{{ v['signer'][-4:] }}{{ ' · закреплена' if v['pinned'] }}
 {%- endmacro %}
 
@@ -69,7 +70,8 @@
           <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
         </svg>
       </button>{% endif %}
-    </div><a class="meta" href="#install-help" data-help>Как установить</a></div>
+      {{ help_button() }}
+    </div></div>
     {% endif %}
     {% if a.pending and edit %}{% set p = a.pending %}
     {% if p['rotation_min_sdk'] %}<p class="meta">Ключ обновлён разработчиком. Обновление с сохранением данных поддерживается начиная с Android {{ android_version(p['rotation_min_sdk']) }}; на старых системах совместимость не подтверждена.</p>
@@ -77,7 +79,8 @@
     {% if v and p['version_code'] <= v['version_code'] %}<p class="meta">После подтверждения эта сборка появится в списке версий. По умолчанию останется последняя.</p>{% endif %}
     <p class="install"><button type="button" class="sm tint" data-dialog="signer-{{ a.package }}">Сравнить версии и решить</button></p>
     {% endif %}
-    {% if a.status == 'queued' %}<div class="meta">в очереди{% if waiting %} · {{ waiting.get(a.package, '') }}{% endif %}</div>
+    {% if a.status == 'queued' %}{% set r = (waiting.get(a.package, '') if waiting else '').replace('В очереди — ', '', 1) %}
+    <div class="meta">в очереди{% if r %} · {{ r[:1] | lower }}{{ r[1:] }}{% endif %}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     {% if a.source != 'upload' and edit %}<form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
@@ -109,14 +112,14 @@
       {% endif %}
       {%- if v and can_publish %}
         {% if a.package in public_packages %}<p class="meta">Уже на публичной полке</p>
-        {% if not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить версии</a>{% endif %}
-        {% elif not a.paid %}<a class="btn tint" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a>{% endif %}
+        {% if not a.paid %}<a class="btn secondary" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить версии</a>{% endif %}
+        {% elif not a.paid %}<a class="btn secondary" href="{{ post_url('/android/public/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a>{% endif %}
       {%- endif %}
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
       {%- endif %}
       {%- if v and a.status in ('ok', 'error') and a.source not in ('upload', 'fourpda') %}
-      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button>Проверить обновление</button></form>
+      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button class="secondary">Проверить обновление</button></form>
       {%- elif v and a.source == 'fourpda' and a.source_page and prefix == '/android' %}{# вложение закреплено: новое выбирают в теме #}
       <a class="btn secondary" href="{{ post_url('/android/4pda/topic') }}&amp;{{ {'url': a.source_page} | urlencode }}">Выбрать новую версию в теме</a>
       {%- endif %}
@@ -182,24 +185,35 @@
 </div>
 {% endmacro %}
 
-{# Подсказки по установке: каталог участника и страница гостя (один раз на странице, после карточек). Там же — отметка
-   «скачано в этом браузере»: «Скачать APK» запоминает пакет и versionCode в localStorage, сервер о ней не знает. #}
+{# Подсказки по установке: каталог участника и страница гостя (один раз на странице, после карточек) — строка к месту и
+   диалог «Как установить» для «?» у карточки. Там же — отметка «скачано в этом браузере»: «Скачать APK» запоминает
+   пакет и versionCode в localStorage, сервер о ней не знает. #}
 {% macro install_hints() %}
 <script>
 (function () {
   var KEY = 'appshelf-apk-downloads';
   function load() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
   function newer(a, b) { try { return BigInt(a) > BigInt(b); } catch (e) { return false; } }   // versionCode до 2^63
+  // «Есть обновление для меня»: переключатель над списком — только если в этом браузере скачивали версию старше полки
+  var filter = document.createElement('label'), toggle = document.createElement('input'), label = document.createElement('span');
+  filter.className = 'check mine-filter'; toggle.type = 'checkbox'; filter.append(toggle, label); filter.hidden = true;
+  var first = document.querySelector('.app'); if (first) first.before(filter);
+  toggle.addEventListener('change', show);
   function show() {
-    var seen = load();
+    var seen = load(), updates = new Set();
     document.querySelectorAll('.app[data-package]').forEach(function (card) {
       var mark = card.querySelector('[data-downloaded]'), got = seen[card.dataset.package];
       if (!mark || !got) return;
+      if (newer(card.dataset.code, got.code)) updates.add(card);
       mark.textContent = got.code === card.dataset.code ? 'Скачана в этом браузере'
         : newer(card.dataset.code, got.code) ? 'Вы скачивали ' + got.name + ' — на полке ' + card.dataset.version
         : 'Вы скачивали ' + got.name;
       mark.hidden = false;
     });
+    if (!updates.size) toggle.checked = false;
+    filter.hidden = !updates.size;
+    label.textContent = 'Есть обновление для меня · ' + updates.size;
+    document.querySelectorAll('.app').forEach(function (card) { card.hidden = toggle.checked && !updates.has(card); });
   }
   addEventListener('click', function (e) {
     var link = e.target.closest && e.target.closest('[data-apk-download]');
@@ -213,23 +227,8 @@
   show();
 })();
 </script>
-  {% if device == 'desktop' %}<p>На компьютере: откройте QR-код у приложения или скопируйте ссылку на телефон.</p>
-  {% else %}<p>«Скачать APK» → «Открыть» в уведомлении загрузки → «Установить».</p>{% endif %}
-  <p>При другой подписи может потребоваться удаление приложения: его данные будут потеряны. Проверьте предупреждения на карточке.</p>
-  <details id="install-help"><summary>Как установить</summary><details><summary>Первый раз</summary>
-  <p>Открывайте страницу в Chrome на телефоне. «Скачать APK» → когда файл скачается, нажмите «Открыть» на плашке внизу
-    экрана (или уведомление «Загрузка завершена») → «Установить». В «Загрузки» заходить не нужно.</p>
-  <p>В первый раз Android попросит разрешить установку из браузера («Установка неизвестных приложений» для Chrome) —
-    разрешите и вернитесь к установке.</p>
-  </details><details><summary>Обновить</summary>
-  <p>Обновление — тот же «Скачать APK» поверх установленного: данные приложения остаются.</p>
-  <p>Поверх встаёт только APK с той же подписью. Стояло из Google Play или другого магазина с другой подписью —
-    сначала удалите приложение (данные удалятся), затем ставьте отсюда. Отпечаток подписи — у карточки.</p>
-  </details><details><summary>Если не устанавливается</summary>
-  <p>Samsung: «Настройки → Безопасность и конфиденциальность → Auto Blocker» не даёт ставить не из Galaxy Store и Play —
-    выключите его на время установки. Huawei: выключите «Режим без угроз» (Pure Mode) в настройках безопасности.</p>
-  <p>Play Protect может предупредить о неизвестном приложении — «Подробнее» → «Всё равно установить».</p>
-  <p>Проверьте минимальную версию Android на карточке и сообщение системы. Требования установки могут зависеть от устройства и региона:
-    <a href="https://developer.android.com/developer-verification">проверка разработчиков Android</a>.</p>
-  </details></details>
+<p class="hint">{% if device == 'desktop' %}На компьютере: откройте QR-код у приложения или скопируйте ссылку на телефон.
+  {%- else %}«Скачать APK» → «Открыть» в уведомлении загрузки → «Установить».{% endif %} Другая подпись может потребовать
+  удаления приложения вместе с данными — смотрите предупреждения на карточке.</p>
+{{ dialog('Как установить на Android', android_steps) }}
 {% endmacro %}

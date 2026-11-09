@@ -1,12 +1,16 @@
 {% extends "base.html" %}
 {% block main %}
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
-{% include 'device_profile.html' %}
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
+{# Способы добавления — сегментами: виден один раздел, выбор помнит браузер. Без скрипта видны все разделы подряд. #}
+<div data-add>
+<nav class="add-seg" aria-label="Способ добавления" data-add-seg hidden>
+  {%- if public %}<a href="#add-own">Моя полка</a>{% endif %}<a href="#add-search">Поиск</a><a href="#add-link">Ссылка</a>
+  <a href="#add-play">Google Play</a><a href="#add-file">Файл</a></nav>
 {% if public %}
-<h2>Из моей полки</h2>
-<p class="hint">Добавить уже скачанное приложение с полки администратора вместе с сохранёнными версиями.
-  На публичной полке будут отдельные копии; для уже добавленного приложения можно дополнить историю.</p>
+<section id="add-own" data-add-part aria-labelledby="add-own-title">
+<h2 id="add-own-title">Из моей полки</h2>
+<p class="hint">Уже скачанное приложение с вашей полки — вместе с сохранёнными версиями; у добавленного можно дополнить историю.</p>
 {% if own_apps %}
 <div class="card list">
 {% for a in own_apps %}
@@ -15,21 +19,21 @@
   {% if a.package in on_shelf %}<span class="meta">Уже на публичной</span>{% endif %}
   {% if a.paid %}<span class="meta">Купленное — только на своей полке</span>
   {% else %}<details class="pop more"><summary aria-label="Действия с {{ a.name }}">⋯</summary>
-    <div class="sheet"><a class="btn tint" href="{{ post_url(prefix ~ '/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a></div>
+    <div class="sheet action-list"><a class="btn secondary" href="{{ post_url(prefix ~ '/add/from-shelf') }}&amp;package={{ a.package | urlencode }}">Сравнить и добавить в публичную</a></div>
   </details>{% endif %}
 </div>
 {% endfor %}
 </div>
 {% else %}<p class="empty">На вашей Android-полке пока нет скачанных приложений. <a href="/android">Открыть мою полку</a></p>{% endif %}
+</section>
 {% endif %}
-<h2>Найти приложение</h2>
-<form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, имя пакета или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
-<p class="hint">RuStore, F-Droid, его архив и IzzyOnDroid, Google Play, AppGallery и APKPure{% if not public %}, а также 4PDA вашим аккаунтом{% endif %}.
-  Выберите источник: сборки одного приложения могут отличаться подписью и функциями. AppGallery и APKPure
-  проверяются по найденным пакетам. Если приложение приходит набором файлов, проверяются ссылки автора на GitHub
-  в описании и на его сайте. Поиска по всему GitHub нет.</p>
-{% if not public %}<p class="hint">На 4PDA найдите тему, затем выберите подходящий APK.
-  <a href="/fourpda/{{ who.id }}/connect">Подключение аккаунта 4PDA</a>.</p>{% endif %}
+<section id="add-search" data-add-part aria-labelledby="add-search-title">
+<h2 id="add-search-title">Найти приложение</h2>
+<form id="source-search" method="get" action="{{ prefix }}/add" class="field"><input type="search" name="q" value="{{ q }}" placeholder="Название, пакет или ссылка" aria-label="Поиск по всем источникам" maxlength="200" required><button>Найти</button><button type="button" id="stop-search" class="secondary" hidden>Остановить</button></form>
+<p class="hint">RuStore, F-Droid и IzzyOnDroid, Google Play, AppGallery, APKPure{% if not public %} и 4PDA вашим аккаунтом
+  (<a href="/fourpda/{{ who.id }}/connect">подключение</a>){% endif %}. Сборки из разных источников могут отличаться
+  подписью — <a href="/help#android-add">подробнее</a>.</p>
+{% include 'device_profile.html' %}
 <div id="search-progress" class="card" hidden>
   <p id="search-summary" role="status" aria-live="polite"></p>
   <div id="source-statuses" aria-live="polite"></div>
@@ -106,20 +110,20 @@
   if (input.value.trim()) start();
 }());
 </script>
-<p class="hint">RuStore — универсальный APK, подпись сверяется с той, что сообщает RuStore. Платные без входа в RuStore
-  не скачать.</p>
-<h2>Google Play</h2>
+</section>
+<section id="add-play" data-add-part aria-labelledby="add-play-title">
+<h2 id="add-play-title">Google Play</h2>
 {% if play_accounts %}
 <form method="post" action="{{ post_url(prefix ~ '/add/play') }}" class="card">
-  <label>Ссылка Google Play или имя пакета<input name="package" placeholder="https://play.google.com/store/apps/details?id=… или com.example.app" required></label>
+  <label>Ссылка Google Play или имя пакета<input name="package" placeholder="Ссылка или имя пакета" required>
+    <span class="field-hint">Например, https://play.google.com/store/apps/details?id=… или com.example.app</span></label>
   {% if play_accounts | length > 1 %}<label>Каким аккаунтом<select name="account">
     {%- for g in play_accounts %}<option value="{{ g.id }}">{{ g.email }}</option>{% endfor %}</select></label>
   {%- else %}<input type="hidden" name="account" value="{{ play_accounts[0].id }}">{% endif %}
   <button>Проверить и добавить</button></form>
-<p class="hint">До добавления проверяются доступность приложения и доставка одним APK. Набор файлов (split APK) или
-  некупленное платное приложение не добавится: причина появится здесь. {% if public %}Купленное на публичную полку не
-  добавляется.{% else %}Купленное — только на свою полку; без Play Store на телефоне оно может не пройти проверку
-  лицензии.{% endif %}</p>
+<p class="hint">До добавления проверяется доставка одним APK: набор файлов (split APK) или некупленное платное не
+  добавится. {% if public %}Купленное на публичную полку не добавляется.{% else %}Купленное — только на свою полку.{% endif %}
+  <a href="/help#android-add">Подробнее</a></p>
 {% elif has_google %}
 <p class="hint">Google-аккаунт добавлен, но к Google Play ещё не подключён: «Подключить к Google Play» на странице
   <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}. Понадобится
@@ -128,29 +132,73 @@
 <p class="hint">Чтобы брать приложения из Google Play, добавьте Google-аккаунт и подключите его к Google Play на
   странице <a href="/apple">«Аккаунты»</a>{% if public %} (для публичной полки — аккаунт владельца){% endif %}.</p>
 {% endif %}
-<h2>По ссылке</h2>
+</section>
+<section id="add-link" data-add-part aria-labelledby="add-link-title">
+<h2 id="add-link-title">По ссылке</h2>
 <form method="post" action="{{ post_url(prefix ~ '/add/link') }}" class="card">
-  <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://f-droid.org/packages/… или https://…/app.apk" required></label>
+  <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://…" required>
+    <span class="field-hint">Страница в Google Play, AppGallery, F-Droid, IzzyOnDroid, APKPure, RuStore, репозиторий
+      GitHub{% if not public %}, APK на 4PDA{% endif %} или прямая ссылка на файл .apk</span></label>
   <label>Название (необязательно)<input name="name"></label>
-  <label><input type="checkbox" name="ack" value="1"> Для APKPure: APKPure распространял подменённые APK; если пакета
-    нет в RuStore, подпись не с чем сверить — понимаю</label>
+  <label class="check" data-link-apkpure{% if 'apkpure' not in link_url | lower %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск
+    APKPure: он распространял подменённые APK; если пакета нет в RuStore, подпись не с чем сверить</label>
   <button>Добавить</button></form>
-<p class="hint">Понимает страницы приложений Google Play, AppGallery (или ID вида C102312137), F-Droid, IzzyOnDroid, APKPure, RuStore и репозитории GitHub —
-  источник и пакет берутся из адреса. Иначе ссылка — на сам файл .apk на сайте банка или разработчика, только https:
-  ночью полка проверяет, не сменился ли файл. Для F-Droid автоматически проверяется и архив. Выбранная версия
-  F-Droid или IzzyOnDroid сохраняется без обновления; репозиторий GitHub следует последнему стабильному выпуску с APK.
-  Адреса локальной сети не принимаются.</p>
-{% if not public %}<p class="hint">Ссылку на отдельный APK 4PDA тоже можно вставить сюда: скачивание использует
-  ваш подключённый аккаунт 4PDA. Выбранное вложение сохраняется без автоматического обновления.</p>{% endif %}
-<h2>Свой файл</h2>
+<script>
+(function () {   // галочка риска APKPure — только для адреса APKPure
+  var box = document.querySelector('[data-link-apkpure]'), url = box.closest('form').elements.url;
+  url.addEventListener('input', function () { box.hidden = !/apkpure/i.test(url.value); });
+}());
+</script>
+<p class="hint">Источник и пакет берутся из адреса; прямую ссылку на .apk (только https) полка проверяет ночью.
+  <a href="/help#android-add">Подробнее</a></p>
+</section>
+<section id="add-file" data-add-part aria-labelledby="add-file-title">
+<h2 id="add-file-title">Свой файл</h2>
 <form method="post" action="{{ post_url(prefix ~ '/add/upload') }}" enctype="multipart/form-data" class="card" data-apk-upload data-upload-target="{{ prefix }}" data-upload-api="{{ post_url(prefix ~ '/uploads') }}">
-  {# Android file providers can report APKs as ZIP or generic binary data; validate on the server. #}
-  <label>Файл APK<input name="file" type="file" required></label>
+  {# Android file providers can report APKs as ZIP or generic binary data; validate on the server. Поле файла
+     прозрачно лежит поверх кнопки «Выбрать APK…»: нажатие и фокус — его, вид — темы. #}
+  <label>Файл APK<span class="file-pick"><input name="file" type="file" required><span class="btn secondary">Выбрать APK…</span></span>
+    <span class="field-hint" data-file-name>Файл не выбран</span></label>
   <label>Название (необязательно)<input name="name"></label>
   <button>Загрузить</button>
   {% include "apk_upload_progress.html" %}</form>
-<p class="hint">Один целый APK до 1 ГБ. Наборы (split APK, XAPK, APKS) из браузера не ставятся. Ночью свой файл не
-  обновляется — новую версию загрузите на карточку («⋯»).</p>
+<p class="hint">Один целый APK до 1 ГБ; наборы (split APK, XAPK, APKS) не подойдут. Ночью свой файл не обновляется —
+  новую версию загрузите на карточку («⋯»).</p>
+</section>
+</div>
+<script>
+(function () {   // сегменты «Добавить»: раздел из адреса (#add-…), затем по запросу формы, затем последний выбранный
+  var root = document.querySelector('[data-add]'), nav = root.querySelector('[data-add-seg]');
+  var links = Array.prototype.slice.call(nav.querySelectorAll('a')), KEY = 'appshelf-add-segment', saved = null;
+  var ids = links.map(function (a) { return a.hash.slice(1); });
+  function pick(id, remember) {
+    links.forEach(function (a) {
+      var on = a.hash.slice(1) === id;
+      a.classList.toggle('on', on);
+      if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current');
+      document.getElementById(a.hash.slice(1)).hidden = !on;
+    });
+    if (remember) { try { localStorage.setItem(KEY, id); } catch (e) {} }
+  }
+  nav.addEventListener('click', function (e) {
+    var a = e.target.closest('a'); if (!a) return;
+    e.preventDefault(); pick(a.hash.slice(1), true);
+  });
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  var asked = location.hash.slice(1), form = {{ ('add-search' if q else 'add-link' if link_url else '') | tojson }};
+  root.classList.add('segmented'); nav.hidden = false;
+  pick(ids.indexOf(asked) >= 0 ? asked : form || (ids.indexOf(saved) >= 0 ? saved : ids[0]), false);
+}());
+(function () {   // «Выбрать APK…»: имя и размер выбранного файла
+  var input = document.querySelector('#add-file input[type=file]'), out = document.querySelector('[data-file-name]');
+  function size(bytes) {
+    return bytes < 1048576 ? Math.ceil(bytes / 1024) + ' КБ'
+      : (bytes / 1048576).toLocaleString('ru-RU', {maximumFractionDigits: 1}) + ' МБ';
+  }
+  function show() { var f = input.files[0]; out.textContent = f ? f.name + ' · ' + size(f.size) : 'Файл не выбран'; }
+  input.addEventListener('change', show); show();
+}());
+</script>
 <section data-pending-uploads data-upload-api="{{ post_url(prefix ~ '/uploads') }}" aria-labelledby="pending-uploads-title" hidden>
   <h2 id="pending-uploads-title">Незавершённые загрузки</h2>
   <p class="hint">Начаты в другом браузере или на другом устройстве, либо данные браузера очищены. Пока загрузка не

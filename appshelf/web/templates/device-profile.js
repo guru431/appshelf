@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var key = 'appshelf-device-profile', profile = null;
+  var key = 'appshelf-device-profile', profile = null, invite = 'appshelf-device-invite-closed';
   var allowed = ['', 'arm64-v8a', 'arm64-v8a,armeabi-v7a,armeabi', 'armeabi-v7a,armeabi', 'x86_64', 'x86_64,x86', 'x86'];
   function valid(p) {
     return p && (p.sdk === 0 || Number.isInteger(p.sdk) && p.sdk >= 23 && p.sdk <= 36) && allowed.includes(p.abi);
@@ -29,6 +29,18 @@
     document.querySelectorAll('[data-device-form]').forEach(function (form) {
       form.elements.sdk.value = profile && profile.sdk || '';
       form.elements.abi.value = profile && profile.abi || '';
+    });
+    // строка «Устройство: …» Android-страниц; без профиля — приглашение, которое вошедший может скрыть
+    document.querySelectorAll('[data-device-line]').forEach(function (line) {
+      var form = line.querySelector('[data-device-form]'), text = line.querySelector('[data-device-summary]');
+      var dismiss = line.querySelector('[data-device-dismiss]'), closed = false;
+      function label(select, none) { return select.value ? select.selectedOptions[0].textContent : none; }
+      text.textContent = profile ? 'Устройство: Android ' + label(form.elements.sdk, 'не указан') + ' · ' +
+        label(form.elements.abi, 'архитектура не указана') : 'Для какого устройства?';
+      text.nextElementSibling.textContent = profile ? 'изменить' : 'указать';
+      try { closed = !!localStorage.getItem(invite); } catch (_) {}
+      if (dismiss) dismiss.hidden = !!profile;
+      line.hidden = !profile && closed && !!dismiss;
     });
     document.querySelectorAll('[data-compatibility]').forEach(function (box) {
       var card = box.closest('.app'), select = card.querySelector('[data-apk-select]');
@@ -66,7 +78,7 @@
       event.preventDefault();
       var next = {sdk: Number(form.elements.sdk.value), abi: form.elements.abi.value};
       if (!valid(next)) return;
-      try { localStorage.setItem(key, JSON.stringify(next)); profile = next; update();
+      try { localStorage.setItem(key, JSON.stringify(next)); localStorage.removeItem(invite); profile = next; update();
         form.querySelector('[data-device-saved]').textContent = 'Профиль сохранён в этом браузере';
       } catch (_) { form.querySelector('[data-device-saved]').textContent = 'Браузер не разрешил сохранить профиль'; }
     });
@@ -74,6 +86,12 @@
       try { localStorage.removeItem(key); profile = null; update();
         form.querySelector('[data-device-saved]').textContent = 'Профиль сброшен';
       } catch (_) { form.querySelector('[data-device-saved]').textContent = 'Браузер не разрешил сбросить профиль'; }
+    });
+  });
+  document.querySelectorAll('[data-device-dismiss]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      button.closest('[data-device-line]').hidden = true;
+      try { localStorage.setItem(invite, '1'); } catch (_) {}
     });
   });
   addEventListener('change', function (event) {

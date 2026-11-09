@@ -118,7 +118,8 @@ def test_add_from_rustore_search_and_install_link(web, conn, tmp_path):
     assert (r.status_code, r.headers["location"]) == (303, "/android")
     app = db.get_app(conn, shelf(conn).id, PKG)
     assert (app["name"], app["source"], app["status"]) == ("Пример Банк", "rustore", "queued")
-    assert "в очереди" in web.client.get("/android").text
+    page = web.client.get("/android").text
+    assert "в очереди · задания Apple и Android" in page and "В очереди —" not in page  # причина без повтора
     work(web, conn)
     page = web.client.get("/android").text
     assert f"https://apps.example/d/{shelf(conn).shelf}/{PKG}-1/{PKG}-1.0.apk" in page
@@ -279,6 +280,15 @@ def test_add_link_apkpure_passes_ack_without_card(web, conn):
     assert jobs == [("", {"source": "apkpure", "ref": "com.fsck.k9", "name": "", "ack": True}),
                     ("", {"source": "apkpure", "ref": "com.fsck.k9", "name": "", "ack": False})]
     assert db.shelf_for_user(conn, 1) is not None and db.list_apps(conn, shelf(conn).id) == []
+
+
+def test_apkpure_risk_box_only_for_apkpure_link_and_small_size(web):
+    from appshelf.web.common import TEMPLATES
+    assert "data-link-apkpure hidden" in web.client.get("/android/add").text
+    r = web.client.post("/android/add/link", data={"url": "http://downloads.apkpure.example/x.apk"})
+    assert r.status_code == 400 and "data-link-apkpure hidden" not in r.text   # ошибка ссылки APKPure — галочка видна
+    mb = TEMPLATES.env.filters["mb"]
+    assert (mb(300_000), mb(1048576), mb(3 * 1048576 + 600_000)) == ("< 1", "1", "4")
 
 
 def test_add_link_play_page_needs_connected_account(web, conn, clock, acct):
