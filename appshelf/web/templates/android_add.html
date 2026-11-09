@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
 {% if error %}<div class="banner">{{ error }}</div>{% endif %}
-{% include 'device_profile.html' %}
 {% if public %}<p class="banner">Добавление на публичную полку: её видят все участники и гости по PIN. <a href="/android/add">На свою полку</a></p>{% endif %}
 {% if public %}
 <h2>Из моей полки</h2>
@@ -30,6 +29,7 @@
   в описании и на его сайте. Поиска по всему GitHub нет.</p>
 {% if not public %}<p class="hint">На 4PDA найдите тему, затем выберите подходящий APK.
   <a href="/fourpda/{{ who.id }}/connect">Подключение аккаунта 4PDA</a>.</p>{% endif %}
+{% include 'device_profile.html' %}
 <div id="search-progress" class="card" hidden>
   <p id="search-summary" role="status" aria-live="polite"></p>
   <div id="source-statuses" aria-live="polite"></div>

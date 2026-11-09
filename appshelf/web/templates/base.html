@@ -304,6 +304,12 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 .tip ol { margin: 0 0 10px; padding-left: 22px; font-size: 15px; line-height: 1.45; }
 .tip li + li { margin-top: 4px; }
 .tip > .meta { margin: 0; }
+/* строка «Устройство: …» Android-страниц (полная форма — в «Настройках») */
+.device-line { display: flex; align-items: flex-start; gap: 8px; }
+.device-line > details { flex: 1; min-width: 0; }
+.device-line > button { flex: none; min-height: 44px; }
+.device-line summary > span:first-child { min-width: 0; }
+.device-body { padding: 0 12px 12px; }
 </style>
 </head>
 <body>
@@ -370,7 +376,7 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 <div class="banner">Вход в Apple ID {{ acct.email }} истёк — <a href="/login?{{ relogin }}">войти заново</a>, задания ждут.</div>
 {%- endif %}
 {% block main %}{% endblock %}</main>
-<script src="/pwa/device-profile.js?v=1"></script>
+<script src="/pwa/device-profile.js?v=2"></script>
 <script>
 function fitSheets() {
   document.querySelectorAll('details.pop[open] > .sheet').forEach(function(sheet) {

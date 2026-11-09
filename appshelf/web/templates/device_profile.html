@@ -1,5 +1,8 @@
-<details class="card" data-device-profile>
-<summary>Для какого устройства</summary>
+{# Профиль устройства (device-profile.js, только в этом браузере). «Настройки» — полная форма под своим заголовком;
+   Android-страницы — одна строка «Устройство: …» с той же формой в раскрывашке. Профиль не задан — строка-приглашение;
+   вошедший может её закрыть (задать профиль можно и в «Настройках»), у гостя «Настроек» нет — у него не закрывается. #}
+{% set settings_page = nav == 'settings' %}
+{% set body %}
 <p class="hint">Необязательный профиль хранится только в этом браузере. Проверяем известные требования APK;
 успешную установку и совместимость с уже установленным приложением подтвердит Android.</p>
 <form data-device-form>
@@ -16,4 +19,17 @@
 </select></label>
 <p class="install"><button>Сохранить профиль</button><button type="button" class="secondary" data-device-reset>Сбросить</button></p>
 <p class="meta" role="status" data-device-saved></p>
-</form></details>
+</form>
+{% endset %}
+{% if settings_page %}
+<h2 id="device">Android-устройство</h2>
+<div class="card" data-device-profile>{{ body }}</div>
+{% else %}
+<div class="device-line" data-device-line>
+<details class="shelf-search card" data-device-profile>
+<summary><span data-device-summary>Для какого устройства? Укажите — карточки покажут совместимость</span><span class="meta">изменить</span></summary>
+<div class="device-body">{{ body }}</div>
+</details>
+{% if users %}<button type="button" class="sm secondary" data-device-dismiss aria-label="Скрыть приглашение указать устройство" hidden>Скрыть</button>{% endif %}
+</div>
+{% endif %}

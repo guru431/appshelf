@@ -3,7 +3,6 @@
 {% from "help_parts.html" import tip %}
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
-{% include 'device_profile.html' %}
 {% if guest %}
 <p><a class="btn pill" href="{{ prefix }}/add">Добавить в публичную</a></p>
 {% endif %}
@@ -26,6 +25,7 @@
 </div>
 {% endfor %}
 {% include 'shelf_filter.html' %}
+{% if apps or total %}{% include 'device_profile.html' %}{% endif %}
 {% if not apps and not total and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
   {%- if edit %} <a href="{{ prefix }}/add">Добавьте приложение</a> — из RuStore, по ссылке с сайта или своим файлом.{% endif %}</p>{% endif %}
 {% if apps or total %}{% call tip('android', 'Как ставить с полки') %}

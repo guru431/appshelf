@@ -133,11 +133,15 @@ def test_short_screen_menu_settings_and_device_profile(web, conn, cfg, clock, tm
                 page.wait_for_url('**/settings')
                 assert page.get_by_role('navigation', name='Оформление').locator('[aria-current="true"]').inner_text() == ('Светлая' if theme == 'light' else 'Тёмная')
                 assert page.get_by_role('link', name='Аккаунты Apple ID и Google').is_visible()
-                page.locator('[data-device-profile] > summary').click()
+                # в «Настройках» форма открыта под своим заголовком, без раскрывашки
+                assert page.get_by_role('heading', name='Android-устройство').is_visible()
                 page.get_by_label('Android устройства').select_option('35')
                 page.get_by_label('Архитектура устройства').select_option('arm64-v8a')
                 page.get_by_role('button', name='Сохранить профиль', exact=True).click()
                 page.goto('https://apps.example/android')
+                # на Android-странице профиль — одна строка, форма в раскрывашке
+                assert page.locator('[data-device-summary]').inner_text() == 'Устройство: Android 15 · ARM64 (только 64 бит)'
+                assert page.locator('[data-device-form]').is_hidden()
                 box = page.locator('[data-compatibility]')
                 assert box.locator('summary').inner_text() == 'Совместима по известным требованиям'
                 select = page.locator('[data-apk-select]')
