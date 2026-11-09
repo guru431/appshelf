@@ -10,10 +10,10 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, people, store
 from .accounts import ACCOUNT_BUSY, ARCHIVE_DOWN
-from .common import WebCtx, back
+from .common import CREATED_COOKIE, WebCtx, back
 
 SELF = "Себя удалить нельзя"
-CREATED = "appshelf_created"  # новая ссылка до показа на /admin: ответ на POST — переход, «обновить» её не повторит
+CREATED = CREATED_COOKIE  # новая ссылка до показа на /admin: ответ на POST — переход, «обновить» её не повторит
 CREATED_AGE = 300
 
 
@@ -75,11 +75,11 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
 
     @router.get("", response_class=HTMLResponse)
     def admin(request: Request):
-        prefix, _, token = request.cookies.get(CREATED, "").partition(":")
+        prefix, _, token = w.cookie(request, CREATED).partition(":")
         ok = prefix in ("join", "l") and re.fullmatch(r"[\w-]+", token)
         resp = admin_page(request, f"{w.cfg.public_base}/{prefix}/{token}" if ok else "")
-        if CREATED in request.cookies:
-            resp.delete_cookie(CREATED, path="/")
+        if w.cookie(request, CREATED):
+            w.delete_cookie(resp, CREATED)
         return resp
 
     @router.post("/invites")

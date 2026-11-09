@@ -77,7 +77,7 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
              request.state.who) = found
     return w.page(request, "login.html", "apple" if add else "login", status_code, step=step, email=email,
                   next=safe_next(next_), error=error, action=action, add=add, link=link,
-                  invited=bool(request.cookies.get(INVITE_COOKIE)))
+                  invited=bool(w.cookie(request, INVITE_COOKIE)))
 
 
 def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None, how: str = ""):
@@ -124,7 +124,7 @@ def decide(w: WebCtx, c, request: Request, email: str, user_id: int | None) -> I
         return Intent(email, account_id=acct.id, user_id=user_id)
     if user_id is not None:
         return new_intent(w, email, user_id=user_id)
-    invite = people.active_invite(c, request.cookies.get(INVITE_COOKIE, ""))
+    invite = people.active_invite(c, w.cookie(request, INVITE_COOKIE))
     if invite is not None:
         return new_intent(w, email, invite_id=invite["id"])
     if w.cfg.owner_email and email == w.cfg.owner_email and not people.owner_exists(c):
@@ -189,8 +189,8 @@ def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: st
 def admitted(w: WebCtx, request: Request, user, aid: int, next_: str, how: str = ""):
     """Вход Apple ID состоялся: человек — к вошедшим в браузере, cookie шага кода и приглашения — прочь."""
     resp = signed_in(w, request, back(safe_next(next_)), user, aid, how)
-    resp.delete_cookie(LOGIN_COOKIE, path="/")
-    resp.delete_cookie(INVITE_COOKIE, path="/")
+    w.delete_cookie(resp, LOGIN_COOKIE)
+    w.delete_cookie(resp, INVITE_COOKIE)
     return resp
 
 
@@ -278,7 +278,7 @@ def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *
 def register_routes(app: FastAPI, w: WebCtx) -> None:
     @app.get("/login", response_class=HTMLResponse)
     def login_form(request: Request, next: str = "/", email: str = ""):
-        pending = w.flow.pending(request.cookies.get(LOGIN_COOKIE, ""))
+        pending = w.flow.pending(w.cookie(request, LOGIN_COOKIE))
         if pending is not None:  # вернулись на страницу посреди шага кода
             return login_page(w, request, step=2, email=pending.email, next_=next, add=pending.user_id is not None)
         return login_page(w, request, email=email, next_=next)
@@ -289,7 +289,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
 
     @app.post("/login/code", response_class=HTMLResponse)
     def login_code(request: Request, code: str = Form(""), next: str = Form("/")):
-        flow_id = request.cookies.get(LOGIN_COOKIE, "")
+        flow_id = w.cookie(request, LOGIN_COOKIE)
         pending = w.flow.pending(flow_id)
         # ошибка шага кода при «Добавить Apple ID» — снова та же форма добавления, а не вход с приглашением
         add = pending.user_id is not None if pending is not None else w.person(request) is not None
@@ -336,7 +336,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
     @app.post("/login/cancel")
     def login_cancel(request: Request, next: str = Form("/")):
         """«Начать заново» на шаге кода: незавершённый вход забыт, форма шага 1 с тем же адресом."""
-        flow_id = request.cookies.get(LOGIN_COOKIE, "")
+        flow_id = w.cookie(request, LOGIN_COOKIE)
         pending = w.flow.pending(flow_id)
         w.flow.cancel(flow_id)
         if pending is not None and pending.user_id is not None:
@@ -344,7 +344,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         else:
             email = pending.email if pending is not None else ""
             resp = back("/login?" + urlencode({"email": email, "next": safe_next(next)}))
-        resp.delete_cookie(LOGIN_COOKIE, path="/")
+        w.delete_cookie(resp, LOGIN_COOKIE)
         return resp
 
     @app.get("/join/{token}", response_class=HTMLResponse)

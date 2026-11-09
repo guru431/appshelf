@@ -7,7 +7,7 @@ import pytest
 from apk_factory import make_apk
 from appshelf import jobs, people, store
 from appshelf.android import db, fetch, pin, rustore
-from helpers import make_account, sign_in
+from helpers import GUEST, make_account, sign_in
 
 PKG = "ru.example.app"
 URL = "https://bank.example/app.apk"
@@ -343,7 +343,7 @@ def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, 
     web.client.post("/android/public/pin", data={"pin": "482913"})
     guest = make_web(cfg, conn)
     guest.client.post("/p", data={"pin": "482913"})
-    old_cookie = guest.client.cookies.get(pin.COOKIE)
+    old_cookie = guest.client.cookies.get(GUEST)
     real_replace = fetch.os.replace
 
     def interrupted(src, dst):

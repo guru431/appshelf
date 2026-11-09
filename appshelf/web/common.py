@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import google, jobs, people, store, webauth
+from ..android import pin
 from ..config import GB, Config
 from .login import Limiter, LoginFlow
 
@@ -23,13 +24,16 @@ ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID о
 WHO_COOKIE = "appshelf_who"        # активный участник Android-раздела: id одного из вошедших
 LOGIN_COOKIE = "appshelf_login"    # незавершённый вход (шаг кода 2FA): id в памяти LoginFlow
 INVITE_COOKIE = "appshelf_invite"  # принятое приглашение — до первого входа нового Apple ID
-# Cookie входа, выбора полки и потока Google на https — с префиксом __Host- (браузер требует Secure, Path=/ и не
+CREATED_COOKIE = "appshelf_created"  # новая ссылка до показа на /admin (web/admin.py)
+# Свои cookie с состоянием (вход и его поток, выбор полки, поток Google, приглашение, новая ссылка, гость
+# публичной полки) на https — с префиксом __Host- (браузер требует Secure, Path=/ и не
 # принимает Domain): соседний поддомен не подложит их на родительский домен. Имена в коде — без префикса, его ставит
 # WebCtx. Старые имена (без префикса) WebCtx.cookie читает год после выкладки префикса — столько живёт cookie входа,
 # а новых со старым именем уже не ставят: после 2028-01-01 (выкладка — до 2027-01-01; позже — сдвинуть) чтение
 # старых имён убрать.
 HOST_PREFIX = "__Host-"
-HOST_COOKIES = frozenset((webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE))
+HOST_COOKIES = frozenset((webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE, LOGIN_COOKIE, INVITE_COOKIE,
+                          CREATED_COOKIE, pin.COOKIE))
 
 
 @dataclass

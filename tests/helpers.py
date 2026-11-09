@@ -10,13 +10,15 @@ from starlette.testclient import TestClient
 
 from appshelf import google, people, store, webauth
 from appshelf.ipatool import LicenseNotFound
-from appshelf.web.common import ACCT_COOKIE, HOST_PREFIX, WHO_COOKIE
+from appshelf.android import pin
+from appshelf.web.common import ACCT_COOKIE, HOST_PREFIX, INVITE_COOKIE, WHO_COOKIE
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 OWNER_EMAIL = "owner@example"
 HOST = "apps.example"
-# имена в браузере: сайт тестов — https, у cookie входа, выбора полки и потока Google префикс __Host-
+# имена в браузере: сайт тестов — https, у своих cookie с состоянием префикс __Host-
 AUTH, ACCT, WHO, GFLOW = (HOST_PREFIX + n for n in (webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE))
+GUEST, INVITE = HOST_PREFIX + pin.COOKIE, HOST_PREFIX + INVITE_COOKIE
 
 
 class ShelfClient(TestClient):

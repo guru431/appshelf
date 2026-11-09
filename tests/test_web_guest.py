@@ -7,7 +7,7 @@ from PIL import Image
 from apk_factory import make_apk
 from appshelf.android import db, fetch, pin
 from appshelf.android.sources import Latest
-from helpers import HOST, make_account, sign_in
+from helpers import GUEST, HOST, make_account, sign_in
 
 PKG = "ru.example.app"
 URL = "https://bank.example/app.apk"
@@ -146,7 +146,7 @@ def test_guest_right_pin_lists_apps_without_actions(shelf, anon):
     r = enter(anon.client, PIN)
     assert (r.status_code, r.headers["location"]) == (303, "/p")
     cookie = r.headers["set-cookie"].lower()
-    assert cookie.startswith(f"{pin.COOKIE}=") and "httponly" in cookie and "secure" in cookie
+    assert cookie.startswith(f"{GUEST.lower()}=") and "httponly" in cookie and "secure" in cookie
     assert "samesite=lax" in cookie and f"max-age={pin.GUEST_DAYS * 86400}" in cookie
     page = anon.client.get("/p").text
     assert "Банк" in page and "Скачать APK" in page and f"/d/{shelf.shelf}/{PKG}-1/{PKG}-1.0.apk" in page
@@ -203,9 +203,9 @@ def test_guest_cookie_survives_global_close_but_not_pin_change(shelf, anon, web,
     assert enter(anon.client, PIN).status_code == 303
     close_for_all(make_web(cfg, conn).client)                                   # чужие браузеры закрыли ввод
     assert "Скачать APK" in anon.client.get("/p").text                           # гость с cookie — видит
-    value = anon.client.cookies.get(pin.COOKIE)
+    value = anon.client.cookies.get(GUEST)
     forged = make_web(cfg, conn)
-    forged.client.cookies.set(pin.COOKIE, value[:-1] + ("0" if value[-1] != "0" else "1"), domain=HOST)
+    forged.client.cookies.set(GUEST, value[:-1] + ("0" if value[-1] != "0" else "1"), domain=HOST)
     assert "Скачать APK" not in forged.client.get("/p").text
     web.client.post("/android/public/pin", data={"pin": "111111"})               # смена PIN — эпоха +1
     page = anon.client.get("/p").text
@@ -222,5 +222,5 @@ def test_signed_in_member_sees_guest_list_without_pin(shelf, make_web, cfg, conn
 
 def test_cross_site_post_to_p_rejected(shelf, anon, conn):
     r = anon.client.post("/p", data={"pin": PIN}, headers={"Origin": "https://evil.example"})
-    assert r.status_code == 403 and pin.COOKIE not in anon.client.cookies
+    assert r.status_code == 403 and GUEST not in anon.client.cookies
     assert conn.execute("SELECT COUNT(*) FROM pin_attempts").fetchone()[0] == 0

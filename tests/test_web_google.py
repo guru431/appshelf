@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 
 from appshelf import google, people, webauth
 from appshelf.android.net import FetchError
-from helpers import ACCT, AUTH, GFLOW, HOST, WHO, sign_in
+from helpers import ACCT, AUTH, GFLOW, HOST, INVITE, WHO, sign_in
 from test_google import id_token
 
 CID = "cid.apps.googleusercontent.example"
@@ -111,7 +111,7 @@ def test_invite_creates_member_and_mails_owner(gw, conn, cfg, clock):
     user = people.get_user(conn, g.user_id)
     assert (user.name, user.role) == ("Мария", "member") and people.invite_of(conn, user.id)["label"] == "друзья"
     assert signed_uids(gw.client, cfg, conn, clock) == [user.id]
-    assert gw.client.cookies.get("appshelf_invite") is None
+    assert gw.client.cookies.get(INVITE) is None
     [(subject, body)] = gw.sent
     assert subject == "appshelf: новый участник" and "Мария, Google maria@gmail.example" in body
     assert "приглашение «друзья»" in body

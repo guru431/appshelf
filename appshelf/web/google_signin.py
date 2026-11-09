@@ -64,11 +64,11 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
             return g.user_id, ""
         adder = next((u for u, _ in w.signed(c, request) if u.id == flow.add_uid), None) \
             if flow.add_uid is not None else None
-        invite = people.active_invite(c, request.cookies.get(INVITE_COOKIE, "")) if adder is None else None
+        invite = people.active_invite(c, w.cookie(request, INVITE_COOKIE)) if adder is None else None
         if adder is None and invite is None:
             # добавлявшего погасили («Выйти», «Выйти на всех устройствах») или удалили, пока он был у Google
             raise Refused(SIGNED_OUT if flow.add_uid is not None else
-                          INVITE_GONE if request.cookies.get(INVITE_COOKIE) else NOT_REGISTERED)
+                          INVITE_GONE if w.cookie(request, INVITE_COOKIE) else NOT_REGISTERED)
         uid = people.create_user(c, cl.name or cl.email, people.MEMBER, invite["id"] if invite else None, now)
         people.create_google(c, uid, cl.sub, cl.email, cl.name, now)
         return uid, (f"добавлен из панели участника {label(c, adder)}" if adder is not None
@@ -102,7 +102,7 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
             orphan = people.google_by_sub(c, cl.sub)
             if orphan is not None and people.get_user(c, orphan.user_id) is None:
                 adder = any(u.id == flow.add_uid for u, _ in w.signed(c, request))
-                invite = people.active_invite(c, request.cookies.get(INVITE_COOKIE, ""))
+                invite = people.active_invite(c, w.cookie(request, INVITE_COOKIE))
                 if adder or invite is not None:
                     try:
                         jobs.remove_user(cfg, c, orphan.user_id)
@@ -124,5 +124,5 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
         resp = signed_in(w, request, back(flow.next), user, accounts[0].id if accounts else None, f"Google {cl.email}")
         w.set_cookie(resp, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
         w.delete_cookie(resp, google.COOKIE)
-        resp.delete_cookie(INVITE_COOKIE, path="/")
+        w.delete_cookie(resp, INVITE_COOKIE)
         return resp

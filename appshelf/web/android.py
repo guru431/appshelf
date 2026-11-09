@@ -239,7 +239,7 @@ def register_routes(app, w) -> None:
                 return w.page(request, "guest.html", "guest", status_code, configured=False)
             if shelf.shelf_next:
                 return PlainTextResponse("Полка временно недоступна, попробуйте позже", status_code=503)
-            guest = pin.guest_ok(w.key, request.cookies.get(pin.COOKIE, ""), pin.epoch(c), w.now())
+            guest = pin.guest_ok(w.key, w.cookie(request, pin.COOKIE), pin.epoch(c), w.now())
             closed = pin.closed_until(c, w.now())
             apps = [a for a in db.list_apps(c, shelf.id) if a.current is not None]
             updated = db.updated_packages(c, shelf.id)
