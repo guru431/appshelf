@@ -293,6 +293,17 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 .card > .check { margin-bottom: 14px; }
 .tag.state-owned { background: var(--tint); color: var(--link); }
 .tag.state-failed { background: var(--errtint); color: var(--err); }
+/* справка: «?» у карточки, диалог и страница, подсказка новичку */
+.download-actions > .help-toggle { flex: none; width: 36px; padding: 0; font-weight: 700; }
+@media (max-width: 699px) { .app .download-actions > .help-toggle { width: 44px; min-height: 44px; } }
+.help h3, .help-dialog h3 { margin: 18px 0 6px; font-size: 16px; font-weight: 600; }
+.help > :first-child { margin-top: 0; }
+.help p, .help-dialog p { font-size: 15px; line-height: 1.45; }
+.tip h2 { margin: 0 0 8px; color: var(--fg); font-size: 16px; text-transform: none; letter-spacing: 0; }
+.tip .close { float: right; margin: -6px -6px 6px 8px; }
+.tip ol { margin: 0 0 10px; padding-left: 22px; font-size: 15px; line-height: 1.45; }
+.tip li + li { margin-top: 4px; }
+.tip > .meta { margin: 0; }
 </style>
 </head>
 <body>
@@ -396,9 +407,6 @@ addEventListener('click', function (e) {
 <script>
 var dialogOpener;
 addEventListener('click', function(e) {
-  if (e.target.closest && e.target.closest('[data-help]')) {
-    var help = document.getElementById('install-help'); if (help) help.open = true;
-  }
   var opener = e.target.closest && e.target.closest('[data-dialog]');
   if (opener) {
     var dialog = document.getElementById(opener.dataset.dialog);

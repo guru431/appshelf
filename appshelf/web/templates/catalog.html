@@ -1,12 +1,21 @@
 {% extends "base.html" %}
+{% from "help_parts.html" import ios_steps, dialog, help_button, tip %}
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% include 'shelf_filter.html' %}
 {% if state_links or checkable %}<div class="sortbar">
-  {%- for value, label, n in state_links %}<a href="/?os=apple&amp;filter={{ value }}"{% if filter_mode == value %} class="on"{% endif %}>{{ label }} · {{ n }}</a>{% endfor %}
+  {%- for value, label, n in state_links %}<a href="/?os=apple&amp;filter={{ value }}"{% if filter_mode == value %} class="on" aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>{% endfor %}
   {%- if checkable %}<form method="post" action="{{ post_url('/apps/check') }}"><button class="sm secondary">Проверить обновления всех</button></form>{% endif %}
 </div>{% endif %}
-{% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
+{% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>
+{% else %}{% call tip('apple', 'Как ставить с полки') %}
+  <ol>
+    <li>На iPhone открывайте полку в Safari; «Поделиться» → «На экран „Домой“» — она откроется как приложение.</li>
+    <li>«Установить» у приложения → подтвердите системное окно.</li>
+    <li>Обновлять — поверх: «Сгрузить приложение» в настройках iPhone, затем «Установить» здесь. Удаление стирает данные.</li>
+  </ol>
+  <p class="meta">«?» у приложения — как установить и обновить; остальное — в <a href="/help#apple">справке</a>.</p>
+{% endcall %}{% endif %}
 {% for a in apps %}
 <div class="card app">
   {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}
@@ -31,7 +40,8 @@
           <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
         </svg>
       </button>{% endif %}
-    </div><a class="meta" href="#install-help" data-help>Как установить</a>
+      {{ help_button() }}
+    </div>
       {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a>
         {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</div>
     {% if device == 'desktop' %}<div class="app-qr" id="qr-{{ a.app_id }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}" alt="QR-код установки {{ a.name }} на iPhone" width="196" height="196" loading="lazy"></div>{% endif %}
@@ -74,25 +84,9 @@
 </div>
 {% endfor %}
 <div class="hint">
-  <p>На iPhone в App Store должен быть выполнен вход этим же Apple ID ({{ acct.email }}) — иначе приложение при запуске попросит пароль.</p>
-  <p>Не удаляйте приложение ради обновления: удаление стирает его данные. Для сохранения данных используйте «Сгрузить приложение».</p>
-  <details id="install-help"><summary>Как установить</summary>
-  <details><summary>Первый раз</summary>
-  <p>Открывайте страницу в Safari: из Telegram и Chrome установка не запускается.
-    Safari → «Поделиться» → «На экран „Домой“» — полка откроется как приложение.</p>
-  <p>После «Установить» подтвердите системное окно — иконка появится на экране «Домой».</p>
-  </details><details><summary>Обновить</summary>
-  <p>Обновить уже установленное приложение: поверх iOS не ставит («… is Already Installed»), но удалять его не нужно.
-    «Настройки → Основные → Хранилище iPhone» → приложение → «Сгрузить приложение», затем «Установить» здесь —
-    встанет версия с полки, данные приложения останутся.</p>
-  </details><details><summary>Если не устанавливается</summary>
-  <p>Проверьте минимальную iOS на карточке, свободное место и вход в App Store. На компьютере откройте полку на iPhone в Safari.</p>
-  </details></details>
-  <p>«⋯» → «Закрепить»: версия переживёт следующие обновления («сохранённая») и ставится так же. Файл сохранён, но
-    откат не гарантирован: старая версия может не принять данные, оставленные новой, — ставить её поверх них на свой риск.</p>
-  <p>«⋯» → «Проверить обновление»: последняя версия приложения сразу, не дожидаясь ночи; не отдаст Apple — текущая
-    останется и ставится. «Проверено …» у карточки — о полке, не о версии на телефоне.</p>
-  <p>Выключите «Настройки → App Store → Сгружать неиспользуемые»: выгруженное приложение App Store не вернёт.</p>
+  <p>На iPhone в App Store должен быть выполнен вход этим же Apple ID ({{ acct.email }}) — иначе приложение при запуске
+    попросит пароль. <a href="/help#apple">Справка</a></p>
   <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] }}{% else %}ещё не запускалась{% endif %}</p>
 </div>
+{{ dialog('Как установить на iPhone', ios_steps) }}
 {% endblock %}

@@ -139,6 +139,18 @@ def test_catalog_explains_update_over_installed(web):  # поверх устан
     assert "«Сгрузить приложение», затем «Установить» здесь" in web.client.get("/").text
 
 
+def test_help_page_and_install_dialog(web, conn, cfg, clock):
+    """Подсказки — на странице «Справка» из «Настроек»; у карточки — «?» с диалогом, новичку — закрываемая подсказка."""
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    page = web.client.get("/help")
+    assert page.status_code == 200 and "Сгружать неиспользуемые" in page.text and "Auto Blocker" in page.text
+    assert 'id="android-add"' in page.text and 'aria-current="page"' in page.text.split("Настройки</span>")[0][-300:]
+    assert 'href="/help"' in web.client.get("/settings").text
+    text = web.client.get("/").text
+    assert 'data-dialog="install-help"' in text and '<dialog id="install-help"' in text and 'data-tip="apple"' in text
+    assert "Сгружать неиспользуемые" not in text and "<details id=\"install-help\"" not in text
+
+
 def test_history_search_cyrillic_case_insensitive(web, conn, clock):
     store.upsert_purchases(conn, 1, [{"id": 1, "bundleId": "ru.sberbank.onlineiphone", "name": "СберБанк Онлайн"},
                                      {"id": 2, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())

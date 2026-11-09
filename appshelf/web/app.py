@@ -190,6 +190,11 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             digest = {u.id: notify.digest_enabled(c, u.id) for u in request.state.users}
         return w.page(request, "settings.html", "settings", digest=digest)
 
+    @app.get("/help", response_class=HTMLResponse)
+    def help_page(request: Request):
+        """Справка — подстраница «Настроек»: всё, что раньше стояло абзацами под каталогами и на «Добавить»."""
+        return w.page(request, "help.html", "settings")
+
     @app.post("/settings/digest")
     def settings_digest(request: Request, user: int = Form(0), on: int = Form(0)):
         """Еженедельное письмо об обновлениях — вкл/выкл для одного из вошедших в этом браузере."""

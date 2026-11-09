@@ -1,0 +1,65 @@
+{# Справка по месту: шаги установки (диалог «?» у карточки и страница «Справка» — один текст), подсказка новичку. #}
+{% macro ios_steps() %}
+<h3>Первый раз</h3>
+<p>Открывайте страницу в Safari: из Telegram и Chrome установка не запускается.
+  Safari → «Поделиться» → «На экран „Домой“» — полка откроется как приложение.</p>
+<p>После «Установить» подтвердите системное окно — иконка появится на экране «Домой».</p>
+<h3>Обновить</h3>
+<p>Обновить уже установленное приложение: поверх iOS не ставит («… is Already Installed»), но удалять его не нужно.
+  «Настройки → Основные → Хранилище iPhone» → приложение → «Сгрузить приложение», затем «Установить» здесь —
+  встанет версия с полки, данные приложения останутся.</p>
+<h3>Если не устанавливается</h3>
+<p>Проверьте минимальную iOS на карточке, свободное место и вход в App Store. На компьютере откройте полку на iPhone в Safari.</p>
+{% endmacro %}
+
+{% macro android_steps() %}{# не android: base.html задаёт переменную android #}
+<h3>Первый раз</h3>
+<p>Открывайте страницу в Chrome на телефоне. «Скачать APK» → когда файл скачается, нажмите «Открыть» на плашке внизу
+  экрана (или уведомление «Загрузка завершена») → «Установить». В «Загрузки» заходить не нужно.</p>
+<p>В первый раз Android попросит разрешить установку из браузера («Установка неизвестных приложений» для Chrome) —
+  разрешите и вернитесь к установке.</p>
+<h3>Обновить</h3>
+<p>Обновление — тот же «Скачать APK» поверх установленного: данные приложения остаются.</p>
+<p>Поверх встаёт только APK с той же подписью. Стояло из Google Play или другого магазина с другой подписью —
+  сначала удалите приложение (данные удалятся), затем ставьте отсюда. Отпечаток подписи — у карточки.</p>
+<h3>Если не устанавливается</h3>
+<p>Samsung: «Настройки → Безопасность и конфиденциальность → Auto Blocker» не даёт ставить не из Galaxy Store и Play —
+  выключите его на время установки. Huawei: выключите «Режим без угроз» (Pure Mode) в настройках безопасности.</p>
+<p>Play Protect может предупредить о неизвестном приложении — «Подробнее» → «Всё равно установить».</p>
+<p>Проверьте минимальную версию Android на карточке и сообщение системы. Требования установки могут зависеть от устройства и региона:
+  <a href="https://developer.android.com/developer-verification">проверка разработчиков Android</a>.</p>
+{% endmacro %}
+
+{# Диалог «Как установить» — один на странице; открывает его кнопка «?» у карточки (data-dialog="install-help"). #}
+{% macro dialog(title, steps) %}
+<dialog id="install-help" class="help-dialog" aria-labelledby="install-help-title">
+  <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
+  <h2 id="install-help-title">{{ title }}</h2>
+  {{ steps() }}
+</dialog>
+{% endmacro %}
+
+{# «?» у основной кнопки карточки #}
+{% macro help_button() -%}
+<button type="button" class="sm secondary help-toggle" data-dialog="install-help" aria-label="Как установить" title="Как установить">?</button>
+{%- endmacro %}
+
+{# Подсказка новичку: закрывается крестиком, закрытие помнит браузер (localStorage). Хранилище недоступно — подсказка
+   просто видна. Скрипт сразу за подсказкой: закрытая не мелькает при загрузке. #}
+{% macro tip(key, title) %}
+<aside class="card tip" data-tip="{{ key }}" aria-labelledby="tip-{{ key }}">
+  <button type="button" class="sm secondary close" data-tip-close aria-label="Скрыть подсказку «{{ title }}»">Скрыть</button>
+  <h2 id="tip-{{ key }}">{{ title }}</h2>
+  {{ caller() }}
+</aside>
+<script>
+(function (tip) {
+  var key = 'appshelf-tip-' + tip.dataset.tip;
+  try { if (localStorage.getItem(key)) tip.hidden = true; } catch (e) {}
+  tip.querySelector('[data-tip-close]').addEventListener('click', function () {
+    tip.hidden = true;
+    try { localStorage.setItem(key, '1'); } catch (e) {}
+  });
+}(document.currentScript.previousElementSibling));
+</script>
+{% endmacro %}

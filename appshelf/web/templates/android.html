@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "android_cards.html" import card, install_hints with context %}
+{% from "help_parts.html" import tip %}
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% include 'device_profile.html' %}
@@ -27,6 +28,14 @@
 {% include 'shelf_filter.html' %}
 {% if not apps and not total and not jobs %}<p class="empty">{% if public %}На публичной полке пусто.{% else %}На полке пусто.{% endif %}
   {%- if edit %} <a href="{{ prefix }}/add">Добавьте приложение</a> — из RuStore, по ссылке с сайта или своим файлом.{% endif %}</p>{% endif %}
+{% if apps or total %}{% call tip('android', 'Как ставить с полки') %}
+  <ol>
+    <li>«Скачать APK» → «Открыть» в уведомлении загрузки → «Установить».</li>
+    <li>В первый раз Android попросит разрешить установку из браузера — разрешите и вернитесь к установке.</li>
+    <li>Обновлять — тем же «Скачать APK» поверх, данные останутся. Другая подпись — смотрите предупреждение на карточке.</li>
+  </ol>
+  <p class="meta">«?» у приложения — как установить и обновить; остальное — в <a href="/help#android">справке</a>.</p>
+{% endcall %}{% endif %}
 {% for a in apps %}{{ card(a, url, edit, prefix, qr=public or device == 'desktop') }}{% endfor %}
 {% if guest %}
 <details class="card"><summary>Гостевой доступ</summary>
@@ -43,11 +52,10 @@
     работать — у полки будет новый адрес каталога.</p>{% endif %}
 </details>
 {% endif %}
+{{ install_hints() }}
 <div class="hint">
   {% if public %}<p>Публичная полка — одна на сервер: её видят все участники и гости по PIN, наполняет владелец.</p>{% endif %}
-  {{ install_hints() }}
-  {% if edit %}<p>Выберите сохранённую версию в списке на карточке; по умолчанию выбрана последняя. «Сменить источник» — версии остаются;
-    новая версия из другого источника с другой подписью ждёт «Принять новую подпись».</p>{% endif %}
-  <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] or 'Android-полки не проверялись' }}{% else %}ещё не запускалась{% endif %}</p>
+  <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] or 'Android-полки не проверялись' }}{% else %}ещё не запускалась{% endif %}
+    · <a href="/help#android">Справка</a></p>
 </div>
 {% endblock %}
