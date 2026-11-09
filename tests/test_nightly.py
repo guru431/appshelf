@@ -215,3 +215,37 @@ def test_second_nightly_does_nothing_while_first_runs(ctx, cfg, conn, clock):
         assert got
         assert nightly.run(ctx.env, conn) == "уже идёт другая ночная проверка"
     assert ctx.tool.calls == [] and stamp(cfg) == ""
+
+
+REAL_INTEGRITY = nightly._integrity  # conftest подменяет сводку у всех тестов, кроме этих
+
+
+def test_integrity_summary_reports_owner_once_per_episode(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(nightly, "_integrity", REAL_INTEGRITY)
+    acct = ready(conn, cfg, clock)                   # каталог версии без файлов
+    set_session(conn, acct.id, "expired")            # Apple ни при чём: сводка идёт и без входа
+    result = nightly.run(ctx.env, conn)
+    assert result == (f"{nightly.NO_LOGIN} | Целостность: проблем 3: нет app.ipa — 1, нет icon.png — 1, "
+                      "нет manifest.plist — 1")
+    assert store.get_state(conn, "nightly_result") == result and stamp(cfg) == clock.iso()
+    assert nightly.result_for(result, acct.email) == nightly.NO_LOGIN      # участникам сводка не видна
+    assert ctx.sent == [nightly.INTEGRITY_SUBJECT]
+    assert (cfg.shelf_root(acct) / "123-1.0").is_dir() and store.current_version(conn, acct.id, 123)  # не удаляет
+    clock.advance(86400)
+    nightly.run(ctx.env, conn)
+    assert ctx.sent == [nightly.INTEGRITY_SUBJECT]                         # тот же эпизод — без письма
+    conn.execute("DELETE FROM versions")
+    (cfg.shelf_root(acct) / "123-1.0").rmdir()
+    assert nightly.run(ctx.env, conn).endswith(" | Целостность: проблем нет")
+    (cfg.archive / ("beef" + "0" * 28)).mkdir()                           # новый эпизод — новое письмо
+    assert nightly.run(ctx.env, conn).endswith(" | Целостность: проблем 1: каталог архива не принадлежит ни "
+                                               "одному Apple ID — 1")
+    assert ctx.sent == [nightly.INTEGRITY_SUBJECT] * 2
+
+
+def test_integrity_summary_failure_keeps_stamp(ctx, cfg, conn, clock, monkeypatch):
+    monkeypatch.setattr(nightly, "_integrity", REAL_INTEGRITY)
+    cfg.archive.rmdir()
+    assert nightly.run(ctx.env, conn).endswith(f" | Целостность: не проверена — архив {cfg.archive} недоступен — "
+                                               "смонтирован ли он?")
+    assert stamp(cfg) == clock.iso() and ctx.sent == []

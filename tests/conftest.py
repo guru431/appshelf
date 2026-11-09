@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from starlette.testclient import TestClient
 
-from appshelf import apk, jobs, removed, store
+from appshelf import apk, jobs, nightly, removed, store
 from appshelf.config import GB, Config
 from appshelf.web.app import create_app
 from android_fakes import FakeSources
@@ -54,6 +54,13 @@ def empty_removed_catalog(request, monkeypatch):
     """Настоящий справочник (~480 id) — только в test_removed; остальным он бы добавлял вызовы ipatool."""
     if request.module.__name__ != "test_removed":
         monkeypatch.setattr(removed, "load", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def no_nightly_integrity(monkeypatch):
+    """Сводка appshelf check в итоге ночи — только в своих тестах (test_nightly возвращает настоящую): полки
+    остальных — заготовки без файлов, а их итоги и письма сверяются целиком."""
+    monkeypatch.setattr(nightly, "_integrity", lambda env, c: "")
 
 
 @pytest.fixture
