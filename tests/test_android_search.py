@@ -63,6 +63,19 @@ def test_exact_package_and_play_account_are_used(monkeypatch):
     assert play.account == 7 and "не куплено" in play.reason
 
 
+def test_owned_play_app_has_no_add_button_on_public_search(monkeypatch):
+    """Купленное сервер на публичную полку не пустит (fetch._own_shelf): кнопки «Добавить» нет, причина видна."""
+    src = setup_search(monkeypatch)
+    account = SimpleNamespace(id=7)
+    src.play = SimpleNamespace(client=lambda a: SimpleNamespace(details=lambda p: SimpleNamespace(
+        name="Example", version_name="3.1", paid=True, owned=True)))
+    def play_reason(**scope):
+        result = src.search_all(PKG, accounts=[account], **scope)
+        return next(o for o in result.options if o.source == "play").reason
+    assert play_reason(user_id=1) == ""
+    assert play_reason() == "купленное — только на личную полку"
+
+
 def test_search_deadline_preserves_results(monkeypatch):
     src = setup_search(monkeypatch)
     now = [0.0]

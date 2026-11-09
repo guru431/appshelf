@@ -49,6 +49,7 @@ class Update:
 
 
 def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
+    """user_id — участник личной полки (его 4PDA); None — публичная полка: без 4PDA и без купленного в Play."""
     query = query.strip()[:200]
     options, errors, candidates, author_links, descriptions = {}, {}, {}, {}, {}
     split = set(split_packages)
@@ -200,8 +201,10 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         for account in accounts:
             app = yield from run("play", counter, lambda: request(lambda: src._play(account).details(package)))
             if app is not None:
-                add(Option("play", package, package, app.name, app.version_name,
-                           "платное — не куплено этим аккаунтом" if app.paid and not app.owned else "", account=account.id))
+                # купленное — только на личную полку того, чей аккаунт купил (fetch._own_shelf): на публичной — без кнопки
+                reason = ("платное — не куплено этим аккаунтом" if app.paid and not app.owned
+                          else "купленное — только на личную полку" if app.paid and user_id is None else "")
+                add(Option("play", package, package, app.name, app.version_name, reason, account=account.id))
         yield Update("results", result=snapshot())
 
     checked = set()
