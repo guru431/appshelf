@@ -8,12 +8,15 @@ from urllib.parse import urlsplit
 
 from starlette.testclient import TestClient
 
-from appshelf import people, store, webauth
+from appshelf import google, people, store, webauth
 from appshelf.ipatool import LicenseNotFound
+from appshelf.web.common import ACCT_COOKIE, HOST_PREFIX, WHO_COOKIE
 
 TOKEN = "0123456789abcdef0123456789abcdef"
 OWNER_EMAIL = "owner@example"
 HOST = "apps.example"
+# имена в браузере: сайт тестов — https, у cookie входа, выбора полки и потока Google префикс __Host-
+AUTH, ACCT, WHO, GFLOW = (HOST_PREFIX + n for n in (webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE))
 
 
 class ShelfClient(TestClient):
@@ -69,9 +72,8 @@ def sign_in(client, cfg, conn, clock, uid: int = 1) -> None:
     """Человек uid вошёл в этом браузере — как после входа Apple ID: его запись добавляется к уже вошедшим
     (ключ — тот же cookie-key, что у приложения)."""
     key, now = webauth.load_key(cfg.cookie_key), int(clock.t)
-    signed = webauth.signed_users(key, client.cookies.get(webauth.COOKIE) or "", now,
-                                  lambda u: people.get_user(conn, u))
-    client.cookies.set(webauth.COOKIE, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
+    signed = webauth.signed_users(key, client.cookies.get(AUTH) or "", now, lambda u: people.get_user(conn, u))
+    client.cookies.set(AUTH, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
 
 
 def make_account(conn, clock, email=OWNER_EMAIL, role="owner", legacy=True, session="none", user_id=None,

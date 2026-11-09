@@ -2,6 +2,7 @@
 «выйти везде», удаление. Новая ссылка показывается один раз: в базе только хэш."""
 from __future__ import annotations
 
+import base64
 import re
 
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request
@@ -32,7 +33,12 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                                                 for a in people.accounts_of(c, u.id)],
                         "google": people.google_of(c, u.id)}
                        for u in people.list_users(c)]
-        return w.page(request, "admin.html", "admin", invites=invites, persons=persons, created_link=created_link)
+        # QR — в самой странице: с компьютера ссылку открывают камерой телефона, сразу в Safari, а не во встроенном
+        # браузере мессенджера; токен не попадает ни в адрес картинки, ни в журнал
+        from .android import _qr_png  # android.py импортирует owner_only отсюда
+        qr =base64.b64encode(_qr_png(created_link)).decode() if created_link else ""
+        return w.page(request, "admin.html", "admin", invites=invites, persons=persons, created_link=created_link,
+                      created_qr=qr)
 
     def confirm(request: Request, uid: int, error: str = "", status_code: int = 200, refused: bool = False):
         """Подтверждение удаления. Приглашение, по которому человек пришёл, бессрочное: не отключи его —

@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -9,7 +10,7 @@ from starlette.testclient import TestClient
 from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
 from appshelf.web import signin
-from helpers import HOST, FakeTool, make_account, seed_app, sign_in
+from helpers import ACCT, AUTH, HOST, FakeTool, make_account, seed_app, sign_in
 
 BASE = f"https://{HOST}"
 
@@ -44,7 +45,7 @@ def test_known_apple_id_logs_in_with_2fa_code(make_web, cfg, conn, acct):  # Rev
     assert r.status_code == 303 and r.headers["location"] == "/history"
     assert tool.calls[-1] == ("login", "owner@example", "S3cret-pw", "123456")
     set_cookie = cookies(r)
-    assert "appshelf_auth=" in set_cookie and "appshelf_acct=1" in set_cookie
+    assert "__host-appshelf_auth=" in set_cookie and "__host-appshelf_acct=1" in set_cookie
     assert "httponly" in set_cookie and "secure" in set_cookie and "samesite=lax" in set_cookie
     assert "max-age=31536000" in set_cookie
     assert people.get_account(conn, 1).session == "ok"
@@ -53,6 +54,57 @@ def test_known_apple_id_logs_in_with_2fa_code(make_web, cfg, conn, acct):  # Rev
         for f in (root.rglob("*") if root.exists() else []):
             if f.is_file():
                 assert b"S3cret-pw" not in f.read_bytes(), f
+
+
+def test_repeated_code_submit_gets_first_login(make_web, cfg, conn, acct, clock):
+    # двойное «Войти»: браузер бросил ответ первого запроса (и его cookie) — второй получает тот же вход, к Apple не идёт
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "S3cret-pw"})
+    before = dict(wb.client.cookies)
+    assert wb.client.post("/login/code", data={"code": "123456"}, follow_redirects=False).status_code == 303
+    wb.client.cookies.clear()
+    for name, value in before.items():
+        wb.client.cookies.set(name, value, domain=HOST)
+    r = wb.client.post("/login/code", data={"code": "123456", "next": "/history"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/history" and "appshelf_auth=" in cookies(r)
+    assert len(tool.calls) == 2 and wb.client.get("/", follow_redirects=False).status_code == 200
+    clock.advance(signin.TTL)                                 # итог первого живёт недолго
+    wb.client.cookies.clear()
+    for name, value in before.items():
+        wb.client.cookies.set(name, value, domain=HOST)
+    assert "Срок шага истёк" in wb.client.post("/login/code", data={"code": "123456"}).text
+
+
+def test_repeated_code_submit_shares_refusal(make_web, cfg, conn, acct):
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "pw"})
+    tool.errors["login"] = IpatoolError("invalid_credentials", "")
+    assert "Неверный пароль или код" in wb.client.post("/login/code", data={"code": "000000"}).text
+    r = wb.client.post("/login/code", data={"code": "000000"})
+    assert r.status_code == 400 and "Неверный пароль или код" in r.text and len(tool.calls) == 2
+    assert wb.app.state.w.limiter.email_wait("owner@example") == 0 and len(wb.app.state.w.limiter._fails) == 1
+
+
+def test_owner_sign_in_on_new_device_mails_owner(make_web, cfg, conn, acct, clock):
+    # вход владельцем там, где его записи не было, — возможная кража пароля или ссылки: письмо владельцу
+    wb = make_web(cfg, conn)
+    r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False,
+                       headers={"user-agent": "Mozilla/5.0 (iPhone)", "x-forwarded-for": "1.2.3.4, 198.51.100.7"})
+    assert r.status_code == 303
+    [(subject, body)] = wb.sent
+    assert subject == signin.NEW_DEVICE_SUBJECT and "Apple ID owner@example" in body and clock.iso() in body
+    assert "198.51.100.7" in body and "1.2.3.4" not in body and "iPhone" in body and "pw" not in body
+    wb.client.post("/login", data={"email": "owner@example", "password": "pw"})          # тот же браузер
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    TestClient(wb.app, base_url=BASE).post("/login", data={"email": "petr@example", "password": "pw"})
+    assert len(wb.sent) == 1                                  # не новое устройство и не владелец
+    token = people.create_link(conn, people.LOGIN, "", acct.user_id, clock.iso())
+    assert TestClient(wb.app, base_url=BASE).post(f"/l/{token}", follow_redirects=False).status_code == 303
+    assert len(wb.sent) == 2 and "запасная ссылка" in wb.sent[1][1] and petr.user_id != acct.user_id
 
 
 def test_foreign_next_after_login_stays_on_site(make_web, cfg, conn, acct):  # open redirect
@@ -285,18 +337,46 @@ def test_login_link_once_and_expires(make_web, cfg, conn, acct, clock):
 
 
 def test_logout_and_logout_everywhere(web, conn, cfg, clock):
-    old = web.client.cookies.get("appshelf_auth")
+    old = web.client.cookies.get(AUTH)
     r = web.client.post("/logout", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     other = TestClient(web.app, base_url=BASE)
     sign_in(other, cfg, conn, clock)
     r = other.post("/logout-all/1", follow_redirects=False)           # последний в браузере — как «Выйти»
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     assert people.get_user(conn, 1).epoch == 1
-    web.client.cookies.set("appshelf_auth", old, domain=HOST)
+    web.client.cookies.set(AUTH, old, domain=HOST)
     assert web.client.get("/", follow_redirects=False).status_code == 303   # старая cookie после «выйти везде»
+
+
+def test_host_prefixed_cookies_and_old_names(make_web, cfg, conn, acct, clock):
+    # __Host-: соседний поддомен не подложит cookie входа и выбора полки; старые имена действуют до конца их срока
+    wb = make_web(cfg, conn)
+    r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
+    auth = next(h for h in r.headers.get_list("set-cookie") if h.startswith(AUTH + "="))
+    assert "secure" in auth.lower() and "path=/" in auth.lower() and "domain" not in auth.lower()
+    assert any(h.startswith(ACCT + "=1;") for h in r.headers.get_list("set-cookie"))
+    old = TestClient(wb.app, base_url=BASE)                  # браузер с cookie до выкладки префикса
+    old.cookies.set("appshelf_auth", wb.client.cookies.get(AUTH), domain=HOST)
+    assert old.get("/", follow_redirects=False).status_code == 200
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=acct.user_id)
+    wb.client.cookies.set("appshelf_acct", str(second.id), domain=HOST)   # старое имя не сильнее нового
+    assert '<span class="on" aria-current="true">owner@example</span>' in wb.client.get("/").text
+    r = wb.client.post("/logout", follow_redirects=False)
+    gone = [h for h in r.headers.get_list("set-cookie") if "max-age=0" in h.lower()]
+    assert any(h.startswith(AUTH + "=") and "secure" in h.lower() for h in gone)   # без Secure браузер отбросит
+    assert any(h.startswith("appshelf_auth=") for h in gone) and any(h.startswith(ACCT + "=") for h in gone)
+
+
+def test_plain_http_site_keeps_cookie_names(make_web, cfg, conn, acct):
+    # без https браузер __Host- не примет: имена прежние
+    wb = make_web(replace(cfg, public_base=f"http://{HOST}"), conn)
+    client = TestClient(wb.app, base_url=f"http://{HOST}")
+    r = client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
+    assert r.status_code == 303 and "appshelf_auth=" in cookies(r) and "__host-" not in cookies(r)
+    assert client.get("/", follow_redirects=False).status_code == 200
 
 
 def test_forget_one_person_keeps_the_others(web, conn, cfg, clock):  # 2026-10-12, Review Focus 3
@@ -310,7 +390,7 @@ def test_forget_one_person_keeps_the_others(web, conn, cfg, clock):  # 2026-10-1
     assert people.get_user(conn, shared.user_id).epoch == 0           # в других браузерах Общий жив
     r = web.client.post("/logout/1", follow_redirects=False)          # последний — как «Выйти»
     assert r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     assert web.client.get("/", follow_redirects=False).status_code == 303
 
 
@@ -398,8 +478,8 @@ def test_two_people_in_one_browser_show_all_their_shelves(web, conn, cfg, clock)
 
 
 def test_junk_around_a_good_cookie_entry_is_ignored(web):  # 2026-10-12, Review Focus 1
-    good = web.client.cookies.get("appshelf_auth")
-    web.client.cookies.set("appshelf_auth", f"junk|admin:1890000000:{'0' * 64}||{good}|9:9:9:zz", domain=HOST)
+    good = web.client.cookies.get(AUTH)
+    web.client.cookies.set(AUTH, f"junk|admin:1890000000:{'0' * 64}||{good}|9:9:9:zz", domain=HOST)
     r = web.client.get("/", follow_redirects=False)
     assert r.status_code == 200 and "owner@example" in r.text
 
@@ -436,10 +516,10 @@ def test_login_in_signed_in_browser_adds_the_person(web, conn, clock):  # 2026-1
     assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
     page = web.client.get("/").text
     assert "/acct/1" in page and '<span class="on" aria-current="true">shared@example</span>' in page
-    before = web.client.cookies.get("appshelf_auth")
+    before = web.client.cookies.get(AUTH)
     clock.advance(3600)
     web.client.post("/login", data={"email": "owner@example", "password": "pw"})   # владелец входит заново
-    after = web.client.cookies.get("appshelf_auth")
+    after = web.client.cookies.get(AUTH)
     assert after.split("|")[1] == before.split("|")[1]                # запись Общего — как была, со своим сроком
     assert after.split("|")[0] != before.split("|")[0]                # своя — новая, на прежнем месте
 
@@ -502,6 +582,18 @@ def test_invite_warns_signed_in_person(web, conn, clock):
     text = web.client.get("/login").text
     assert "Вы уже вошли как Иван Петров" in text and "станет отдельным участником" in text and "Safari" in text
     assert "Вы уже вошли" not in TestClient(web.app, base_url=BASE).get("/login").text
+
+
+@pytest.mark.parametrize("ua, says, never", [
+    ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1", "в Safari", "Chrome"),
+    ("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile", "в Chrome", "Safari"),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0", "по QR-коду", "Открывайте страницу"),
+])
+def test_login_hint_fits_device(make_web, cfg, conn, ua, says, never):
+    # совет про Safari Android-телефону и компьютеру только мешает
+    text = TestClient(make_web(cfg, conn).app, base_url=BASE, headers={"user-agent": ua}).get("/login").text
+    hints = " ".join(re.findall(r'<p class="hint">(.*?)</p>', text, re.S))
+    assert says in hints and never not in hints
 
 
 def test_wrong_code_while_adding_keeps_add_form(web, conn):

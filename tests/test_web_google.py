@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 
 from appshelf import google, people, webauth
 from appshelf.android.net import FetchError
-from helpers import HOST, sign_in
+from helpers import ACCT, AUTH, GFLOW, HOST, WHO, sign_in
 from test_google import id_token
 
 CID = "cid.apps.googleusercontent.example"
@@ -57,7 +57,7 @@ def google_login(wb, client=None, sub="g-1", email="maria@gmail.example", name="
 
 def signed_uids(client, cfg, conn, clock) -> list[int]:
     return [u.id for u, _ in webauth.signed_users(webauth.load_key(cfg.cookie_key),
-                                                  client.cookies.get(webauth.COOKIE) or "", int(clock.t),
+                                                  client.cookies.get(AUTH) or "", int(clock.t),
                                                   lambda uid: people.get_user(conn, uid))]
 
 
@@ -79,10 +79,10 @@ def test_known_google_signs_in(gw, conn, cfg, clock):
     r = google_login(gw, next_="/android")
     assert (r.status_code, r.headers["location"]) == (303, "/android")
     assert signed_uids(gw.client, cfg, conn, clock) == [uid]
-    assert r.cookies.get("appshelf_who") == str(uid) and "appshelf_acct" not in r.cookies
+    assert r.cookies.get(WHO) == str(uid) and ACCT not in r.cookies
     g = people.get_google(conn, gid)
     assert (g.email, g.name, g.last_login_at) == ("maria@gmail.example", "Мария", clock.iso())
-    assert gw.client.cookies.get(google.COOKIE) is None                     # поток завершён
+    assert gw.client.cookies.get(GFLOW) is None                             # поток завершён
     url, data = gw.http.calls[0]
     assert (url, data["client_secret"], data["redirect_uri"]) == (google.TOKEN_URL, "s3cret",
                                                                     "https://apps.example/google/callback")
@@ -91,7 +91,7 @@ def test_known_google_signs_in(gw, conn, cfg, clock):
 def test_known_google_of_apple_person_opens_apple_shelf(gw, conn, cfg, clock):
     people.create_google(conn, 1, "g-1", "owner@gmail.example", "", clock.iso())   # владелец связал Google
     r = google_login(gw)
-    assert r.status_code == 303 and r.cookies.get("appshelf_acct") == "1"
+    assert r.status_code == 303 and r.cookies.get(ACCT) == "1"
     assert gw.client.get("/history").status_code == 200
 
 
@@ -100,7 +100,7 @@ def test_unknown_without_invite_refused(gw, conn, cfg, clock):
     r = google_login(gw)
     assert r.status_code == 403 and "не зарегистрирован — нужна ссылка-приглашение" in r.text
     assert len(people.list_users(conn)) == users and people.google_by_sub(conn, "g-1") is None
-    assert not gw.client.cookies.get(webauth.COOKIE) and gw.sent == []
+    assert not gw.client.cookies.get(AUTH) and gw.sent == []
 
 
 def test_invite_creates_member_and_mails_owner(gw, conn, cfg, clock):
@@ -182,7 +182,7 @@ def test_callback_without_flow_cookie_refused(gw, conn, cfg, clock):
     stranger = TestClient(gw.app, base_url=f"https://{HOST}")              # ответ Google в чужом браузере
     gw.http.token = id_token(nonce=q["nonce"][0], sub="g-1", aud=CID)
     r = stranger.get("/google/callback", params={"code": "c", "state": q["state"][0]}, follow_redirects=False)
-    assert r.status_code == 400 and gw.http.calls == [] and not stranger.cookies.get(webauth.COOKIE)
+    assert r.status_code == 400 and gw.http.calls == [] and not stranger.cookies.get(AUTH)
     clock.advance(google.FLOW_TTL)                                          # своя cookie, но 10 минут вышли
     r = gw.client.get("/google/callback", params={"code": "c", "state": q["state"][0]}, follow_redirects=False)
     assert r.status_code == 400 and gw.http.calls == [] and people.google_by_sub(conn, "g-1") is None
@@ -195,7 +195,7 @@ def test_state_mismatch_refused(gw, conn, cfg, clock):
     for state in ("other", ""):
         r = gw.client.get("/google/callback", params={"code": "c", "state": state}, follow_redirects=False)
         assert r.status_code == 400 and gw.http.calls == []
-    assert people.google_by_sub(conn, "g-1") is None and not gw.client.cookies.get(webauth.COOKIE)
+    assert people.google_by_sub(conn, "g-1") is None and not gw.client.cookies.get(AUTH)
 
 
 def test_bad_id_token_is_google_error(gw, conn, cfg, clock, capsys):
@@ -254,5 +254,5 @@ def test_access_denied_shows_message(gw, conn, cfg, clock):
 def test_start_next_is_own_path_only(gw):
     for bad in ("https://evil.example/", "//evil.example", "/" + "x" * 3000):
         q = start(gw.client, bad)
-        flow = google.read_flow(gw.app.state.w.key, gw.client.cookies.get(google.COOKIE), gw.app.state.w.epoch())
+        flow = google.read_flow(gw.app.state.w.key, gw.client.cookies.get(GFLOW), gw.app.state.w.epoch())
         assert flow.next == "/" and flow.state == q["state"][0]

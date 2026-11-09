@@ -78,11 +78,11 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
     def callback(request: Request, code: str = "", state: str = "", error: str = ""):
         if not cfg.google_enabled:
             return not_found()
-        flow = google.read_flow(w.key, request.cookies.get(google.COOKIE, ""), w.epoch())
+        flow = google.read_flow(w.key, w.cookie(request, google.COOKIE), w.epoch())
 
         def refuse(text: str, status_code: int):
             resp = login_page(w, request, error=text, status_code=status_code, next_=flow.next if flow else "/")
-            resp.delete_cookie(google.COOKIE, path="/")
+            w.delete_cookie(resp, google.COOKIE)
             return resp
 
         # ответ Google в чужом браузере, повтор, подмена state — потока нет или он не тот: к Google не идём
@@ -121,8 +121,8 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
             notify.send_quietly(w.env.send, JOINED_SUBJECT,
                                 f"{user.name}, Google {cl.email}, {how}.\nУчастники: {cfg.public_base}/admin\n",
                                 cfg.mail_to)
-        resp = signed_in(w, request, back(flow.next), user, accounts[0].id if accounts else None)
+        resp = signed_in(w, request, back(flow.next), user, accounts[0].id if accounts else None, f"Google {cl.email}")
         w.set_cookie(resp, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
-        resp.delete_cookie(google.COOKIE, path="/")
+        w.delete_cookie(resp, google.COOKIE)
         resp.delete_cookie(INVITE_COOKIE, path="/")
         return resp

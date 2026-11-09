@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .. import jobs, people, store, webauth
+from .. import google, jobs, people, store, webauth
 from ..config import GB, Config
 from .login import Limiter, LoginFlow
 
@@ -23,6 +23,13 @@ ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID о
 WHO_COOKIE = "appshelf_who"        # активный участник Android-раздела: id одного из вошедших
 LOGIN_COOKIE = "appshelf_login"    # незавершённый вход (шаг кода 2FA): id в памяти LoginFlow
 INVITE_COOKIE = "appshelf_invite"  # принятое приглашение — до первого входа нового Apple ID
+# Cookie входа, выбора полки и потока Google на https — с префиксом __Host- (браузер требует Secure, Path=/ и не
+# принимает Domain): соседний поддомен не подложит их на родительский домен. Имена в коде — без префикса, его ставит
+# WebCtx. Старые имена (без префикса) WebCtx.cookie читает год после выкладки префикса — столько живёт cookie входа,
+# а новых со старым именем уже не ставят: после 2028-01-01 (выкладка — до 2027-01-01; позже — сдвинуть) чтение
+# старых имён убрать.
+HOST_PREFIX = "__Host-"
+HOST_COOKIES = frozenset((webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE))
 
 
 @dataclass
@@ -43,7 +50,7 @@ class WebCtx:
 
     def signed(self, c, request: Request) -> list[tuple]:
         """Вошедшие в этом браузере люди и их записи cookie — по порядку входа (webauth.signed_users)."""
-        return webauth.signed_users(self.key, request.cookies.get(webauth.COOKIE, ""), self.epoch(),
+        return webauth.signed_users(self.key, self.cookie(request, webauth.COOKIE), self.epoch(),
                                     lambda uid: people.get_user(c, uid))
 
     def person(self, request: Request):
@@ -57,10 +64,10 @@ class WebCtx:
             accounts = [a for u in users for a in people.accounts_of(c, u.id)]
         if not users:
             return None
-        want = request.cookies.get(ACCT_COOKIE, "")
+        want = self.cookie(request, ACCT_COOKIE)
         acct = next((a for a in accounts if str(a.id) == want), accounts[0] if accounts else None)
         holder = next(u for u in users if u.id == acct.user_id) if acct is not None else None
-        whom = request.cookies.get(WHO_COOKIE, "")
+        whom = self.cookie(request, WHO_COOKIE)
         who = next((u for u in users if str(u.id) == whom), holder or users[0])
         return users, holder or who, accounts, acct, who
 
@@ -68,8 +75,24 @@ class WebCtx:
     def secure(self) -> bool:
         return self.cfg.public_base.startswith("https://")
 
+    def cookie_name(self, name: str) -> str:
+        """Имя в браузере: у HOST_COOKIES на https — с префиксом __Host- (без Secure браузер такую не примет)."""
+        return HOST_PREFIX + name if self.secure and name in HOST_COOKIES else name
+
+    def cookie(self, request: Request, name: str) -> str:
+        """Значение cookie; нет под новым именем — под старым, до 2028-01-01 (см. HOST_COOKIES)."""
+        value = request.cookies.get(self.cookie_name(name))
+        return value if value is not None else request.cookies.get(name, "")
+
     def set_cookie(self, resp, name: str, value: str, max_age: int) -> None:
-        resp.set_cookie(name, value, max_age=max_age, httponly=True, secure=self.secure, samesite="lax", path="/")
+        resp.set_cookie(self.cookie_name(name), value, max_age=max_age, httponly=True, secure=self.secure,
+                        samesite="lax", path="/")
+
+    def delete_cookie(self, resp, name: str) -> None:
+        """Удалить cookie под новым и старым именем. Удаление __Host- без Secure браузер отбросил бы."""
+        if self.cookie_name(name) != name:
+            resp.delete_cookie(self.cookie_name(name), path="/", secure=True, httponly=True, samesite="lax")
+        resp.delete_cookie(name, path="/")
 
     def page(self, request: Request, name: str, nav: str, status_code: int = 200, **ctx):
         """Шаблон; вошедшие, человек активной полки, полки браузера, активная и участник Android-раздела — из
@@ -162,8 +185,8 @@ def referer_path(request: Request) -> str:
 
 
 def back_to(request: Request, target: str) -> str:
-    """Куда вернуться: путь из ссылки (back=…), иначе Referer — его браузер не шлёт, раз Apache отдаёт
-    Referrer-Policy: no-referrer."""
+    """Куда вернуться: путь из ссылки (back=…), иначе Referer своей страницы (политика страниц — same-origin;
+    без него — каталог)."""
     return safe_next(target) if target else referer_path(request)
 
 

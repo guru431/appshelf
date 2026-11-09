@@ -3,7 +3,7 @@ import pytest
 
 from appshelf import people
 from appshelf.android import db
-from helpers import FakeTool, make_account, sign_in
+from helpers import WHO, FakeTool, make_account, sign_in
 
 UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0"
 
@@ -78,13 +78,13 @@ def test_who_ignores_cross_site_and_foreign_uid(web, conn, cfg, clock):
     uid = google_person(conn, clock)
     shelf_app(conn, clock, uid, "ru.guest.app", "Приложение Марии")
     r = web.client.get(f"/who/{uid}?back=/android", follow_redirects=False)  # не вошёл в этом браузере
-    assert r.status_code == 303 and "appshelf_who" not in r.cookies
+    assert r.status_code == 303 and WHO not in r.cookies
     sign_in(web.client, cfg, conn, clock, uid)
     r = web.client.get(f"/who/{uid}?back=/android", headers={"Sec-Fetch-Site": "cross-site"},
                        follow_redirects=False)
-    assert r.status_code == 303 and "appshelf_who" not in r.cookies
+    assert r.status_code == 303 and WHO not in r.cookies
     assert "Приложение Марии" not in web.client.get("/android").text
-    web.client.cookies.set("appshelf_who", "999", domain="apps.example")    # подделка — не среди вошедших
+    web.client.cookies.set(WHO, "999", domain="apps.example")               # подделка — не среди вошедших
     assert "Приложение Марии" not in web.client.get("/android").text
 
 
