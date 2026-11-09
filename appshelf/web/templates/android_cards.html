@@ -83,7 +83,7 @@
     <div class="meta">в очереди{% if r %} · {{ r[:1] | lower }}{{ r[1:] }}{% endif %}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
-    {% if a.source != 'upload' and edit %}<form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
+    {% if a.source != 'upload' and edit and not (a.source == 'fourpda' and prefix != '/android') %}<form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>{% endif %}
     {% elif v and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия
       {%- elif a.check_result == 'pending' %} новая версия с другой подписью{% elif err %} {{ err }}

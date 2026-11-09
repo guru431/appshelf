@@ -561,7 +561,8 @@ hints, search and filters; guests cannot manage the shelf.
   source. Pending and paid builds are excluded. The public shelf has the same retention policy; personal pins are
   not inherited. Deleting the personal copy leaves the public copy intact. New personal downloads are never
   automatically published. Guests and people pick an older version in the card's "Версия" (Version) list; download
-  and QR follow the choice. 4PDA and uploaded files get no nightly updates on the public shelf either.
+  and QR follow the choice. 4PDA and uploaded files get no nightly updates on the public shelf either; a 4PDA copy
+  never contacts 4PDA (it has no "Повторить" (Retry)), new versions arrive by copying again.
 - **QR code** — the QR icon button to the right of "Скачать APK" reveals it on each public app, including on the
   guest page after entering the PIN. It links directly to the current APK; updates keep the link, while changing
   the PIN or shelf token invalidates old codes.

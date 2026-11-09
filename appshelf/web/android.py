@@ -492,6 +492,8 @@ def _register_scope(app, w, scope: Scope):
                 return
             if app["source"] == "fourpda" and not previous and db.has_current(c, shelf.id, package):
                 return  # вложение 4PDA закреплено: проверять нечего, новую версию выбирают в теме
+            if app["source"] == "fourpda" and not previous and scope.public:
+                return  # копия с полки владельца: 4PDA публичной недоступен, повтор — копированием заново
 
             db.set_status(c, shelf.id, package, "queued")
             if db.has_current(c, shelf.id, package):

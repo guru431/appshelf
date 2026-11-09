@@ -389,3 +389,15 @@ def test_reopen_button_only_for_owner(web, member, conn, clock):
     assert member.client.post("/android/public/pin/reopen").status_code == 403 and pin.closed_until(conn, clock.iso())
     r = web.client.post("/android/public/pin/reopen", follow_redirects=False)
     assert r.status_code == 303 and pin.closed_until(conn, clock.iso()) == ""
+
+
+def test_public_fourpda_copy_is_refreshed_only_by_copying(web, conn, clock):
+    """4PDA на публичной — копия с полки владельца (исключение из «4PDA — только личная»): «Повторить» нет, повтор
+    не ставит задание скачивания из 4PDA, которое упало бы «доступен только на личной полке»."""
+    public = db.ensure_public_shelf(conn, clock.iso())
+    db.put_app(conn, public.id, PKG, "Из темы", "fourpda", "https://4pda.to/forum/dl/post/1/x.apk", clock.iso())
+    db.set_status(conn, public.id, PKG, "error", "копия не удалась")
+    page = web.client.get("/android/public").text
+    assert "копия не удалась" in page and f"/android/public/apps/{PKG}/retry" not in page
+    web.client.post(f"/android/public/apps/{PKG}/retry")
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE shelf_id=?", (public.id,)).fetchone()[0] == 0
