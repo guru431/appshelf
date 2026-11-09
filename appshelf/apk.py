@@ -331,8 +331,17 @@ def _value(strings: list[str], raw: int, dtype: int, value: int):
 
 
 def _strings(chunk: bytes) -> list[str]:
+    """Пул строк целиком. Смещения разных строк могут указывать на одну длинную строку: без предела пул в
+    несколько МБ раздувается в гигабайты строк. В честном пуле строки не перекрываются — символов не больше байт."""
     (count,) = struct.unpack_from("<I", chunk, 8)
-    return [_string(chunk, i) for i in range(count)]
+    out, total = [], 0
+    for i in range(count):
+        s = _string(chunk, i)
+        total += len(s)
+        if total > len(chunk):
+            raise ValueError("строки пула длиннее самого пула")
+        out.append(s)
+    return out
 
 
 def _string(chunk: bytes, i: int) -> str:
