@@ -123,7 +123,7 @@ def test_short_screen_menu_settings_and_device_profile(web, conn, cfg, clock, tm
                 sheet = page.locator('.acct .sheet')
                 page.wait_for_function("document.querySelector('.acct .sheet').style.getPropertyValue('--sheet-top') !== ''")
                 assert sheet.evaluate('e => e.scrollHeight > e.clientHeight')
-                last = sheet.get_by_role('link', name='Публичная', exact=True)
+                last = sheet.get_by_role('link', name='Публичная')
                 last.focus()
                 assert last.evaluate('e => e.getBoundingClientRect().bottom < innerHeight - 60')
                 page.keyboard.press('Enter')
@@ -418,6 +418,7 @@ def test_pending_uploads_tray_link_and_plain_errors(web, conn, cfg, clock, acct,
 
 
 @pytest.mark.integration
+@pytest.mark.timeout(90)  # 22 страницы в двух темах и диалоги: ~25 с на ширину, под нагрузкой — дольше 30 с
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock, acct, width, local_chromium):
     playwright, executable = local_chromium
@@ -662,6 +663,125 @@ def test_download_mark_remembers_version_in_this_browser(web, make_web, conn, cf
             with page.expect_download():
                 page.get_by_role("link", name="Скачать APK", exact=True).click()
             assert mark.inner_text() == "Скачана в этом браузере"
+            assert not errors
+        finally:
+            browser.close()
+
+
+# наименьший контраст видимого текста внутри элемента: цвет текста и фон всех предков, с прозрачностью
+MIN_TEXT_CONTRAST = '''root => {
+  const rgba = x => x.match(/[\\d.]+/g).map(Number);
+  const lum = c => c.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((a,x,i)=>a+x*[.2126,.7152,.0722][i],0);
+  let worst = [99, ''];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const e = walker.currentNode.parentElement, text = walker.currentNode.textContent.trim();
+    if (!text || !e.getClientRects().length) continue;
+    let chain = [], el = e, opacity = 1;
+    while (el) { const s = getComputedStyle(el); chain.unshift(rgba(s.backgroundColor)); opacity *= Number(s.opacity); el = el.parentElement; }
+    let bg = [255,255,255];
+    for (const c of chain) { const a = c.length > 3 ? c[3] : 1; bg = bg.map((x,i) => c[i]*a + x*(1-a)); }
+    const c = rgba(getComputedStyle(e).color), a = (c.length > 3 ? c[3] : 1) * opacity;
+    const fg = c.slice(0,3).map((x,i) => x*a + bg[i]*(1-a));
+    const ratio = (Math.max(lum(bg),lum(fg))+.05)/(Math.min(lum(bg),lum(fg))+.05);
+    if (ratio < worst[0]) worst = [ratio, text];
+  }
+  return worst;
+}'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [390, 1280])
+def test_settings_subpages_shelf_menu_theme_icon_and_dates(web, make_web, conn, cfg, clock, acct, width,
+                                                           local_chromium):
+    """«Настройки» подсвечены на подстраницах и ведут назад, у каждой полки в меню — своё состояние, тема на входе —
+    значок, даты не рвутся, текст и кнопки — не ниже WCAG AA в обеих темах."""
+    from appshelf import store
+    from helpers import make_account
+    conn.execute("UPDATE accounts SET session='ok' WHERE id=?", (acct.id,))
+    make_account(conn, clock, email="work.account@example", user_id=acct.user_id, session="expired")
+    store.upsert_purchases(conn, acct.id, [{"id": 555, "bundleId": "com.example.very.long.bundle.identifier.app",
+                                            "name": "Приложение с длинным идентификатором",
+                                            "purchaseDate": "2024-05-01T03:04:05Z"}], clock.iso())
+    web.client.post("/admin/invites", data={"label": "старое приглашение"})
+    web.client.post("/admin/invites/1/disable")
+    anon = make_web(cfg, conn)
+
+    def router(client):
+        def route(target):
+            request, u = target.request, urlsplit(target.request.url)
+            result = client.request(request.method, u.path + ("?" + u.query if u.query else ""),
+                                    content=request.post_data_buffer, follow_redirects=False,
+                                    headers={"content-type": request.headers.get("content-type", "")})
+            target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+        return route
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("https://apps.example/**", router(web.client))
+            guest = browser.new_page(viewport={"width": width, "height": 844})
+            guest.route("https://apps.example/**", router(anon.client))
+            for theme in ("light", "dark"):
+                web.client.get(f"/theme?set={theme}")
+                anon.client.get(f"/theme?set={theme}")
+                page.goto("https://apps.example/history")
+                assert page.title() == "Покупки · appshelf"
+                assert page.locator(".tabs [aria-current='page']").inner_text() == "Покупки"
+                assert page.locator(".row .date").first.evaluate("e => e.getClientRects().length") == 1
+                for path, title in (("/apple", "Аккаунты"), ("/admin", "Участники")):
+                    page.goto("https://apps.example" + path)
+                    assert page.title() == f"{title} · appshelf"
+                    assert page.locator(".tabs .on").inner_text() == "Настройки"
+                    assert page.locator(".tabs .on").get_attribute("aria-current") == "true"
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (path, theme)
+                    for selector in ("header", "main", ".tabs"):
+                        ratio, text = page.locator(selector).evaluate(MIN_TEXT_CONTRAST)
+                        assert ratio >= 4.5, (path, theme, selector, text, ratio)
+                assert page.locator(".row.inactive .title").inner_text() == "старое приглашение"
+                page.screenshot(path=str(cfg.data_dir / f"admin-{width}-{theme}.png"), full_page=True)
+                page.get_by_role("link", name="Назад в Настройки", exact=True).click()
+                page.wait_for_url("**/settings")
+                assert page.locator(".tabs [aria-current='page']").inner_text() == "Настройки"
+                assert page.locator(".back").count() == 0
+                page.goto("https://apps.example/?os=apple")
+                page.get_by_label("Выбрать полку", exact=True).click()
+                sheet = page.locator(".acct .sheet")
+                page.wait_for_function("!document.querySelector('.acct .sheet').getAnimations().length")
+                current = sheet.locator("[aria-current='true']")
+                assert "owner@example" in current.inner_text() and "Иван Петров · RU" in current.inner_text()
+                other = sheet.get_by_role("link", name="work.account@example вход истёк", exact=True)
+                assert other.locator(".dot.expired").is_visible()
+                for name in ("Аккаунты и полки…", "Добавить Apple ID"):
+                    assert sheet.get_by_role("link", name=name, exact=True).is_visible()
+                ratio, text = sheet.evaluate(MIN_TEXT_CONTRAST)
+                assert ratio >= 4.5, (theme, text, ratio)
+                for button in ("--btn", "--btn-disabled"):
+                    ratio = page.evaluate(f"""() => {{
+                      const c = getComputedStyle(document.documentElement).getPropertyValue('{button}').trim();
+                      const lum = [1,3,5].map(i => parseInt(c.slice(i, i+2), 16) / 255)
+                        .map(x => x <= .04045 ? x/12.92 : ((x+.055)/1.055)**2.4).reduce((a,x,i) => a + x*[.2126,.7152,.0722][i], 0);
+                      return 1.05 / (lum + .05);
+                    }}""")
+                    assert ratio >= 4.5, (theme, button, ratio)   # белый текст на кнопке
+                page.screenshot(path=str(cfg.data_dir / f"shelf-menu-{width}-{theme}.png"))
+                guest.goto("https://apps.example/login")
+                assert guest.title() == "Вход · appshelf"
+                icon = guest.locator(".theme-entry summary")
+                box, brand = icon.bounding_box(), guest.locator(".brand img").bounding_box()
+                assert box["width"] >= 44 and box["height"] >= 44 and box["y"] + box["height"] <= brand["y"]
+                assert icon.get_attribute("aria-label").startswith("Оформление: ")
+                icon.click()
+                guest.wait_for_function("!document.querySelector('.theme-entry .sheet').getAnimations().length")
+                assert guest.get_by_role("navigation", name="Оформление").locator("[aria-current='true']").inner_text() \
+                    == ("Светлая" if theme == "light" else "Тёмная")
+                ratio, text = guest.locator("body").evaluate(MIN_TEXT_CONTRAST)
+                assert ratio >= 4.5, (theme, text, ratio)
+                assert guest.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors
         finally:
             browser.close()

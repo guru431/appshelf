@@ -6,7 +6,10 @@
 <meta name="robots" content="noindex">
 {# сильнее заголовка Referrer-Policy (и глобального в Apache): свои POST несут Origin, чужим сайтам Referer не уходит #}
 <meta name="referrer" content="same-origin">
-<title>appshelf</title>
+{% set heading = page_title or {'catalog': 'Каталог', 'history': 'Покупки', 'blocked': 'Удалённые', 'apple': 'Аккаунты',
+   'admin': 'Участники', 'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная', 'settings': 'Настройки',
+   'login': 'Вход', 'guest': 'Публичная полка'}.get(nav, '') %}
+<title>{{ heading ~ ' · ' if heading }}appshelf</title>
 <link rel="manifest" href="/pwa/manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="32x32" href="/pwa/icon-32.png">
 <link rel="apple-touch-icon" href="/pwa/icon-180.png">
@@ -17,24 +20,26 @@
 {% else %}<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">{% endif %}
 <style>
-/* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в меню Apple ID */
+/* тёмная — по умолчанию; светлая — как в системе (iPhone «Оформление») или переключателем в «Настройках»
+   (на входе и у гостя — значок вверху); светлая палитра — одна, для обоих селекторов.
+   --btn, --btn-disabled — фон основной и неактивной кнопки с белым текстом, одинаковые в обеих темах (контраст ≥ 4.5) */
 :root { color-scheme: dark; --bg: #000; --card: #1c1c1e; --raised: #2c2c2e; --bar: rgba(20,20,22,.74);
         --line: rgba(255,255,255,.1); --fg: #f5f5f7; --muted: #a1a1a8; --accent: #0a84ff; --link: #4da3ff;
         --tint: rgba(10,132,255,.22); --fill: rgba(120,120,128,.26); --seg: #636366; --err: #ff6961;
         --errtint: rgba(255,69,58,.2); --ok: #30d158; --warn: #ffd60a; --banner: rgba(255,214,10,.13);
-        --shadow: inset 0 1px 0 rgba(255,255,255,.06); --pop: 0 0 0 1px rgba(255,255,255,.1), 0 18px 44px rgba(0,0,0,.6); }
+        --shadow: inset 0 1px 0 rgba(255,255,255,.06); --pop: 0 0 0 1px rgba(255,255,255,.1), 0 18px 44px rgba(0,0,0,.6);
+        --btn: #005bb8; --btn-disabled: #4b5665; }
+{% set light_palette -%}
+color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
+        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #606064; --accent: #0071e3; --link: #0060c0;
+        --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
+        --errtint: rgba(255,59,48,.11); --ok: #1a7f37; --warn: #6b4f00; --banner: #fff3c4;
+        --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2);
+{%- endset %}
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
-        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #606064; --accent: #0071e3; --link: #0066cc;
-        --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
-        --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
-        --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
+  :root:not([data-theme="dark"]) { {{ light_palette }} }
 }
-:root[data-theme="light"] { color-scheme: light; --bg: #f2f2f7; --card: #fff; --raised: #fff; --bar: rgba(247,247,250,.8);
-        --line: rgba(60,60,67,.13); --fg: #1c1c1e; --muted: #606064; --accent: #0071e3; --link: #0066cc;
-        --tint: rgba(0,113,227,.11); --fill: rgba(120,120,128,.14); --seg: #fff; --err: #c5001a;
-        --errtint: rgba(255,59,48,.11); --ok: #1f8a3b; --warn: #6b4f00; --banner: #fff3c4;
-        --shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); --pop: 0 0 0 1px rgba(0,0,0,.06), 0 18px 44px rgba(0,0,0,.2); }
+:root[data-theme="light"] { {{ light_palette }} }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body { margin: 0; padding-bottom: calc(72px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--fg);
@@ -55,6 +60,11 @@ header { position: -webkit-sticky; position: sticky; top: 0; z-index: 10; displa
                   max(calc(16px + env(safe-area-inset-left)), calc(50% - 344px));
          background: var(--bar); border-bottom: 1px solid var(--line);
          -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+header.with-back { flex-wrap: wrap; row-gap: 2px; }
+.back-row { flex: 0 0 100%; margin: -6px 0 -2px; }
+.back { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-size: 16px; }
+.back::before { content: ""; width: 9px; height: 9px; margin-left: 3px; border: solid currentColor; border-width: 0 0 2px 2px;
+                transform: rotate(45deg); }
 .pop { position: relative; }
 .pop > summary { display: block; list-style: none; cursor: pointer; -webkit-user-select: none; user-select: none; }
 .pop > summary::-webkit-details-marker { display: none; }
@@ -75,11 +85,16 @@ header { position: -webkit-sticky; position: sticky; top: 0; z-index: 10; displa
 .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .dot.ok { background: var(--ok); }
 .dot.expired { background: var(--err); }
-.shelves a, .shelves .on { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px;
+.shelves > a, .shelves > .on { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px;
                            border-radius: 12px; color: var(--fg); font-size: 15px; overflow-wrap: anywhere; word-break: break-word; }
-.shelves .on { font-weight: 600; }
-.shelves .on::after { content: "✓"; color: var(--link); }
+.shelves > .on { font-weight: 600; }
+.shelves > .on::after { content: "✓"; color: var(--link); }
 .sheet .meta { padding: 4px 12px 12px; }
+/* строка полки в меню «Полка»: точка входа, адрес и под ним состояние */
+.shelves .shelf { flex: 1; min-width: 0; }
+.shelves .shelf .meta { display: block; padding: 0; font-size: 13px; font-weight: 400; }
+.shelves .shelf .meta.err, .shelves .shelf .meta .err { color: var(--err); }
+.sheet .manage { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
 .seg { display: flex; margin-bottom: 8px; padding: 2px; border-radius: 11px; background: var(--fill); font-size: 14px; }
 .seg a { flex: 1; padding: 7px 4px; border-radius: 9px; color: var(--fg); text-align: center; }
 .seg a.on { background: var(--seg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
@@ -113,7 +128,7 @@ h2:first-child { margin-top: 4px; }
 .app img, .noicon { flex: none; width: 64px; height: 64px; border-radius: 15px; background: var(--fill);
                     box-shadow: 0 0 0 1px var(--line), 0 3px 10px rgba(0,0,0,.16); }
 .noicon { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 26px; font-weight: 700; }
-.body { flex: 1; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.body { flex: 1; min-width: 0; overflow-wrap: break-word; }
 .download-actions { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .download-actions.with-qr > .pill { min-width: 0; padding-left: 12px; padding-right: 12px; }
 .download-actions > .qr-toggle { flex: none; width: 36px; padding: 0; }
@@ -133,7 +148,7 @@ h2:first-child { margin-top: 4px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px; }
 .row + .row { border-top: 1px solid var(--line); }
 .row .body { flex: 1 1 150px; }
-.row.inactive { opacity: .45; }
+.row.inactive .body { color: var(--muted); }
 .act { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .source-results .body { overflow-wrap: anywhere; }
 .source-results .act { max-width: 100%; }
@@ -153,6 +168,7 @@ main > .hint { margin-left: 4px; margin-right: 4px; }
 .sub { margin: 18px 4px 8px; font-size: 15px; font-weight: 600; }
 .err { color: var(--err); }
 .done { color: var(--ok); white-space: nowrap; }
+.date { white-space: nowrap; }  /* Chrome переносит «2024-05-⏎01» после дефиса */
 .empty { padding: 48px 16px; color: var(--muted); text-align: center; }
 .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--fill); color: var(--muted);
        font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; vertical-align: 2px; }
@@ -175,13 +191,13 @@ code { display: block; margin-top: 8px; padding: 10px 12px; border-radius: 10px;
 /* кнопки: основная, .secondary, .tint, .danger; .sm — капсула в строке списка */
 button, .btn { -webkit-appearance: none; appearance: none; display: inline-flex; align-items: center; justify-content: center;
                min-height: 44px; max-width: 100%; margin: 0; padding: 9px 18px; border: 0; border-radius: 13px;
-               background: #005bb8; color: #fff;
+               background: var(--btn); color: #fff;
                font: inherit; font-size: 16px; font-weight: 600; line-height: 1.25; text-align: center; text-decoration: none; cursor: pointer;
                box-shadow: inset 0 1px 0 rgba(255,255,255,.2), 0 1px 2px rgba(0,0,0,.16); touch-action: manipulation;
                transition: transform .12s, filter .12s; -webkit-user-select: none; user-select: none; }
 button:active, .btn:active { transform: scale(.97); filter: brightness(.9); }
 @media (hover: hover) { button:hover, .btn:hover { filter: brightness(1.06); } }
-button:disabled { cursor: default; background: #4b5665; color: #fff; filter: none; }
+button:disabled { cursor: default; background: var(--btn-disabled); color: #fff; filter: none; }
 .upload-feedback { margin-top: 12px; scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom)); }
 .upload-feedback progress { display: block; width: 100%; height: 10px; accent-color: var(--accent); }
 .upload-feedback p { margin: 6px 0 0; }
@@ -275,8 +291,11 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 .shelf-filter-options { display: grid; gap: 8px; }
 .shelf-filter select { width: 100%; min-width: 0; font-size: 14px; }
 @media (min-width: 600px) { .shelf-filter-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.theme-entry { max-width: 720px; margin: 12px auto 0; padding: 0 16px; text-align: right; }
-.theme-entry .pop { display: inline-block; text-align: left; }
+/* вход и гость: оформление — значок в углу, не над логотипом */
+.theme-entry { position: absolute; z-index: 10; top: calc(8px + env(safe-area-inset-top));
+               right: max(calc(12px + env(safe-area-inset-right)), calc(50% - 352px)); }
+.theme-entry summary { display: flex; width: 44px; padding: 0; border-radius: 50%; }
+.theme-entry summary svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .desktop-transfer { margin-top: 8px; }
 [data-device-form] select { display: block; width: 100%; min-height: 44px; padding: 8px;
   font: inherit; color: var(--fg); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; }
@@ -292,40 +311,53 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 </style>
 </head>
 <body>
+{# подстраницы «Настроек» (Аккаунты, Участники, подключения, подтверждения): вкладка «Настройки» и путь назад #}
 {% macro tab(href, key, label, icon) -%}
-  <a href="{{ href }}" class="{{ 'on' if nav == key }}"{% if nav == key %} aria-current="page"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
+  {%- set current = nav == key or (key == 'settings' and nav in ('apple', 'admin')) -%}
+  <a href="{{ href }}" class="{{ 'on' if current }}"{% if current %} aria-current="{{ 'page' if nav == key else 'true' }}"{% endif %}><svg viewBox="0 0 24 24" aria-hidden="true">{{ icon | safe }}</svg><span>{{ label }}</span></a>
 {%- endmacro %}
 {% if nav not in ('login', 'guest') %}
 {% set android = section == 'android' %}
-<header>
-  <h1>{{ {'catalog': 'Каталог', 'history': 'История', 'blocked': 'Удалённые', 'apple': 'Аккаунты', 'admin': 'Участники',
-         'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная', 'settings': 'Настройки'}[nav] }}</h1>
+<header{% if nav in ('apple', 'admin') %} class="with-back"{% endif %}>
+  {% if nav in ('apple', 'admin') %}<div class="back-row"><a class="back" href="/settings" aria-label="Назад в Настройки">Настройки</a></div>{% endif %}
+  <h1>{{ heading }}</h1>
   <nav class="os" aria-label="Раздел"><a href="/?os=apple"{% if not android %} class="on" aria-current="true"{% endif %}>Apple</a><a href="/android"{% if android %} class="on" aria-current="true"{% endif %}>Android</a></nav>
   <details class="pop acct">
     {%- if android %}
     {# Android-раздел: полка одного из вошедших (/who/<id>) или публичная #}
-    <summary aria-label="Выбрать полку"><span class="chip"><span class="who">Полка: {{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
+    <summary aria-label="Выбрать полку"><span class="chip"><span class="who">{{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
-      <div class="menu-heading">Полка</div><div class="shelves">
+      <div class="menu-heading">Личные</div><div class="shelves">
         {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on" aria-current="true">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
-        {%- if nav == 'a_public' %}<span class="on" aria-current="true">Публичная</span>{% else %}<a href="/android/public">Публичная</a>{% endif -%}
+      </div>
+      <div class="menu-heading">Общие</div><div class="shelves">
+        {%- set label %}<span class="shelf">Публичная<span class="meta">все участники и гости по PIN</span></span>{% endset -%}
+        {%- if nav == 'a_public' %}<span class="on" aria-current="true">{{ label }}</span>{% else %}<a href="/android/public">{{ label }}</a>{% endif -%}
       </div>
     {%- else %}
-    <summary aria-label="Выбрать полку"><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">Полка: {{ acct.email if acct else who.name if who else 'Меню' }}</span></span></summary>
+    {# на чипе — участник; адрес — только если Apple ID у него несколько #}
+    {%- set own = accounts | selectattr('user_id', 'equalto', acct.user_id) | list if acct else [] %}
+    <summary aria-label="Выбрать полку"><span class="chip">{% if acct %}<i class="dot {{ acct.session }}"></i>{% endif %}<span class="who">
+      {%- if acct %}{{ user.name if user else acct.email }}{% if user and own | length > 1 %} · {{ acct.email.split('@')[0] }}{% endif %}
+      {%- else %}{{ who.name if who else 'Меню' }}{% endif %}</span></span></summary>
     <div class="sheet">
       {%- if accounts %}
       <div class="menu-heading">Полка</div><div class="shelves">
-        {%- for a in accounts %}{% if a.id == acct.id %}<span class="on" aria-current="true">{{ a.email }}</span>{% else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}">{{ a.email }}</a>{% endif %}{% endfor -%}
+        {%- for a in accounts %}
+        {%- if a.id == acct.id %}<span class="on" aria-current="true"><i class="dot {{ a.session }}"></i><span class="shelf">{{ a.email }}<span class="meta">
+          {%- if a.session == 'ok' %}{{ a.name }}{% if a.storefront %} · {{ a.storefront }}{% endif %}
+          {%- elif a.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк — войти заново</a>
+          {%- else %}нет входа{% endif %}</span></span></span>
+        {%- else %}<a href="/acct/{{ a.id }}?back={{ here | urlencode }}"><i class="dot {{ a.session }}"></i><span class="shelf">{{ a.email }}
+          {%- if a.session == 'expired' %}<span class="meta err">вход истёк</span>{% elif a.session != 'ok' %}<span class="meta">нет входа</span>{% endif %}</span></a>
+        {%- endif %}{% endfor -%}
       </div>
       {%- endif %}
     {%- endif %}
-      {%- if acct and not android %}
-      <div class="meta">
-        {%- if acct.session == 'ok' %}{{ acct.name }} · {{ acct.storefront }}
-        {%- elif acct.session == 'expired' %}<a class="err" href="/login?{{ relogin }}">вход истёк</a>
-        {%- else %}нет входа{% endif -%}
+      <div class="shelves manage">
+        <a href="/apple">Аккаунты и полки…</a>
+        {%- if not android %}<a href="/apple/add">Добавить Apple ID</a>{% endif %}
       </div>
-      {%- endif %}
     </div>
   </details>
 </header>
@@ -337,14 +369,14 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
   {%- else %}
   {# ?os=apple: на телефоне Android «/» открыл бы Android-раздел #}
   {{ tab('/?os=apple', 'catalog', 'Каталог', grid) }}
-  {{ tab('/history', 'history', 'История', '<circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l2.9 1.8"/>') }}
+  {{ tab('/history', 'history', 'Покупки', '<path d="M5.6 8.5h12.8l-1 11.5H6.6z"/><path d="M9 11V7.5a3 3 0 0 1 6 0V11"/>') }}
   {{ tab('/blocked', 'blocked', 'Удалённые', '<circle cx="12" cy="12" r="8.2"/><path d="M6.3 6.3l11.4 11.4"/>') }}
   {%- endif %}
   {{ tab('/settings', 'settings', 'Настройки', '<circle cx="12" cy="12" r="8"/><path d="M8 9h8M8 15h8"/>') }}
 </nav>
 {% endif %}
 {% if nav in ('login', 'guest') %}
-<div class="theme-entry"><details class="pop"><summary class="btn sm secondary">Оформление: {{ {'light': 'светлая', 'dark': 'тёмная'}.get(theme, 'как в системе') }}</summary>
+<div class="theme-entry"><details class="pop"><summary class="btn secondary" aria-label="Оформление: {{ {'light': 'светлая', 'dark': 'тёмная'}.get(theme, 'как в системе') }}" title="Оформление"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none"/></svg></summary>
 <div class="sheet"><nav class="shelves" aria-label="Оформление">
 {% for value, label in [('auto', 'Как в системе'), ('light', 'Светлая'), ('dark', 'Тёмная')] %}
 <a href="/theme?set={{ value }}&amp;back={{ here | urlencode }}"{% if theme == value or (not theme and value == 'auto') %} class="on" aria-current="true"{% endif %}>{{ label }}</a>

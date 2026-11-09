@@ -6,7 +6,7 @@
   {%- for value, label, n in state_links %}<a href="/?os=apple&amp;filter={{ value }}"{% if filter_mode == value %} class="on"{% endif %}>{{ label }} · {{ n }}</a>{% endfor %}
   {%- if checkable %}<form method="post" action="{{ post_url('/apps/check') }}"><button class="sm secondary">Проверить обновления всех</button></form>{% endif %}
 </div>{% endif %}
-{% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
+{% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«Покупки»</a>.</p>{% endif %}
 {% for a in apps %}
 <div class="card app">
   {% if a.current %}<img src="{{ public_url(a.current['dir'], 'icon.png') }}" alt="">{% else %}<div class="noicon">{{ a.name[:1] | upper }}</div>{% endif %}

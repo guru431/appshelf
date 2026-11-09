@@ -10,7 +10,7 @@ from starlette.testclient import TestClient
 from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
 from appshelf.web import signin
-from helpers import ACCT, AUTH, HOST, FakeTool, make_account, seed_app, sign_in
+from helpers import ACCT, AUTH, HOST, FakeTool, current_shelf, make_account, seed_app, sign_in
 
 BASE = f"https://{HOST}"
 
@@ -363,7 +363,7 @@ def test_host_prefixed_cookies_and_old_names(make_web, cfg, conn, acct, clock):
     assert old.get("/", follow_redirects=False).status_code == 200
     second = make_account(conn, clock, email="second@example", legacy=False, user_id=acct.user_id)
     wb.client.cookies.set("appshelf_acct", str(second.id), domain=HOST)   # старое имя не сильнее нового
-    assert '<span class="on" aria-current="true">owner@example</span>' in wb.client.get("/").text
+    assert current_shelf(wb.client.get("/").text) == "owner@example"
     r = wb.client.post("/logout", follow_redirects=False)
     gone = [h for h in r.headers.get_list("set-cookie") if "max-age=0" in h.lower()]
     assert any(h.startswith(AUTH + "=") and "secure" in h.lower() for h in gone)   # без Secure браузер отбросит
@@ -515,7 +515,7 @@ def test_login_in_signed_in_browser_adds_the_person(web, conn, clock):  # 2026-1
     r = web.client.post("/login", data={"email": "shared@example", "password": "pw"}, follow_redirects=False)
     assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
     page = web.client.get("/").text
-    assert "/acct/1" in page and '<span class="on" aria-current="true">shared@example</span>' in page
+    assert "/acct/1" in page and current_shelf(page) == "shared@example"
     before = web.client.cookies.get(AUTH)
     clock.advance(3600)
     web.client.post("/login", data={"email": "owner@example", "password": "pw"})   # владелец входит заново
@@ -531,7 +531,7 @@ def test_login_link_adds_person_to_signed_in_browser(web, conn, clock):
     r = web.client.post(f"/l/{token}", follow_redirects=False)
     assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
     page = web.client.get("/").text
-    assert "/acct/1" in page and '<span class="on" aria-current="true">shared@example</span>' in page
+    assert "/acct/1" in page and current_shelf(page) == "shared@example"
     assert set(web.tools) == {1}                                      # к Apple не ходили
 
 
@@ -544,7 +544,7 @@ def test_invite_in_signed_in_browser_adds_the_new_person(web, conn, clock):
     shared = people.account_by_email(conn, "shared@example")
     assert shared.user_id != 1 and people.get_user(conn, shared.user_id).role == "member"
     page = web.client.get("/").text
-    assert "/acct/1" in page and '<span class="on" aria-current="true">shared@example</span>' in page   # вошли оба, активен новый
+    assert "/acct/1" in page and current_shelf(page) == "shared@example"   # вошли оба, активен новый
 
 
 def test_new_apple_id_added_from_shared_shelf_stays_private(web, conn, cfg, clock):

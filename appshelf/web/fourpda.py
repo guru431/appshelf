@@ -38,7 +38,7 @@ def register_routes(app, w, sessions, browser):
         except SourceError:
             session = None
             error = error or fourpda.EXPIRED
-        response = w.page(request, "fourpda_connect.html", "apple", status, person=user,
+        response = w.page(request, "fourpda_connect.html", "apple", status, page_title="4PDA", person=user,
                           connected=session.name if session else "", error=error, token=token)
         response.headers["Cache-Control"] = "no-store"
         return response

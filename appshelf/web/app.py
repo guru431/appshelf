@@ -180,7 +180,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     @app.get("/privacy", response_class=HTMLResponse)
     def privacy(request: Request):
-        return w.page(request, "privacy.html", "guest")
+        return w.page(request, "privacy.html", "guest", page_title="Конфиденциальность")
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request):

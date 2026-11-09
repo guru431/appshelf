@@ -9,7 +9,7 @@ from appshelf import jobs, store
 from appshelf.config import GB
 from appshelf.ipatool import LicenseNotFound
 from appshelf.web.app import parse_app_id
-from helpers import HOST, TOKEN, FakeTool, make_account, seed_app, set_session, sign_in
+from helpers import HOST, TOKEN, FakeTool, current_shelf, make_account, seed_app, set_session, sign_in
 from ipa_factory import make_ipa
 
 
@@ -377,13 +377,33 @@ def test_unpublish_refused_while_archive_unavailable(web, conn, cfg, clock):
     assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
 
 
+def test_settings_subpages_titles_and_shelf_menu(web, conn, clock):
+    """Подстраницы «Настроек» подсвечивают «Настройки» и ведут назад; в меню «Полка» у каждой полки своё состояние."""
+    make_account(conn, clock, email="work@example", user_id=1, session="expired")
+    for path in ("/apple", "/admin", "/apple/add", "/fourpda/1/connect"):
+        page = web.client.get(path).text
+        assert '<a href="/settings" class="on" aria-current="true">' in page, path
+        assert '<a class="back" href="/settings"' in page, path
+    assert "<title>4PDA · appshelf</title>" in page
+    page = web.client.get("/history").text
+    assert "<title>Покупки · appshelf</title>" in page and "<h1>Покупки</h1>" in page
+    assert '<a href="/history" class="on" aria-current="page">' in page and 'class="back"' not in page
+    assert current_shelf(page) == "owner@example"
+    assert '<span class="who">Иван Петров · owner</span>' in page       # у участника два Apple ID — с адресом
+    assert ('<i class="dot expired"></i><span class="shelf">work@example<span class="meta err">вход истёк</span>'
+            in page)
+    assert '<a href="/apple">Аккаунты и полки…</a><a href="/apple/add">Добавить Apple ID</a>' in page
+    page = web.client.get("/android").text
+    assert '<div class="menu-heading">Общие</div>' in page and '<a href="/android/public"><span class="shelf">Публичная<' in page
+
+
 def test_expired_banner_on_history_and_removed(web, conn):
     set_session(conn, 1, "expired")
     for path, back in (("/history", "%2Fhistory"), ("/blocked", "%2Fblocked")):
         text = web.client.get(path).text
         assert f'Вход в Apple ID owner@example истёк — <a href="/login?email=owner%40example&amp;next={back}">' in text
-    assert '<a class="err" href="/login?email=owner%40example&amp;next=%2Fapple">вход истёк</a>' in \
-        web.client.get("/apple").text                      # в шапке — ссылка, на «Apple ID» баннера нет
+    assert '<a class="err" href="/login?email=owner%40example&amp;next=%2Fapple">вход истёк — войти заново</a>' in \
+        web.client.get("/apple").text                      # в меню «Полка» — ссылка, на «Apple ID» баннера нет
     assert "задания ждут" not in web.client.get("/apple").text
 
 

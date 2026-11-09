@@ -3,7 +3,7 @@ import re
 from starlette.testclient import TestClient
 
 from appshelf import people, store
-from helpers import HOST, make_account, seed_app, set_session, sign_in
+from helpers import HOST, current_shelf, make_account, seed_app, set_session, sign_in
 
 BASE = f"https://{HOST}"
 
@@ -178,7 +178,7 @@ def test_admin_follows_the_owner_not_the_active_shelf(web, conn, cfg, clock):
     sign_in(web.client, cfg, conn, clock, p.user_id)
     web.client.get(f"/acct/{p.id}")
     page = web.client.get("/").text
-    assert '<span class="on" aria-current="true">petr@example</span>' in page
+    assert current_shelf(page) == "petr@example"
     assert 'href="/admin"' in web.client.get('/settings').text
     admin = web.client.get("/admin")
     assert admin.status_code == 200

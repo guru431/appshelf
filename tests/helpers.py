@@ -1,6 +1,7 @@
 """Общее для тестов: токен, подменённые часы, Apple ID, наполнение базы."""
 from __future__ import annotations
 
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,6 +77,12 @@ def sign_in(client, cfg, conn, clock, uid: int = 1) -> None:
     key, now = webauth.load_key(cfg.cookie_key), int(clock.t)
     signed = webauth.signed_users(key, client.cookies.get(AUTH) or "", now, lambda u: people.get_user(conn, u))
     client.cookies.set(AUTH, webauth.with_user(key, signed, people.get_user(conn, uid), now), domain=HOST)
+
+
+def current_shelf(page: str) -> str | None:
+    """Адрес Apple ID, отмеченный текущим в меню «Полка», или None."""
+    m = re.search(r'<span class="on" aria-current="true"><i class="dot \w*"></i><span class="shelf">([^<]+)<', page)
+    return m and m[1]
 
 
 def make_account(conn, clock, email=OWNER_EMAIL, role="owner", legacy=True, session="none", user_id=None,

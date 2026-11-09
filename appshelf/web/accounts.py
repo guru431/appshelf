@@ -174,7 +174,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         """Подключение к Google Play: инструкция, предупреждение, поле oauth_token (без значения — его не отдаём
         назад), прокси — если владелец среди вошедших."""
         owner = any(u.role == people.OWNER for u in request.state.users)
-        return w.page(request, "play_connect.html", "apple", status_code, g=g, error=error,
+        return w.page(request, "play_connect.html", "apple", status_code, page_title="Google Play", g=g, error=error,
                       proxies=sorted(w.cfg.proxies) if owner else [])
 
     @app.get("/google/{gid}/play", response_class=HTMLResponse)
