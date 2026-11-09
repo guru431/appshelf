@@ -65,7 +65,7 @@
 **Resolved:** 2026-11-01 — по явному решению владельца перенесено в deferred. Возобновить после добавления Play-приложения, установки на телефон и наблюдения ночной проверки; прежние проверки без Play-карточек приёмкой не считаются.
 
 ## 2026-10-31 · code-review role:review: Проксирование и исключение «!» заданы в разных <Location>-се... [P1]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/deploy/apache-appshelf.conf:31-36, 47-50, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/deploy/apache-appshelf.conf:31-36, 47-50, category=correctness
 **What:** Проксирование и исключение «!» заданы в разных <Location>-секциях, причём общая секция с ProxyPass идёт первой, а <Location /d/> с ProxyPass "!" — позже. По документации mod_proxy директивы ProxyPass внутри <Location>-секций обрабатываются в порядке появления в конфигурации, и побеждает первая совпавшая секция (в отличие от обычного слияния секций Apache, где поздняя переопределяет раннюю). Значит запросы к /d/... будут проксированы в приложение, а не отданы Alias-ом из архива: OTA-установка (itms-services на manifest.plist) и раздача IPA/APK сломаются. Комментарий в файле утверждает противоположное («более частные Location — после общего: они его переопределяют»), что для ProxyPass неверно.
 **Evidence:** `ProxyPass "unix:/run/appshelf/web.sock|http://localhost/" retry=1 timeout=180`
 **Proposal:** Перенести исключение выше общей секции: поставить <Location /d/> с ProxyPass "!" (и остальные частные Location) ДО <Location /> с рабочим ProxyPass, либо вынести ProxyPass на уровень VirtualHost с явным порядком (сначала ProxyPass /d/ !, затем общий ProxyPass /).
@@ -73,7 +73,7 @@
 **Resolved:** 2026-10-31 — опровергнуто официальной документацией mod_proxy, раздел Ordering ProxyPass Directives in Locations: в отдельных Location действует последняя совпавшая секция, частные ставятся после общей. Правило first match относится к ProxyPass на уровне server/vhost. Текущий /d/ после / корректен; предложенная перестановка ломает исключение. https://httpd.apache.org/docs/2.4/mod/mod_proxy.html#proxypass
 
 ## 2026-10-31 · code-review role:review: Успешный ответ удаляет служебные cookie через w.set_cookie (... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/google_signin.py:128-131, category=inconsistency
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/web/google_signin.py:128-131, category=inconsistency
 **What:** Успешный ответ удаляет служебные cookie через w.set_cookie (с samesite/secure/httponly по конфигу), а отказные пути удаляют google.COOKIE голым resp.delete_cookie(google.COOKIE, path="/") без secure/samesite/httponly атрибутов — атрибуты удаления должны совпадать с атрибутами установки, иначе некоторые браузеры не удалят cookie (несоответствие secure/domain/samesite).
 **Evidence:** `resp.delete_cookie(google.COOKIE, path="/")`
 **Proposal:** Удалять cookie через единый хелпер w.delete_cookie(resp, name), выставляющий те же secure/samesite/httponly, что и set_cookie.
@@ -81,7 +81,7 @@
 **Resolved:** 2026-10-31 — предпосылка неверна: успешный и отказной callback используют одинаковый resp.delete_cookie с path=/; w.set_cookie на успешном пути устанавливает другую cookie WHO_COOKIE. Cookie заменяется по имени, домену и пути, а Secure/HttpOnly/SameSite не входят в её ключ (RFC 6265, 5.3). Домен/path совпадают с установкой; известный Google-вход уже проверяет исчезновение cookie потока. https://www.rfc-editor.org/rfc/rfc6265#section-5.3
 
 ## 2026-10-31 · code-review role:review: Отсутствие поля 24 (asset) в записи обрабатывается как «неиз... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/apkpure.py:41-44, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/android/apkpure.py:41-44, category=correctness
 **What:** Отсутствие поля 24 (asset) в записи обрабатывается как «неизвестный формат» (KeyError → SourceError(UNKNOWN)), хотя это легитимный ответ для пакета без APK-ассета; пользователь увидит вводящее в заблуждение «APKPure ответил в неизвестном формате» вместо «нет в APKPure».
 **Evidence:** `asset = pb.decode(app[24][0])`
 **Proposal:** Проверять наличие 24 в app и при отсутствии переходить к следующей записи (или отдавать отдельную ошибку «нет APK»).
@@ -89,7 +89,7 @@
 **Resolved:** 2026-10-31 — легитимность version record без asset24 не подтверждена. Во всех сохранённых реальных ответах K-9, VLC, WhatsApp поле есть; свежий read-only запрос com.android.vending вернул 100 записей со 100 asset24. Известный ответ без версий уже даёт «нет в APKPure» (test_apkpure_missing_and_broken), повреждённая запись — UNKNOWN. Пропуск неизвестной записи замаскировал бы изменение формата и мог выбрать устаревшую версию.
 
 ## 2026-10-31 · code-review role:review: В POST /google/{gid}/play пустое значение поля proxy обрабат... [P2]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/accounts.py:168-186, category=inconsistency
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/web/accounts.py:168-186, category=inconsistency
 **What:** В POST /google/{gid}/play пустое значение поля proxy обрабатывается по-разному для владельца и не-владельца. Не-владелец: пустой proxy заменяется прежним значением аккаунта (прокси сохраняется). Владелец: пустой proxy проходит валидацию (пустая строка не проверяется на вхождение в w.cfg.proxies) и затем безусловно записывается через people.set_proxy(c, g.id, proxy) — прежний прокси, выбранный владельцем ранее, молча сбрасывается в ''. Если форма не подставляет текущее значение в поле (шаблон play_connect.html не показан, но ветка не-владельца с комментарием «выбрал владелец раньше» явно рассчитана на пустое поле), повторное подключение с истёкшим токеном без намеренной смены прокси теряет настройку.
 **Evidence:** `proxy = proxy.strip() if proxy and proxy not in w.cfg.proxies: return connect_page(request, g, NO_PROXY, 400) elif proxy: return connect_page(request, g, OWNER_PROXY, 403) else: proxy = g.proxy # выбрал владелец раньше`
 **Proposal:** В ветке владельца при пустом proxy тоже подставлять прежнее значение: proxy = proxy.strip() or g.proxy (или явно различать «не менял» и «очистить»).
@@ -97,7 +97,7 @@
 **Resolved:** 2026-10-31 — форма play_connect.html подставляет текущий прокси через selected; пустая option явно подписана «без прокси». Для владельца пустое значение — намеренное отключение прокси, для участника выбор скрыт и сохраняется решение владельца. Подстановка старого значения сделала бы отключение прокси невозможным. test_proxy_select_owner_only проверяет выбор владельца и сохранение у участника.
 
 ## 2026-10-31 · code-review role:review: snapshot() вызывает list(NAMES).index(o.source) для сортиров... [P2]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/search.py:63-77, category=bug
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/android/search.py:63-77, category=bug
 **What:** snapshot() вызывает list(NAMES).index(o.source) для сортировки. Если в options попадёт вариант с source, отсутствующим в NAMES (например, источник, добавленный в будущих версиях или подмена в тестах), поиск упадёт с ValueError посреди стрима, а не превратится в ошибку источника. Все текущие источники покрыты, но это хрупкая инварианта без защиты, в отличие от остальных мест, где источники фильтруются явно.
 **Evidence:** `ordered = sorted(options.values(), key=lambda o: (group_rank[o.package or o.related_package or o.ref], o.package or o.related_package or o.ref, list(NAMES).index(o.source)))`
 **Proposal:** Использовать словарь порядка с fallback: ORDER = {s: i for i, s in enumerate(NAMES)}; ключ — ORDER.get(o.source, len(ORDER)).
@@ -105,7 +105,7 @@
 **Resolved:** 2026-10-31 — неизвестный source недостижим: options локален внутри events, add вызывается только с Option источников rustore/play/appgallery/apkpure/fdroid/fdroid_archive/github — все есть в NAMES. Внешние ответы source не задают; публичного ввода Option нет. Сценарий требует изменения кода или подмены инварианта тестом. test_android_search.py прошёл.
 
 ## 2026-10-31 · code-review role:review: В catalog_page метка «новая версия» считается по x.current["... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/app.py:211-215, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/web/app.py:211-215, category=correctness
 **What:** В catalog_page метка «новая версия» считается по x.current["downloaded_at"], но условие требует лишь x.previous is not None. Если у приложения current отсутствует (например, статус error до первой успешной версии), а previous есть (маловероятно, но схема это не запрещает — ротация пишет previous и current атомарно, однако ручные состояния/миграции могут дать рассинхрон), обращение x.current["downloaded_at"] бросит TypeError и уронит выдачу каталога (500 на главной).
 **Evidence:** `fresh = {x.app_id for x in apps if x.previous is not None and datetime.fromisoformat(x.current["downloaded_at"]) >= since}`
 **Proposal:** Проверять оба: x.previous is not None and x.current is not None and datetime.fromisoformat(...) >= since.
@@ -113,7 +113,7 @@
 **Resolved:** 2026-10-31 — повтор уже отклонённого 2026-10-26 довода. store.add_version атомарно переводит current в previous и вставляет новую current; unpublish удаляет все версии, _unpin удаляет только kept. Состояние previous без current требует ручного повреждения базы. Поведение метки проверяет test_catalog_marks_versions_downloaded_this_week; менять рабочую инварианту не требуется. Пересмотрено 2026-11-09: довод «роли меняет только add_version» устарел — с 4441aea «Удалить <версию>» удаляет и previous. Вывод держится: удаляются только старые версии, текущую удалить нельзя (`store.old_version`), так что previous без current по-прежнему не бывает; метка с 1925d87 считается и без previous (`store.updated_ids`), но тоже только при current.
 
 ## 2026-10-31 · code-review role:review: Вычисление «через N мин» при блокировке по IP: если a.until ... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/android.py:guest_pin, блок расчёта минут, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/web/android.py:guest_pin, блок расчёта минут, category=correctness
 **What:** Вычисление «через N мин» при блокировке по IP: если a.until хранится без метки времени (наивная ISO-строка, как многие поля этой базы — created_at и т.п. пишутся через isoformat(timespec='seconds') без tz в ряде мест), вычитание наивного и aware datetime даст TypeError и 500 вместо страницы 429. Даже при согласованности формата отрицательный остаток после истечения срока даёт max(1, ...) — корректно, но само сравнение типов не гарантировано кодом в показанных файлах.
 **Evidence:** `left = datetime.fromisoformat(a.until) - datetime.fromisoformat(w.now())`
 **Proposal:** Привести оба значения к одному виду (например, срезать tzinfo или парсить через один хелпер) перед вычитанием, либо считать минуты на стороне pin.try_pin и возвращать готовое число.
@@ -121,7 +121,7 @@
 **Resolved:** 2026-10-31 — смешение форматов не воспроизводится: production WebCtx.now использует jobs.now_iso с timezone.utc; pin.try_pin создаёт first_at/blocked_until из этого же now. created_at других таблиц в вычислении не участвует. Нормализация вручную повреждённых данных не нужна; тесты PIN используют внедрённые часы.
 
 ## 2026-10-31 · code-review role:review: Разбор purchaseHistory берёт только первый элемент пути 1,1,... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/android/play.py:purchases, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/android/play.py:purchases, category=correctness
 **What:** Разбор purchaseHistory берёт только первый элемент пути 1,1,2 ('pb.path(data, 1, 1, 2)[:1]') — если Play кладёт в ответ более одного контейнера на этом пути (например, при нескольких типах записей на странице), остальные молча теряются, и offset += len(page) затем сдвигает пагинацию неверно (пропуски покупок).
 **Evidence:** `page = [self._app(x, listed=True) for item in pb.path(data, 1, 1, 2)[:1]`
 **Proposal:** Проверить по живому ответу, сколько элементов приходит по пути 1,1,2; если больше одного — убрать [:1] и обрабатывать все, иначе оставить с комментарием-обоснованием из проверки.
@@ -142,29 +142,29 @@
 **Status:** deferred
 **Resolved:** 2026-10-30 — перенесено согласно уже принятому владельцем решению 2026-10-29 «G3 — позже». Живых ответов покупок нет, Play на сервере не подключён (проверено 2026-10-30); реализация «Моих покупок» остаётся за проверкой G3, критерий спецификации не вычеркнут.
 
-## 2026-10-26 · code-review role:review-dsflash: Решение о выходе человека принимается по общему числу Apple ... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=dsflash), `appshelf/web/accounts.py:78-83`
+## 2026-10-26 · code-review role:review: Решение о выходе человека принимается по общему числу Apple ... [P3]
+**Context:** еженедельное автоматическое ревью, `appshelf/web/accounts.py:78-83`
 **What:** в браузере двое; один удаляет свой единственный Apple ID — `len(request.state.accounts) > 1`, cookie не чистится, «человек остаётся вошедшим без полок и виден в /apple с пустым списком»; предложено снимать его запись `webauth.without_user`.
 **Proposal:** —
 **Status:** wontfix
 **Resolved:** 2026-10-27 — опровергнуто, тот же довод, что у отклонённой 2026-10-24: последний Apple ID удаляется вместе с человеком (`jobs._remove`), его запись cookie `signed_users` отбрасывает (`get_user` → None) — входа она не даёт, в `/apple` его нет. Сценарий находки покрыт тестом `test_owner_last_apple_id_is_judged_by_the_shelf_person` (полку «Общего» удалили — переход на `/apple`, человека нет, на странице только владелец). Мёртвая запись уходит из cookie при следующем входе (`with_user` собирает её из годных), номер человека другому не достанется (AUTOINCREMENT). Пересмотрено 2026-11-09: довод «человека без Apple ID не бывает» устарел — с 2026-10-28 (e473760) есть участники только с Google, и удаление последнего Apple ID участника с Google-аккаунтом его не удаляет: он остаётся вошедшим законно, через Google. Вывод держится: после удаления `delete` спрашивает `w.signed` и чистит cookie, только если в браузере не осталось ни одного вошедшего (`web/accounts.py`, конец `delete`); запись удалённого человека `signed_users` отбрасывает.
 
-## 2026-10-26 · code-review role:review-dsflash: При вычислении метки «новая версия» условие проверяет x.prev... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=dsflash), `appshelf/web/app.py:148-149`
+## 2026-10-26 · code-review role:review: При вычислении метки «новая версия» условие проверяет x.prev... [P3]
+**Context:** еженедельное автоматическое ревью, `appshelf/web/app.py:148-149`
 **What:** метка «новая версия» проверяет `x.previous is not None`, а читает `x.current["downloaded_at"]`; при нарушении инварианта «previous есть только при current» каталог упадёт; предложено проверять `x.current` вместо `x.previous`.
 **Proposal:** —
 **Status:** wontfix
 **Resolved:** 2026-10-27 — предложенная замена ломает смысл метки: `previous` и есть признак обновления, без него первая скачанная версия получила бы «новая версия» (против `test_catalog_marks_versions_downloaded_this_week`: у «Первой» метки нет). Инвариант держит схема записи: роли версий назначает только `store.add_version` одной транзакцией (current → previous и сразу новая current), `_unpin` удаляет лишь kept, `unpublish` — все версии разом. Проверка current рядом с previous была бы обработкой невозможного случая. Пересмотрено 2026-11-09: с 4441aea previous удаляется и вручную, поэтому метка с 1925d87 опирается ещё и на завершённые задания скачивания до current (`store.updated_ids`); первая версия по-прежнему без метки, previous без current не бывает — текущую версию удалить нельзя.
 
 ## 2026-10-24 · code-review role:review: После удаления последнего Apple ID человека cookie удаляется... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), `appshelf/web/accounts.py:78-83`
+**Context:** еженедельное автоматическое ревью, `appshelf/web/accounts.py:78-83`
 **What:** удаление последнего Apple ID в браузере стирает cookie входа целиком; записи других людей «без Apple ID» пропали бы вместе с ней — предложено `webauth.without_user`.
 **Proposal:** —
 **Status:** wontfix
 **Resolved:** 2026-10-25 — тот же довод, что у отклонённых 2026-10-18 и 2026-10-11: человека без Apple ID в базе не бывает (`jobs._remove` удаляет его вместе с последним Apple ID, `register` создаёт обоих одной транзакцией). Ветка срабатывает, только когда удалённый Apple ID был последним среди всех вошедших в браузере, — у остальных записей cookie людей уже нет, `signed_users` их отбрасывает, входа они не дают. Пересмотрено 2026-11-09: довод о людях без Apple ID устарел (участники только с Google — с 2026-10-28, e473760), но описанной ветки больше нет: с e473760 `delete` решает по `w.signed` — cookie стирается, только если в браузере не осталось ни одного вошедшего, в том числе участника только с Google.
 
 ## 2026-10-24 · code-review role:review: trap на EXIT выполняет удаление временного каталога на хосте... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), `deploy/build-ipatool.sh:23-24`
+**Context:** еженедельное автоматическое ревью, `deploy/build-ipatool.sh:23-24`
 **What:** при обрыве связи с хостом сборки trap не уберёт `/tmp/appshelf-ipatool.*`, каталоги копятся.
 **Proposal:** —
 **Status:** wontfix
@@ -199,7 +199,7 @@
 **Resolved:** 2026-10-21 — у функций разные предусловия и смысл: `retry` — «Повторить» первую неудавшуюся публикацию (status error, current нет; статус и ошибку сбрасывает и при уже стоящем в очереди задании), `check_update` — проверка обновления при рабочей current (повторное нажатие ничего не делает, текст прошлой ошибки остаётся до итога). Параметризованная функция на два вызова с тремя флагами читалась бы хуже двух коротких.
 
 ## 2026-10-17 · code-review role:review: В register для текста письма берётся первый Apple ID добавля... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/appshelf/web/signin.py:152 (register), category=bug
+**Context:** еженедельное автоматическое ревью, file appshelf/appshelf/web/signin.py:152 (register), category=bug
 **What:** В register для текста письма берётся первый Apple ID добавляющего: `people.accounts_of(c, adder.id)[0]` без проверки на пустой список. Сам adder проверяется на существование (комментарий прямо описывает гонку удаления/«Выйти везде»), но у ещё существующего человека к этому моменту могут быть удалены все Apple ID (remove_user удаляет аккаунты, потом строку пользователя) — IndexError → 500 на шаге кода 2FA после верного кода.
 **Evidence:** `how = f"добавлен из панели участника «{adder.name}» ({people.accounts_of(c, adder.id)[0].email})"`
 **Proposal:** Использовать `next((a.email for a in people.accounts_of(c, adder.id)), adder.name)` или не упоминать Apple ID в how вовсе.
@@ -207,7 +207,7 @@
 **Resolved:** 2026-10-18 — тот же довод, что у отклонённой 2026-10-11 находки о запасной ссылке (ниже): человека без Apple ID в базе не бывает. Удаление последнего Apple ID удаляет и человека в той же транзакции (`jobs._remove`, общая для `remove_account` и `remove_user`), а `register` читает `adder` и его Apple ID внутри своей `BEGIN IMMEDIATE` — промежуточного состояния «человек есть, Apple ID нет» она не видит. Проверка на пустой список была бы обработкой невозможного случая. Пересмотрено 2026-11-09: довод устарел — с 2026-10-28 (e473760) есть участники только с Google; предложение там же фактически сделано: человека в письме описывает `signin.label` — первый Apple ID, без него Google-адрес, без них только имя.
 
 ## 2026-10-10 · code-review role:review: POST по запасной ссылке расходует её (use_login_link ставит ... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/web/signin.py:424-431, category=correctness
+**Context:** еженедельное автоматическое ревью, file appshelf/web/signin.py:424-431, category=correctness
 **What:** POST по запасной ссылке расходует её (use_login_link ставит used_at) до проверки, что человеку есть куда впустить: если у пользователя не осталось ни одного Apple ID (все удалены), вход невозможен, но ссылка уже сожжена — повторный клик даст «Ссылка недействительна», и владельцу придётся выдавать новую.
 **Evidence:** `uid = people.use_login_link(c, token, w.now()) user = people.get_user(c, uid) if uid is not None else None accounts = people.accounts_of(c, uid) if user is not None else [] if not accounts: w.limiter.fail() return login_page(w, request, error=LINK_GONE, status_code=400)`
 **Proposal:** Сначала проверить наличие аккаунтов (или хотя бы существование пользователя), и только затем расходовать ссылку в одной транзакции; либо не считать это ошибкой ссылки и показать понятный текст «у участника нет Apple ID — добавьте его заново», не сжигая ссылку. Сверено с кодом 2026-10-11: appshelf/web/signin.py:293-298 (GET /l/{token} в строках 274-286 проверяет только пользователя).
@@ -215,7 +215,7 @@
 **Resolved:** 2026-10-11 — опровергнуто проверкой: человека без Apple ID в базе не бывает. Строки `users` и `accounts` создаются одной транзакцией (`signin.register`, `store._from_v1`), а удаление последнего Apple ID той же транзакцией удаляет и человека (`jobs.remove_account`; тест `test_remove_account_deletes_rows_dirs_and_last_user`). «Все Apple ID удалены» значит «человека нет»: GET и POST одинаково отвечают «Ссылка недействительна», а ссылка на удалённого человека и так мертва (`users.id` — AUTOINCREMENT, номер другому не достанется) — её расход ничего не меняет. Пересмотрено 2026-11-09: довод устарел — с 2026-10-28 (e473760) есть участники только с Google; там же POST `/l/{token}` стал впускать человека и без Apple ID (`signed_in` с `aid=None`), так что ссылка участника без Apple ID не сгорает впустую. Человек без Apple ID и без Google по-прежнему удаляется (`jobs._remove`) — для него ответ «Ссылка недействительна» верен.
 
 ## 2026-10-10 · code-review role:review: Worker.recover() вызывается до цикла и вне try/except: любое... [P3]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/jobs.py:436-440, category=bug
+**Context:** еженедельное автоматическое ревью, file appshelf/jobs.py:436-440, category=bug
 **What:** Worker.recover() вызывается до цикла и вне try/except: любое исключение при старте потока (например, таймаут блокировки SQLite при ожившей ночной проверке, сбой шары при обходе accounts_dir) убивает поток обработчика навсегда — задания больше никогда не берутся, служба при этом выглядит работающей. Основной цикл такие сбои переживает (`except Exception` внутри while), а старт — нет.
 **Evidence:** `def run_forever(self) -> None: self.recover() while True:`
 **Proposal:** Обернуть recover() в try/except с traceback.print_exc() (и, возможно, повтором попытки в цикле), чтобы сбой восстановления не убивал обработчик навсегда. Сверено с кодом 2026-10-11: appshelf/jobs.py:339-340.
@@ -223,11 +223,11 @@
 **Resolved:** 2026-10-11 — повтор отклонённого 2026-10-09: «`recover()` — в try с повтором» входило в идею «/healthz не видит смерти или зависания обработчика заданий» ([IDEAS-archive.md](IDEAS-archive.md)), решение прежнее. Примеры из находки не подтверждаются: `accounts_dir` и `locks_dir` — локальные каталоги appshelf, не шара; база к старту потока уже открыта и перенесена (`web/app.py`: `store.connect` и `move_shelves` до `create_app` — сбой там роняет службу, а не поток), запись ждёт блокировку 30 с (busy_timeout), `rmtree` — с `ignore_errors`. С 2026-10-09 в `recover()` добавились только чтение списка Apple ID и более широкие маски уборки — новых источников сбоя нет. Пересмотрено 2026-11-09: довод «`rmtree` с `ignore_errors`» стал неверен с e2c87bb — уборка брошенных загрузок APK удаляла каталоги без него. С 838c46d эта уборка в `recover()` и `tick()` — в try с записью в журнал, а каталоги — через `store.rmtree_logged`; остальные шаги `recover()` — запросы к уже открытой базе (busy_timeout 30 с). Вывод держится.
 
 ## 2026-10-10 · code-review role:review: В test-зависимостях указан пакет «httpx2» — это не стандартн... [P2]
-**Context:** auto-cron `ClaudeCodeReviewWeekly` (provider=ocg), file appshelf/pyproject.toml:18, category=bug
+**Context:** еженедельное автоматическое ревью, file appshelf/pyproject.toml:18, category=bug
 **What:** В test-зависимостях указан пакет «httpx2» — это не стандартный httpx, который нужен для starlette/fastapi TestClient. Если это опечатка, `pip install -e ".[test]"` в CI (tests.yml ставит именно `.[test]`) либо упадёт на несуществующем пакете, либо установит посторонний пакет, а тесты упадут с ImportError на `import httpx`. На пакете «httpx2» нет поддерживаемой совместимости с httpx API.
 **Proposal:** —
 **Status:** wontfix
-**Resolved:** 2026-10-11 — не опечатка: `httpx2` выбран сознательно, как в subs (решение в `.superpowers/sdd/2026-10-05-appshelf/progress.md`, Task 10): `starlette.testclient` с обычным httpx даёт DeprecationWarning, а вывод тестов должен быть чистым. В `.venv` стоит httpx2 2.13.1, тесты на нём проходят.
+**Resolved:** 2026-10-11 — не опечатка: `httpx2` выбран сознательно, как в соседнем проекте (решение в `.superpowers/sdd/2026-10-05-appshelf/progress.md`, Task 10): `starlette.testclient` с обычным httpx даёт DeprecationWarning, а вывод тестов должен быть чистым. В `.venv` стоит httpx2 2.13.1, тесты на нём проходят.
 
 ## 2026-10-09 · Службы: ProtectSystem=strict и NoNewPrivileges вместо ProtectSystem=full [P3]
 **Context:** часть находки «Код, .venv, deploy/ и ipatool/ принадлежат appshelf, а root их исполняет» (аудит 2026-10-09); `deploy/appshelf-web.service`, `deploy/appshelf-nightly.service`.
