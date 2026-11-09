@@ -34,6 +34,7 @@ def test_parse_overall_info_fixture():
     assert (app.app_id, app.package, app.name, app.version_name, app.version_code, app.price) == \
         (462271, "ru.sberbankmobile", "СберБанк Онлайн", "17.14.0", 2026062416, 0)
     assert app.signature == SBER_SIG and app.icon_url == ICON and app.size == 126327301
+    assert app.whats_new == "Сокращено при записи."
 
 
 def test_signature_normalized_to_lower_hex():

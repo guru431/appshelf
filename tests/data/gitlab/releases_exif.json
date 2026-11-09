@@ -1,0 +1,20 @@
+[
+ {
+  "name": "Version 1.8.3 (88)",
+  "tag_name": "v1.8.3",
+  "description": "Download [scrambled-exif-standard-release-1.8.3.apk](/uploads/109a8c3608b339a65b56ce943c241f3b/scrambled-exif-standard-release-1.8.3.apk)\n\nChangelog [88.txt](fastlane/metadata/android/en-US/changelogs/88.txt)",
+  "released_at": "2026-10-13T19:36:32.772Z",
+  "upcoming_release": false,
+  "assets": {
+   "links": [
+    {
+     "id": 13523053,
+     "name": "scrambled-exif-standard-release-1.8.3.apk",
+     "url": "https://gitlab.com/-/project/5252730/uploads/109a8c3608b339a65b56ce943c241f3b/scrambled-exif-standard-release-1.8.3.apk",
+     "direct_asset_url": "https://gitlab.com/juanitobananas/scrambled-exif/-/releases/v1.8.3/downloads/scrambled-exif-standard-release-1.8.3.apk",
+     "link_type": "package"
+    }
+   ]
+  }
+ }
+]

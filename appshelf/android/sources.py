@@ -1,6 +1,7 @@
 """Источники APK (spec 2026-10-28 §6.1–6.2, §6.4–6.5): RuStore, прямая ссылка, Google Play (подключённым
-Google-аккаунтом, android/play.py), AppGallery, F-Droid, APKPure; свой файл приходит из браузера и источника не имеет.
-Запросы — последовательно, с паузой между ними (правила источников запрещают выкачку, §11)."""
+Google-аккаунтом, android/play.py), AppGallery, F-Droid, APKPure, выпуски GitHub, Codeberg и GitLab; свой файл приходит
+из браузера и источника не имеет. Запросы — последовательно, с паузой между ними (правила источников запрещают
+выкачку, §11)."""
 from __future__ import annotations
 
 import io
@@ -15,10 +16,11 @@ from pathlib import Path
 from PIL import Image
 
 from .. import apk
-from . import apkpure, appgallery, fdroid, fdroid_index, fourpda, github, links, rustore
+from . import apkpure, appgallery, fdroid, fdroid_index, forge, fourpda, github, links, rustore
 from .net import FetchError, Http, Meta, SourceError, StatusError
 
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
+RELEASES = ("github", *forge.SOURCES)   # ref — репозиторий, версия — последний стабильный выпуск с APK
 ICON_MAX = 1 << 20
 SPLIT_TEXT = "набором файлов — из браузера не ставится"
 RUSTORE_DOWN = "RuStore не ответил — подпись не с чем сверить, повторите позже"
@@ -51,6 +53,7 @@ class Got:
     paid: bool = False         # Google Play: купленное
     ref: str = ""              # ref карточки, если источник его уточнил (AppGallery: пакет вместо ID со страницы)
     page_url: str = ""         # публичная страница AppGallery: ID теряется после уточнения ref до пакета
+    whats_new: str = ""        # «Что нового» этой версии из источника — недоверенный текст
 
 
 def _etag(meta: Meta) -> str:
@@ -108,13 +111,20 @@ class Sources:
         return events(bounded, query, accounts=accounts, split_packages=split_packages, user_id=user_id)
 
     def github_app(self, ref: str) -> github.GithubApp:
-        """Повторный поиск и ночная проверка не расходуют квоту для того же выпуска."""
+        return self.release_app("github", ref)
+
+    def release_app(self, source: str, ref: str) -> github.GithubApp:
+        """Выпуск GitHub, Codeberg или GitLab; повторный поиск и ночная проверка не расходуют квоту для того же
+        выпуска."""
         with self._github_lock:
-            key = ref.lower()
+            key = (source, ref.lower())
             cached = self._github_cache.get(key)
             if cached is not None and self.clock() < cached[0]:
                 return cached[1]
-            app = github.info(self.http, ref, wait=self._wait)
+            if source == "github":
+                app = github.info(self.http, ref, wait=self._wait)
+            else:
+                app = forge.info(self.http, source, ref, wait=self._wait)
             self._github_cache[key] = (self.clock() + 900, app)
             return app
 
@@ -135,9 +145,9 @@ class Sources:
             return Latest(client.details(ref).version_code, "", True)
         if source == "appgallery":
             return Latest(self._appgallery(ref).version_code, "", True)
-        if source == "github":
+        if source in RELEASES:
             self._wait()
-            mark = self.github_app(ref).mark
+            mark = self.release_app(source, ref).mark
             return Latest(None, mark, mark != stored_etag)
         if source in fdroid_index.REPOSITORIES:
             # не versionCode: рекомендуемая сборка бывает x86_64, а на полке — ARM с другим кодом
@@ -163,8 +173,8 @@ class Sources:
             return fourpda.file_url(ref)
         if source == "link":
             return ref
-        if source == "github":
-            return self.github_app(ref).asset_url
+        if source in RELEASES:
+            return self.release_app(source, ref).asset_url
         if source == "rustore":
             self._wait()
             app = rustore.info(self.http, ref)
@@ -210,7 +220,7 @@ class Sources:
             url = rustore.apk_url(self.http, app.app_id)
             self._wait()
             self.http.download(url, dest)
-            return Got(app.name, app.signature, self._icon(app.icon_url, dest))
+            return Got(app.name, app.signature, self._icon(app.icon_url, dest), whats_new=app.whats_new)
         if source == "link":
             self._wait()
             return Got("", "", None, _etag(self.http.download(ref, dest)))
@@ -227,15 +237,15 @@ class Sources:
                 return self._fetch_fdroid(ref, dest)
             except fdroid.MissingPackage:
                 return self._fetch_fdroid_index("fdroid_archive", ref, dest)
-        if source == "github":
+        if source in RELEASES:
             self._wait()
-            app = self.github_app(ref)
+            app = self.release_app(source, ref)
             self._wait()
             self.http.download(app.asset_url, dest)
             info = apk.read_apk(dest)
             if info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
-                raise SourceError("в GitHub нет сборки для ARM")
-            return Got(app.name, "", None, app.mark)
+                raise SourceError(f"в {links.NAMES[source]} нет сборки для ARM")
+            return Got(app.name, "", None, app.mark, whats_new=app.whats_new)
         if source == "apkpure":
             app = self.apkpure_app(ref)
             self._wait()
@@ -301,7 +311,7 @@ class Sources:
             raise SourceError("APK из F-Droid не совпал с пакетом и версией в каталоге")
         if "@" not in ref and info.abis and not any(a in info.abis for a in ("arm64-v8a", "armeabi-v7a", "armeabi")):
             raise SourceError("в F-Droid нет сборки для ARM")
-        return Got(app.name, build.signer, None, f"{source}:{build.code}")
+        return Got(app.name, build.signer, None, f"{source}:{build.code}", whats_new=app.notes(build))
 
     def _fetch_fdroid(self, package: str, dest: Path) -> Got:
         """Сборки рекомендуемой версии по очереди, пока не найдётся универсальная или arm64-v8a; нет ни одной —
@@ -309,7 +319,7 @@ class Sources:
         self._wait()
         pkg = fdroid.info(self.http, package)
         fallback = None
-        signer = ""
+        signer = notes = ""
         parts = []
         try:
             for code in fdroid.candidates(pkg):
@@ -329,12 +339,12 @@ class Sources:
                     part.unlink(missing_ok=True)
                     raise SourceError("APK из F-Droid не совпал с SHA-256 в каталоге")
                 if not abis or "arm64-v8a" in abis:
-                    signer = trusted.signer
+                    signer, notes = trusted.signer, app.notes(trusted)
                     part.replace(dest)
                     break
                 if "armeabi-v7a" in abis and fallback is None:
                     fallback = part
-                    signer = trusted.signer
+                    signer, notes = trusted.signer, app.notes(trusted)
                 else:
                     part.unlink()
             else:
@@ -345,7 +355,7 @@ class Sources:
         finally:
             for part in parts:
                 part.unlink(missing_ok=True)
-        return Got("", signer, None, _fdroid_mark(pkg))
+        return Got("", signer, None, _fdroid_mark(pkg), whats_new=notes)
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""

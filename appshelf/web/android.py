@@ -22,7 +22,7 @@ from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
 from .. import apk, ipatool, jobs, notify, people, store
-from ..android import db, fdroid_index, fetch, github, links, net, pin, play
+from ..android import db, fdroid_index, fetch, forge, github, links, net, pin, play
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
@@ -31,7 +31,8 @@ from .common import TEMPLATES, back, filter_shelf, mutation_url
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
            "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "Архив F-Droid",
-           "izzy": "F-Droid · IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
+           "izzy": "F-Droid · IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA",
+           **forge.NAMES}
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
@@ -580,6 +581,9 @@ def _register_scope(app, w, scope: Scope):
             elif source == "github":
                 if not github.parse_ref(ref) or github.parse_ref(ref) != ref:
                     raise net.SourceError("не похоже на репозиторий GitHub")
+            elif source in forge.SOURCES:
+                if not forge.parse_ref(source, ref) or forge.parse_ref(source, ref) != ref:
+                    raise net.SourceError(f"не похоже на репозиторий {forge.NAMES[source]}")
             elif source in ("rustore", "appgallery", "apkpure", "play"):
                 if not apk.PACKAGE_RE.fullmatch(ref) or ref != package:
                     raise net.SourceError("не похоже на имя пакета Android")
@@ -648,7 +652,7 @@ def _register_scope(app, w, scope: Scope):
         if source in fdroid_index.REPOSITORIES and "@" in ref:
             package, _ = fdroid_index.split_ref(ref)
             return add_package(request, source, package, name, {"name": name}, ref=ref)
-        if source not in ("link", "appgallery", "apkpure", "github", "fourpda"):
+        if source not in ("link", "appgallery", "apkpure", "github", "fourpda", *forge.SOURCES):
             return add_package(request, source, ref, name, {"name": name})
         payload = {"source": source, "ref": ref, "name": name}
         if source == "apkpure":
@@ -794,7 +798,7 @@ def _register_scope(app, w, scope: Scope):
             if source == "play":
                 return catalog_page(request, 400, NO_PLAY_SOURCE)
             want = fdroid_index.split_ref(ref)[0] if source in fdroid_index.REPOSITORIES else ref
-            if source not in ("link", "appgallery", "github", "fourpda") and want != package:
+            if source not in ("link", "appgallery", "github", "fourpda", *forge.SOURCES) and want != package:
                 return catalog_page(request, 400, f"На странице — приложение {ref}, а на карточке — {package}")
         else:
             return catalog_page(request, 400, "Источник — магазин, его страница или ссылка на APK")

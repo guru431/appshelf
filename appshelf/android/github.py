@@ -32,6 +32,7 @@ class GithubApp:
     asset_url: str
     asset_name: str
     mark: str
+    whats_new: str = ""     # текст выпуска как есть: недоверенный, показывается только как текст
 
 
 def parse_ref(text: str) -> str:
@@ -101,7 +102,8 @@ def info(http: Http, ref: str, *, wait=lambda: None) -> GithubApp:
         asset_id = int(a["id"])
         return GithubApp(repository=ref, name=ref.rsplit("/", 1)[1], version_name=d["tag_name"],
                          asset_url=a["browser_download_url"], asset_name=a["name"],
-                         mark=f"gh:{release_id}:{asset_id}:{a.get('updated_at') or ''}")
+                         mark=f"gh:{release_id}:{asset_id}:{a.get('updated_at') or ''}",
+                         whats_new=d.get("body") if isinstance(d.get("body"), str) else "")
     except (KeyError, TypeError, ValueError):
         raise SourceError(UNKNOWN) from None
 

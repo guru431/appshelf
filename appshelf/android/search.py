@@ -1,7 +1,7 @@
 """Общий поиск с промежуточными результатами и состоянием каждого источника.
 
 GitHub проверяется только по явной ссылке или ссылке автора приложения, которое
-пришло набором файлов. Поиска репозиториев по названию здесь нет.
+пришло набором файлов; Codeberg и GitLab — только по явной ссылке. Поиска репозиториев по названию здесь нет.
 """
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ import re
 from dataclasses import dataclass
 
 from ..apk import PACKAGE_RE
-from . import apkpure, appgallery, discovery, fdroid_index, fourpda, github, links, play, rustore
+from . import apkpure, appgallery, discovery, fdroid_index, forge, fourpda, github, links, play, rustore
 from .net import FetchError, SourceError, StatusError
 
 NAMES = {**links.NAMES, "fdroid_archive": "Архив F-Droid", "github": "GitHub автора", "fourpda": "4PDA"}
 DOMAINS = {"rustore": "backapi.rustore.ru", "play": "play.google.com", "appgallery": appgallery.HOST,
            "apkpure": "api.pureapk.com", "fdroid": "f-droid.org", "fdroid_archive": "f-droid.org",
-           "izzy": "apt.izzysoft.de", "github": "github.com", "fourpda": "4pda.to"}
+           "izzy": "apt.izzysoft.de", "github": "github.com", "fourpda": "4pda.to", **forge.HOSTS}
 MAX_PACKAGES = 5
 
 
@@ -54,6 +54,7 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     split = set(split_packages)
     exact = query if PACKAGE_RE.fullmatch(query) else ""
     direct_repo = github.parse_ref(query)
+    repo_source = "github"
     direct_topic = ""
     if query.startswith(fourpda.BASE + "/"):
         try:
@@ -66,6 +67,8 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
             if kind in ("rustore", "play", "appgallery", "apkpure", *fdroid_index.REPOSITORIES):
                 exact = fdroid_index.split_ref(ref)[0] if kind in fdroid_index.REPOSITORIES else ref
                 query = exact
+            elif kind in forge.SOURCES:
+                repo_source, direct_repo = kind, ref
         except (FetchError, SourceError):
             pass
     if exact:
@@ -135,9 +138,10 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         yield Update("results", result=snapshot())
 
     if direct_repo:
-        release = yield from run("github", direct_repo, lambda: request(lambda: src.github_app(direct_repo)))
+        release = yield from run(repo_source, direct_repo, lambda: request(
+            lambda: src.release_app(repo_source, direct_repo)))
         if release:
-            add(Option("github", release.repository, "", release.name, release.version_name))
+            add(Option(repo_source, release.repository, "", release.name, release.version_name))
         yield Update("done", result=snapshot())
         return
 

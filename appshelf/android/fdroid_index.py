@@ -72,6 +72,12 @@ class App:
     upstream: str
     suggested: int
     builds: tuple[Build, ...]
+    whats_new: str = ""          # whatsNew index-v2 рекомендуемой версии (ru, иначе en) — только как текст
+    whats_new_version: str = ""  # её versionName: у сборок одной версии под разные ABI текст общий
+
+    def notes(self, build: Build) -> str:
+        """«Что нового» для сборки; у другой версии текста в каталоге нет."""
+        return self.whats_new if build.name == self.whats_new_version else ""
 
     def choices(self) -> tuple[Build, ...]:
         """По одной совместимой сборке каждой версии, новые сверху."""
@@ -171,8 +177,10 @@ class Catalog:
             data = json.loads(self.cache.read_bytes())
             if data["schema"] != 1 or data["repo"] != self.repo or data["signer"] != self.signer:
                 raise ValueError()
+            # whats_new — необязательные поля: кэш прежней версии читается, прежний код лишние поля App не читает
             self._apps = {p: App(p, a["name"], a["upstream"], a["suggested"],
-                                tuple(Build(**{**b, "abis": tuple(b["abis"])}) for b in a["builds"]))
+                                tuple(Build(**{**b, "abis": tuple(b["abis"])}) for b in a["builds"]),
+                                str(a.get("whats_new", "")), str(a.get("whats_new_version", "")))
                           for p, a in data["apps"].items()}
             self._timestamp = int(data["timestamp"])
             age = max(0, self.wall_clock() - float(data["checked_at"]))
@@ -307,11 +315,15 @@ def parse_v2(raw: bytes) -> dict[str, App]:
         for package, app in data["packages"].items():
             if not PACKAGE_RE.fullmatch(package):
                 continue
-            meta, builds = app["metadata"], []
+            meta, builds, notes = app["metadata"], [], {}
             preferred = meta.get("preferredSigner", "")
             for version in app.get("versions", {}).values():
                 if version.get("releaseChannels"):
                     continue
+                # Необязательный текст: его странный вид не должен ронять весь каталог
+                texts = version.get("whatsNew") if isinstance(version.get("whatsNew"), dict) else {}
+                text = next((texts[k] for k in ("ru", "ru-RU", "en-US", "en") if isinstance(texts.get(k), str)
+                             and texts[k].strip()), "")
                 file, manifest = version["file"], version["manifest"]
                 filename = file["name"].removeprefix("/")
                 digest = file["sha256"]
@@ -324,11 +336,14 @@ def parse_v2(raw: bytes) -> dict[str, App]:
                                     digest, signer, tuple(manifest.get("nativecode", ())),
                                     int((manifest.get("usesSdk") or {}).get("minSdkVersion") or 0),
                                     int((manifest.get("usesSdk") or {}).get("targetSdkVersion") or 0)))
+                notes[builds[-1].code] = text
             names = meta.get("name", {})
             name = next((names[k] for k in ("ru", "ru-RU", "en-US", "en") if names.get(k)), None)
             name = name or next(iter(names.values()), package)
             suggested = max((b.code for b in builds if not preferred or b.signer == preferred), default=0)
-            apps[package] = App(package, str(name), str(meta.get("sourceCode", "")), suggested, tuple(builds))
+            noted = next((b.name for b in builds if b.code == suggested), "") if notes.get(suggested) else ""
+            apps[package] = App(package, str(name), str(meta.get("sourceCode", "")), suggested, tuple(builds),
+                                notes.get(suggested, ""), noted)
         return apps
     except (ValueError, KeyError, TypeError, AttributeError):
         raise SourceError("каталог F-Droid v2 ответил в неизвестном формате") from None
