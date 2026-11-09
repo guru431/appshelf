@@ -58,7 +58,10 @@
         } else if (xhr.status === 401) {
           fail('Сессия истекла. Обновите страницу и войдите снова.');
         } else {
-          fail('Сервер не принял загрузку (HTTP ' + xhr.status + '). Повторите отправку или обновите страницу.');
+          // Проверка входа и полки (403, 409) отвечает коротким text/plain — показать его, а не код.
+          var plain = (xhr.getResponseHeader('Content-Type') || '').indexOf('text/plain') === 0;
+          fail(plain && xhr.responseText.trim() ? xhr.responseText.trim().slice(0, 300) :
+            'Сервер не принял загрузку (HTTP ' + xhr.status + '). Повторите отправку или обновите страницу.');
         }
       });
       xhr.addEventListener('error', function () {

@@ -148,4 +148,11 @@
   {% include "apk_upload_progress.html" %}</form>
 <p class="hint">Один целый APK до 1 ГБ. Наборы (split APK, XAPK, APKS) из браузера не ставятся. Ночью свой файл не
   обновляется — новую версию загрузите на карточку («⋯»).</p>
+<section data-pending-uploads data-upload-api="{{ post_url(prefix ~ '/uploads') }}" aria-labelledby="pending-uploads-title" hidden>
+  <h2 id="pending-uploads-title">Незавершённые загрузки</h2>
+  <p class="hint">Начаты в другом браузере или на другом устройстве, либо данные браузера очищены. Пока загрузка не
+    отменена, полученные части занимают место на сервере: до 7 дней, без единой части — час.{% if who and who.role == 'owner' %}
+    Владельцу видны загрузки всех участников.{% endif %}</p>
+  <div class="card list" data-pending-list></div>
+</section>
 {% endblock %}

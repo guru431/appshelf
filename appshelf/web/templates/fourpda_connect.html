@@ -24,7 +24,14 @@
   function send(data) {
     queue = queue.then(async function () {
       var response = await fetch(base + '/input', {method:'POST', headers:{'X-4PDA-Window':token}, body:new URLSearchParams(data)});
-      if (!response.ok) { var result = await response.json(); throw new Error(result.error || 'Не удалось передать ввод'); }
+      if (!response.ok) {
+        // Не все отказы — JSON: проверка входа и «not found» отвечают текстом.
+        var type = response.headers.get('content-type') || '', text = (await response.text()).trim(), result = {};
+        if (type.includes('application/json')) { try { result = JSON.parse(text); } catch (e) { result = {}; } }
+        throw new Error(result.error || (response.status === 401 ? 'Сессия истекла: войдите снова и откройте подключение заново'
+          : response.status === 404 ? 'Окно входа больше недоступно: откройте подключение заново'
+          : type.startsWith('text/plain') && text ? text.slice(0, 300) : 'Не удалось передать ввод (HTTP ' + response.status + ')'));
+      }
     }).catch(function (e) { error.textContent = e.message; });
     return queue;
   }
