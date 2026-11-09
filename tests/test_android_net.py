@@ -1,6 +1,7 @@
 import base64
 import json
 import socket
+import types
 
 import pytest
 
@@ -206,6 +207,63 @@ def test_download_gives_up_after_deadline(tmp_path):
     with pytest.raises(net.FetchError, match="дольше 30 мин"):
         http.download("https://bank.example/x.apk", tmp_path / "x.apk")
     assert not (tmp_path / "x.apk").exists() and now[0] <= net.DOWNLOAD_DEADLINE + 100
+
+
+def test_request_deadline_covers_redirects():
+    """Каждый шаг отвечает в пределах таймаута сокета, но вместе — дольше общего срока: дальше не идём."""
+    now = [0.0]
+    server = Server(*[Resp(302, {"Location": f"/{i}"}) for i in range(5)], Resp(200))
+    timeouts = []
+
+    def connect(host, ip, port, ctx, timeout):
+        now[0] += 100
+        timeouts.append(timeout)
+        return server(host, ip, port, ctx, timeout)
+
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=connect, clock=lambda: now[0])
+    with pytest.raises(net.FetchError, match="не уложился в срок"):
+        http.head("https://bank.example/x.apk")
+    assert len(timeouts) == 3 and timeouts[-1] == 60 and now[0] <= net.REQUEST_DEADLINE
+
+
+def test_socket_reads_stop_at_request_deadline():
+    """Сервер отдаёт заголовки по кусочку: таймаут каждого чтения — не дальше общего срока, после него — отказ."""
+    import http.client
+
+    class Sock(net._Deadline, socket.socket):
+        pass
+
+    a, b = socket.socketpair()
+    steps = iter([(b"", 0.0), (b"X-Slow: 1\r\n", 290.0), (b"", 301.0)])
+
+    def clock():  # перед каждым чтением сервер досылает строку заголовка, а время идёт
+        more, now = next(steps)
+        b.sendall(more)
+        return now
+
+    sock = Sock(fileno=a.detach())
+    sock._operation_timeout, sock.deadline = 60, (300.0, clock)
+    try:
+        b.sendall(b"HTTP/1.1 200 OK\r\n")
+        resp = http.client.HTTPResponse(sock)
+        with pytest.raises(TimeoutError, match="не уложился"):
+            resp.begin()
+        assert sock.gettimeout() == 10
+    finally:
+        sock.close()
+        b.close()
+
+
+def test_pinned_connection_passes_deadline_to_tls_socket():
+    class Ctx:
+        def wrap_socket(self, sock, server_hostname):
+            return types.SimpleNamespace(raw=sock, host=server_hostname)
+
+    conn = net._PinnedHTTPS("bank.example", "8.8.8.8", 443, Ctx(), 42, lambda *a: "raw")
+    conn.deadline = (300.0, lambda: 0.0)
+    conn.connect()
+    assert (conn.sock.deadline, conn.sock._operation_timeout) == (conn.deadline, 42)
+    assert net.Http().ctx.sslsocket_class is net._DeadlineSSLSocket
 
 
 def test_connects_to_vetted_ip_with_host_for_tls():

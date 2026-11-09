@@ -23,6 +23,7 @@ MAX_JSON = 5 << 20
 MAX_REDIRECTS = 5
 CHUNK = 1 << 20
 DOWNLOAD_DEADLINE = 1800   # с, на весь файл — как у IPA (ipatool.DOWNLOAD_TIMEOUT)
+REQUEST_DEADLINE = 300     # с, на HEAD, JSON и прочие запросы целиком: редиректы, заголовки и тело
 REDIRECTS = (301, 302, 303, 307, 308)
 BLOCKED = "адрес недоступен для сервера: ссылка ведёт во внутреннюю сеть"
 # ВТБ на User-Agent curl отвечает 403, на браузерный — файлом (живая проверка 2026-10-28)
@@ -168,8 +169,44 @@ def _connect_tunnel(sock, host: str, port: int, user: str, password: str, fail) 
         raise fail(f"ответил {status[1].decode('latin-1') if len(status) > 1 else '?'}")
 
 
+class _Expired(TimeoutError):
+    pass
+
+
+class _Deadline:
+    """Таймаут каждого чтения и отправки — не дальше общего срока запроса (deadline: (момент, часы)). Таймаут сокета
+    действует на одну операцию: сервер, отдающий заголовки по байту раз в 50 с, иначе держал бы запрос — и
+    единственный обработчик заданий — сколько угодно."""
+    deadline = None
+
+    def _limit(self):
+        if self.deadline is not None:
+            at, clock = self.deadline
+            left = at - clock()
+            if left <= 0:
+                raise _Expired("источник не уложился в срок")
+            self.settimeout(min(self._operation_timeout, left))
+
+    def recv_into(self, *args):
+        self._limit()
+        return super().recv_into(*args)
+
+    def recv(self, *args):
+        self._limit()
+        return super().recv(*args)
+
+    def sendall(self, *args):
+        self._limit()
+        return super().sendall(*args)
+
+
+class _DeadlineSSLSocket(_Deadline, ssl.SSLSocket):
+    pass
+
+
 class _PinnedHTTPS(http.client.HTTPSConnection):
     """Сокет — к проверенному адресу (или через прокси), TLS — с именем хоста (SNI и проверка сертификата)."""
+    deadline = None  # (момент, часы) — ставит Http._request
 
     def __init__(self, host: str, ip: str | None, port: int, ctx: ssl.SSLContext, timeout: float, opener):
         super().__init__(host, port, timeout=timeout, context=ctx)
@@ -178,6 +215,7 @@ class _PinnedHTTPS(http.client.HTTPSConnection):
     def connect(self):
         sock = self._opener(self.host, self._ip, self.port, self.timeout)
         self.sock = self._ctx.wrap_socket(sock, server_hostname=self.host)
+        self.sock._operation_timeout, self.sock.deadline = self.timeout, self.deadline
 
 
 class Http:
@@ -186,8 +224,9 @@ class Http:
                  clock=time.monotonic):
         """proxy — только для Google Play (адреса — константы клиента): с ним адрес не проверяется на «глобальный» и
         локально не резолвится, а сбой прокси — ошибка, не прямое соединение. timeout — на операцию сокета; на весь
-        файл — DOWNLOAD_DEADLINE (по clock)."""
+        файл — DOWNLOAD_DEADLINE, на прочий запрос целиком — REQUEST_DEADLINE (по clock)."""
         self.ctx = ssl.create_default_context()
+        self.ctx.sslsocket_class = _DeadlineSSLSocket
         if extra_ca:
             try:
                 self.ctx.load_verify_locations(cafile=str(extra_ca))
@@ -206,11 +245,13 @@ class Http:
 
     def head(self, url: str, headers: dict | None = None) -> Meta:
         """HEAD; 405/501 — GET с Range: bytes=0-0, тело не читается."""
-        resp, conn, final = self._request("HEAD", url, headers or {})
+        deadline = self.clock() + REQUEST_DEADLINE
+        resp, conn, final = self._request("HEAD", url, headers or {}, deadline=deadline)
         try:
             if resp.status in (405, 501):
                 _close(resp, conn)
-                resp, conn, final = self._request("GET", final, {**(headers or {}), "Range": "bytes=0-0"})
+                resp, conn, final = self._request("GET", final, {**(headers or {}), "Range": "bytes=0-0"},
+                                                  deadline=deadline)
             if resp.status >= 400:
                 raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
             return _meta(final, resp)
@@ -262,7 +303,7 @@ class Http:
         скачивания (один на сервер) сколько угодно."""
         try:
             deadline = self.clock() + DOWNLOAD_DEADLINE
-            resp, conn, final = self._request("GET", url, headers or {})
+            resp, conn, final = self._request("GET", url, headers or {}, deadline=deadline)
             try:
                 if resp.status != 200:
                     raise FetchError(f"{urllib.parse.urlsplit(final).hostname} ответил {resp.status}")
@@ -301,12 +342,20 @@ class Http:
             raise BlockedAddress(BLOCKED)
         return addrs[0]
 
-    def _request(self, method: str, url: str, headers: dict, body: bytes | None = None, *, follow: bool = True):
-        """(ответ, соединение, адрес после редиректов). Каждый шаг — check_url и проверка адресов."""
+    def _request(self, method: str, url: str, headers: dict, body: bytes | None = None, *, follow: bool = True,
+                 deadline: float | None = None):
+        """(ответ, соединение, адрес после редиректов). Каждый шаг — check_url и проверка адресов. deadline (по clock)
+        действует и на чтение тела из возвращённого ответа; по умолчанию — REQUEST_DEADLINE от начала."""
+        if deadline is None:
+            deadline = self.clock() + REQUEST_DEADLINE
         for _ in range(MAX_REDIRECTS + 1):
             u = check_url(url)
             ip = None if self.proxy else self._vetted_ip(u.hostname, u.port or 443)
-            conn = self.connect(u.hostname, ip, u.port or 443, self.ctx, self.timeout)
+            left = deadline - self.clock()
+            if left <= 0:
+                raise FetchError(f"{u.hostname}: источник не уложился в срок")
+            conn = self.connect(u.hostname, ip, u.port or 443, self.ctx, min(self.timeout, left))
+            conn.deadline = (deadline, self.clock)
             target = (u.path or "/") + (f"?{u.query}" if u.query else "")
             try:
                 conn.request(method, target, body, {"User-Agent": USER_AGENT, **headers})
@@ -333,6 +382,8 @@ class Http:
 def _read(resp, n: int, partial: bool = False) -> bytes:
     try:
         return resp.read1(n) if partial else resp.read(n)
+    except _Expired:
+        raise FetchError("источник не уложился в срок — прервано") from None
     except (OSError, http.client.HTTPException) as e:
         raise FetchError(f"обрыв при скачивании: {e.__class__.__name__}") from None
 
