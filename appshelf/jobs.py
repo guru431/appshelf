@@ -668,7 +668,10 @@ class Worker:
             cfg = self.env.cfg
             shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
             from .android.uploads import Uploads
-            Uploads(cfg).cleanup(c, self.env.now())
+            try:
+                Uploads(cfg).cleanup(c, self.env.now())
+            except Exception:  # уборка загрузок APK не останавливает обработчик
+                traceback.print_exc()
             android_fetch.recover(c, self.env.now())  # после очистки tmp/web: загрузки без файла — ошибка
         finally:
             c.close()
@@ -685,7 +688,10 @@ class Worker:
         c = self.connect()
         try:
             from .android.uploads import Uploads
-            Uploads(self.env.cfg).cleanup(c, self.env.now())
+            try:
+                Uploads(self.env.cfg).cleanup(c, self.env.now())
+            except Exception:  # сбой уборки загрузок не должен останавливать задания Apple и Android
+                traceback.print_exc()
             self.retry_unfinished(c)
             if store.has_running(c, "update"):
                 with nightly_lock(self.env.cfg) as idle:
