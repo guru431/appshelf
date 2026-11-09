@@ -6,6 +6,11 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 не задан — на самом сервере). Результат — `/var/_sh/appshelf/bin/ipatool` (root) и рядом `ipatool.src-sha256` —
 сумма `UPSTREAM` и патчей: `deploy/install.sh` сверяет её с выложенными и при расхождении просит пересборку.
 
+Вход в Apple (патч 11) выполняет `bin/ipatool-auth`: закреплённый в `auth/UPSTREAM` Go-ipatool и адаптер
+`auth/*.go`, собранный тем же скриптом (отпечаток — `bin/ipatool-auth.src-sha256`, сумма `auth/UPSTREAM` и
+`auth/*.go`), и его кэш библиотек `bin/ipatool-auth-cache`. Устройство — [auth/README.md](auth/README.md).
+Сборку обоих и их возраст показывает и `appshelf check` на сервере.
+
 | Патч | Что меняет |
 |---|---|
 | `01-no-stored-password` | `save_account` не пишет `password`; `silent_relogin` — заглушка: на истёкший токен процесс завершается кодом 3; `auth info` печатает `passwordStored` |
@@ -61,3 +66,17 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
    живая проверка `auth info` / `list-purchases` / `list-versions` от `appshelf` — и `list-versions` по
    приложению, которого нет в покупках Apple ID: выход `5`, `license_not_found` (на этом коде держится
    справочник удалённых, офлайн его не проверить).
+
+## Обновление клиента входа (`auth/UPSTREAM`)
+
+Адаптер копируется в `cmd/appshelf-auth` клона upstream и импортирует его внутренние пакеты (`internal/sap`,
+`internal/store/profile`, `pkg/appstore`), поэтому обновление — вместе с проверкой адаптера.
+
+1. Клон `URL` из `auth/UPSTREAM` и дифф `"$COMMIT"..<новый коммит>`: новые адреса и вызовы процессов
+   (`exec`), `go.mod`/`go.sum`, `internal/sap` (закреплённые SHA-256 библиотек Apple и Unicorn, кэш),
+   сигнатуры пакетов, которые вызывает адаптер; лицензия — сверить с `auth/LICENSE.upstream`.
+2. Новый коммит — в `auth/UPSTREAM`; правки адаптера — в `auth/*.go`. Офлайн-проверка — сборка:
+   `deploy/build-ipatool-docker.sh` гоняет `go test` адаптера и собирает бинарник.
+3. Выкладка (`deploy/deploy.sh`), сборка (`deploy/build-ipatool.sh`: новый `--prepare` пополнит
+   `bin/ipatool-auth-cache`), затем живой вход в панели (или консольный — README, «Вход и участники») и
+   `auth info` / `list-purchases` от `appshelf`.

@@ -55,7 +55,9 @@ The web UI is in Russian.
 
 IPAs are fetched by `bin/ipatool`, a fork of [ipatool-cpp](https://github.com/Sorvigolova/ipatool) with our
 patches (`ipatool/`): the password is never stored and is passed only via stdin, a `list-purchases`
-command, and exit codes for the wrapper. The web part is FastAPI and Jinja2, data lives in SQLite. Design
+command, and exit codes for the wrapper. It hands the Apple sign-in to `bin/ipatool-auth`, a client built from a
+pinned [ipatool](https://github.com/majd/ipatool) (Go) with our adapter (`ipatool/auth/`, see "Sign-in and
+people"). The web part is FastAPI and Jinja2, data lives in SQLite. Design
 document (Russian): [docs/superpowers/specs/2026-10-05-appshelf-design.md](docs/superpowers/specs/2026-10-05-appshelf-design.md).
 Sign-in and multiple Apple IDs: [docs/superpowers/specs/2026-10-08-multi-apple-id-design.md](docs/superpowers/specs/2026-10-08-multi-apple-id-design.md).
 
@@ -160,10 +162,11 @@ What ships is the committed `HEAD` (`git archive`): with uncommitted changes in 
 code replaces the old one as a whole and only after `pip` succeeds; to roll back, deploy the previous commit (across a
 database schema change — only if that migration declared the schema readable by the older code, see `SCHEMA_VERSION`
 in `store.py`). If
-`bin/ipatool` was not built from the deployed patches, `deploy.sh` reminds you to rebuild; when to rebuild without
-changes — [ipatool/README.md](ipatool/README.md). `build-ipatool.sh` builds the `ipatool/` deployed on the server
-in a throwaway `debian:trixie` container on the `APPSHELF_BUILD_SSH` host (or on the server itself if unset) and
-installs the binary on the server only if the server has all its libraries.
+`bin/ipatool` or `bin/ipatool-auth` was not built from the deployed `ipatool/`, `deploy.sh` reminds you to rebuild;
+when to rebuild without changes — [ipatool/README.md](ipatool/README.md). `build-ipatool.sh` builds both from the
+`ipatool/` deployed on the server in a throwaway `debian:trixie` container on the `APPSHELF_BUILD_SSH` host (or on
+the server itself if unset), checks them on the server as `appshelf`, prepares `bin/ipatool-auth-cache` and installs
+them only if the server has all their libraries.
 
 ## Sign-in and people
 
@@ -201,11 +204,24 @@ To Apple all sign-ins come from the server: the client is Apple Configurator on 
 prompt shows the server's IP location. Each new Apple ID gets its own MAC (`IPATOOL_DEVICE_MAC`, patch 05) — a
 separate "Mac" to Apple.
 
-A console `auth login` is only good for testing the fork: the site does not learn about it, so jobs and the
-nightly check stay idle until you sign in through the panel. If you need it anyway — only as `appshelf` and under
-that Apple ID's lock (otherwise the service cannot read the account file or collides with a running download):
+The sign-in itself is done by `bin/ipatool-auth` (`ipatool/auth/`, details in
+[ipatool/auth/README.md](ipatool/auth/README.md)): Apple refuses the C++ client's old sign-in (2026-11-08), and
+`bin/ipatool auth login --password-stdin` passes the password on stdin to this client. It signs in with the protocol
+of current ipatool and imports the store token into the existing encrypted `account` without the password;
+purchase history and downloads stay in `bin/ipatool`. Next to the account lives `adi-state`, the device
+provisioning state (key derived from `machine-id`, `0600`); an unreadable one (another machine, corruption) does
+not block sign-in — it runs as a first sign-in and rewrites the file. Apple and Unicorn libraries for sign-in are in
+`bin/ipatool-auth-cache` (root, appshelf only reads it), prepared by `build-ipatool.sh`.
 
-    sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, if not empty> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
+A console sign-in is only good for testing the fork: the site does not learn about it, so jobs and the nightly
+check stay idle until you sign in through the panel. If you need it anyway — use the service's path (without
+`--password-stdin` the old sign-in runs), only as `appshelf` and under that Apple ID's lock (otherwise the service
+cannot read the account file or collides with a running download). Take the password from `read -s`: it stays out
+of argv and shell history. On exit code 4 (`auth_code_required`) repeat with `--auth-code <2FA code>`:
+
+    read -rsp 'Apple ID password: ' PW; echo
+    printf '%s\n' "$PW" | sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, if not empty> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID> --password-stdin
+    unset PW
 
 The ipatool account is the file `$HOME/.ipatool/account`, and each launch requirement has its own reason:
 - `HOME` only selects whose account to use: every Apple ID has its own `accounts/<id>`. The path is not part of

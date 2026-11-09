@@ -53,7 +53,8 @@
 
 IPA скачивает `bin/ipatool` — форк [ipatool-cpp](https://github.com/Sorvigolova/ipatool) с нашими патчами
 (`ipatool/`): пароль не хранится и передаётся только через stdin, есть команда `list-purchases`, коды
-выхода для обёртки. Веб-часть — FastAPI и Jinja2, данные — SQLite. Дизайн —
+выхода для обёртки. Вход в Apple он передаёт `bin/ipatool-auth` — клиенту закреплённого
+[ipatool](https://github.com/majd/ipatool) (Go) с нашим адаптером (`ipatool/auth/`, раздел «Вход и участники»). Веб-часть — FastAPI и Jinja2, данные — SQLite. Дизайн —
 [docs/superpowers/specs/2026-10-05-appshelf-design.md](docs/superpowers/specs/2026-10-05-appshelf-design.md).
 Вход и несколько Apple ID — [docs/superpowers/specs/2026-10-08-multi-apple-id-design.md](docs/superpowers/specs/2026-10-08-multi-apple-id-design.md).
 
@@ -161,10 +162,10 @@ APKS/XAPK не поддерживаются. Выбранное вложение
 Уезжает закоммиченный `HEAD` (`git archive`): с незакоммиченными правками в коде `deploy.sh` откажется. Новый
 код встаёт на место прежнего целиком и только после `pip`; откат — выложить прежний коммит (через переход схемы
 базы — только если переход объявил её годной прежнему коду, см. `SCHEMA_VERSION` в `store.py`). Если `bin/ipatool`
-собран не из выложенных патчей, `deploy.sh` напомнит о пересборке; когда пересобирать без правок —
-[ipatool/README.md](ipatool/README.md). `build-ipatool.sh` собирает выложенные на сервер `ipatool/`, в
-одноразовом контейнере `debian:trixie` на хосте `APPSHELF_BUILD_SSH` (не задан — на самом сервере), и ставит
-бинарник на сервер, только если там хватает библиотек.
+или `bin/ipatool-auth` собран не из выложенных `ipatool/`, `deploy.sh` напомнит о пересборке; когда пересобирать
+без правок — [ipatool/README.md](ipatool/README.md). `build-ipatool.sh` собирает оба из выложенных на сервер
+`ipatool/`, в одноразовом контейнере `debian:trixie` на хосте `APPSHELF_BUILD_SSH` (не задан — на самом сервере),
+проверяет их на сервере от `appshelf`, готовит `bin/ipatool-auth-cache` и ставит, только если там хватает библиотек.
 
 ## Вход и участники
 
@@ -200,11 +201,23 @@ Apple ID» с Apple ID другого участника, приглашение
 Для Apple все входы идут с сервера: клиент — Apple Configurator на Mac, место на карте запроса входа — по IP
 сервера. У каждого нового Apple ID свой MAC (`IPATOOL_DEVICE_MAC`, патч 05) — для Apple это отдельный «Mac».
 
-Консольный `auth login` годится лишь для проверки форка: сайт о нём не узнаёт, поэтому задания и ночная
-проверка стоят, пока не выполнен вход в панели. Если всё же нужен — только от `appshelf` и под блокировкой
-этого Apple ID (иначе служба не прочитает учётку или столкнётся с идущим скачиванием):
+Сам вход выполняет `bin/ipatool-auth` (`ipatool/auth/`, подробности — [ipatool/auth/README.md](ipatool/auth/README.md)):
+прежний вход C++-клиента Apple отклоняет (2026-11-08), а `bin/ipatool auth login --password-stdin` передаёт пароль
+через stdin этому клиенту. Он входит протоколом современного ipatool и импортирует токен магазина в прежний
+шифрованный `account` без пароля; история покупок и скачивание остаются в `bin/ipatool`. Рядом с учёткой —
+`adi-state`, состояние подготовки устройства (ключ — от `machine-id`, `0600`); нечитаемое (другая машина, порча)
+вход не закрывает — он идёт как первый и перезаписывает файл. Библиотеки Apple и Unicorn для входа лежат в
+`bin/ipatool-auth-cache` (root, appshelf только читает); их готовит `build-ipatool.sh`.
 
-    sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, если не пуст> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID>
+Консольный вход годится лишь для проверки форка: сайт о нём не узнаёт, поэтому задания и ночная проверка стоят,
+пока не выполнен вход в панели. Если всё же нужен — тем же путём, что у службы (без `--password-stdin` идёт
+прежний вход), только от `appshelf` и под блокировкой этого Apple ID (иначе служба не прочитает учётку или
+столкнётся с идущим скачиванием). Пароль — из `read -s`: не в argv и не в истории оболочки. Ответ с кодом 4
+(`auth_code_required`) — повторите с `--auth-code <код 2FA>`:
+
+    read -rsp 'Пароль Apple ID: ' PW; echo
+    printf '%s\n' "$PW" | sudo -u appshelf env HOME=/etc/appshelf/accounts/<id> IPATOOL_DEVICE_MAC=<accounts.device_mac, если не пуст> flock /var/lib/appshelf/locks/<id>.lock /var/_sh/appshelf/bin/ipatool auth login -e <Apple ID> --password-stdin
+    unset PW
 
 Учётка ipatool — файл `$HOME/.ipatool/account`, и требования к запуску тут разные по причине:
 - `HOME` только выбирает, чью учётку взять: у каждого Apple ID свой `accounts/<id>`. В ключ шифрования путь
