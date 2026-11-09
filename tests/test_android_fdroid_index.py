@@ -205,6 +205,19 @@ def test_failed_refresh_is_not_repeated_until_retry(tmp_path, monkeypatch):
     assert cat.info(PKG)[1].code == 2 and len(http.calls) == 2
 
 
+def test_spent_search_budget_is_not_remembered_as_catalog_failure(tmp_path):
+    """Поиск исчерпал свой срок до каталога: следующий вызов без этого срока обновляет каталог, а не получает отказ."""
+    http = FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, catalog([build(2, "new")]))})
+    cat = index.Catalog(http, archive=True, clock=lambda: 10.0, cache_dir=tmp_path)
+
+    def spent():
+        raise net.FetchError("поиск занял слишком долго")
+
+    with pytest.raises(net.FetchError, match="слишком долго"):
+        cat.apps(spent)
+    assert not http.calls and cat.info(PKG)[1].code == 2
+
+
 def test_catalog_rejects_unknown_cache_format_and_expired_signed_timestamp(tmp_path):
     (tmp_path / "repo.json").write_text('{"schema":0}', encoding="utf-8")
     with pytest.raises(net.SourceError, match="кэш.*повреждён"):

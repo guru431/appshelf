@@ -226,6 +226,22 @@ def test_request_deadline_covers_redirects():
     assert len(timeouts) == 3 and timeouts[-1] == 60 and now[0] <= net.REQUEST_DEADLINE
 
 
+def test_large_body_request_gets_download_deadline():
+    """Каталог F-Droid (до 192 МБ) читается через request: срок — как у файла, а не 5 минут на запрос."""
+    deadlines = []
+    http = net.Http(resolve=fake_resolve("8.8.8.8"), connect=Server(Resp(200), Resp(200)), clock=lambda: 0.0)
+    real = http._request
+
+    def spy(*args, deadline=None, **kwargs):
+        deadlines.append(deadline)
+        return real(*args, deadline=deadline, **kwargs)
+
+    http._request = spy
+    http.request("GET", "https://f-droid.example/repo/index-v2.json", max_bytes=192 << 20)
+    http.request("GET", "https://bank.example/api.json")
+    assert deadlines == [net.DOWNLOAD_DEADLINE, net.REQUEST_DEADLINE]
+
+
 def test_socket_reads_stop_at_request_deadline():
     """Сервер отдаёт заголовки по кусочку: таймаут каждого чтения — не дальше общего срока, после него — отказ."""
     import http.client

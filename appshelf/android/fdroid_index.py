@@ -126,8 +126,9 @@ class Catalog:
                 if self._error is not None and self.clock() < self._retry_at:
                     error = self._error
                 else:
+                    wait()  # отказ бюджета вызывающего (поиск) — не сбой каталога: его не запоминаем
                     try:
-                        self._refresh(wait)
+                        self._refresh()
                         self._error = None
                         return self._apps
                     except (FetchError, SourceError) as e:
@@ -137,8 +138,7 @@ class Catalog:
                 self.stale = True
             return self._apps
 
-    def _refresh(self, wait) -> None:
-        wait()
+    def _refresh(self) -> None:
         http = copy(self.http)
         if isinstance(http, Http):
             http.timeout = min(http.timeout, 10.0)

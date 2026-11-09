@@ -287,8 +287,10 @@ class Http:
     def request(self, method: str, url: str, *, headers: dict | None = None, body: bytes | None = None,
                 max_bytes: int = MAX_JSON, follow: bool = True) -> tuple[int, dict[str, str], bytes]:
         """Ответ как есть — статус (любой), заголовки (имена в нижнем регистре), тело не больше max_bytes: для
-        протоколов не на JSON (Google Play)."""
-        resp, conn, _ = self._request(method, url, headers or {}, body, follow=follow)
+        протоколов не на JSON (Google Play). Тело больше MAX_JSON (каталог F-Droid до 192 МБ) — срок как у файла:
+        на медленной линии REQUEST_DEADLINE ему не хватит."""
+        span = DOWNLOAD_DEADLINE if max_bytes > MAX_JSON else REQUEST_DEADLINE
+        resp, conn, _ = self._request(method, url, headers or {}, body, follow=follow, deadline=self.clock() + span)
         try:
             data = _read(resp, max_bytes + 1)
             if len(data) > max_bytes:
