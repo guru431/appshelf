@@ -5,7 +5,7 @@ import json
 import re
 from contextlib import suppress
 from dataclasses import replace
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -161,9 +161,29 @@ def register_routes(app, w, sessions, browser):
             return connect_page(request, uid, "Идёт скачивание — отключите аккаунт через минуту", 409)
         return back(f"/fourpda/{uid}/connect")
 
+    def marks(uid, topic, files) -> dict[str, str]:
+        """Вложения темы относительно своей полки: выбранное — «на полке», загруженные после него (номер вложения
+        больше) — «новее выбранного». Сравниваются карточки 4PDA из этой же темы."""
+        def attachment(url):
+            return int(urlsplit(url).path.split("/")[4])
+
+        def topic_id(url):
+            return parse_qs(urlsplit(url).query).get("showtopic", [""])[0]
+
+        with w.conn() as c:
+            shelf = db.shelf_for_user(c, uid)
+            chosen = {r["source_ref"] for r in c.execute(
+                "SELECT source_ref, source_page FROM android_apps WHERE shelf_id=? AND source='fourpda'",
+                (shelf.id,)) if topic_id(r["source_page"]) == topic_id(topic)} if shelf is not None else set()
+        known = [attachment(ref) for ref in chosen if ref.startswith(fourpda.BASE + "/forum/dl/post/")]
+        out = {f.url: "на полке" for f in files if f.url in chosen}
+        if known:
+            out.update({f.url: "новее выбранного" for f in files if f.url not in out and attachment(f.url) > max(known)})
+        return out
+
     def catalog(request, topic="", error="", status=200):
         uid = request.state.who.id
-        files, title, name = [], "", ""
+        files, title, name, tags = [], "", "", {}
         try:
             if topic:
                 topic = fourpda.topic_url(topic)
@@ -173,13 +193,14 @@ def register_routes(app, w, sessions, browser):
                 client = sessions.client(uid)
                 if topic:
                     title, files = client.files(topic)
+                    tags = marks(uid, topic, files)
         except (FetchError, SourceError) as e:
             error, status = str(e), 400
             # Не возвращать непроверенный href (в том числе javascript:) в ссылку на форум.
             if not title:
                 topic = ""
         return w.page(request, "fourpda_catalog.html", "a_add", status, connected=name, topic=topic,
-                      files=files, title=title, error=error)
+                      files=files, title=title, error=error, tags=tags)
 
     @app.get("/android/4pda")
     def search(request: Request, q: str = ""):

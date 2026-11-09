@@ -97,9 +97,11 @@ def nightly_part(result: str) -> str:
     return next((p for p in result.split(SEP) if p.startswith("Android:")), "")
 
 
-def _job_view(j) -> dict:
+def _job_view(j, filename: str = "") -> dict:
+    """filename — имя файла докачки (android_uploads), если в задании его нет: подпись вместо «Свой файл»."""
     p = json.loads(j["payload"] or "{}")
-    title = p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or "Свой файл"
+    title = (p.get("name") or (p.get("ref") if j["kind"] == "add" else "") or p.get("filename") or filename
+             or "Свой файл")
     return {"id": j["id"], "status": j["status"], "error": j["error"], "title": title,
             "query": p.get("ref", "") if j["kind"] == "add" else "",
             "split_only": p.get("split_only", False), "alternatives": p.get("alternatives", [])}
@@ -358,7 +360,9 @@ def _register_scope(app, w, scope: Scope):
             apps = db.list_apps(c, shelf.id) if shelf is not None else []
             cards = {a.package for a in apps}
             # задания без карточки: ссылка и свой файл, пока пакет не известен, и их ошибки — до «Скрыть»
-            pending = [_job_view(j) for j in db.open_jobs(c, shelf.id)
+            files = dict(c.execute("SELECT job_id, filename FROM android_uploads WHERE shelf_id=? AND job_id IS NOT NULL",
+                                   (shelf.id,)).fetchall()) if shelf else {}
+            pending = [_job_view(j, files.get(j["id"], "")) for j in db.open_jobs(c, shelf.id)
                        if j["package"] not in cards or json.loads(j["payload"] or "{}").get("split_only")] if shelf else []
             busy = shelf is not None and db.has_active(c, shelf.id)
             waiting = {a.package: store.android_waiting_reason(c, shelf.id, a.package)
@@ -484,12 +488,16 @@ def _register_scope(app, w, scope: Scope):
 
     def requeue(c, shelf, app, ack: bool = False, previous: list | None = None) -> None:
         """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново (APKPure — с
-        галочкой ack из «Сменить источник»); свой файл без источника и уже ждущее задание — ничего. previous —
+        галочкой ack из «Сменить источник»); свой файл без источника, проверка вложения 4PDA и уже ждущее задание —
+        ничего. previous —
         прежние (source, ref, etag) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
         package = app["package"]
         with nullcontext() if c.in_transaction else store.tx(c):
             if app["source"] == "upload" or db.active_for(c, shelf.id, package):
                 return
+            if app["source"] == "fourpda" and not previous and db.has_current(c, shelf.id, package):
+                return  # вложение 4PDA закреплено: проверять нечего, новую версию выбирают в теме
+
             db.set_status(c, shelf.id, package, "queued")
             if db.has_current(c, shelf.id, package):
                 db.enqueue(c, shelf.id, "check", w.now(), package=package,
@@ -666,7 +674,8 @@ def _register_scope(app, w, scope: Scope):
         try:
             with w.conn() as c, store.tx(c):
                 shelf = ensure(c, request)
-                db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200]})
+                db.enqueue(c, shelf.id, "upload", w.now(), payload={"path": str(path), "name": name.strip()[:200],
+                                                                    "filename": (file.filename or "")[:255]})
         except BaseException:
             path.unlink(missing_ok=True)
             raise

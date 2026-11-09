@@ -110,8 +110,10 @@
       {%- if v %}{% set link = app_url(a.package) %}
       <form method="get" action="{{ link }}"><button class="secondary" data-copy="{{ link }}">Скопировать ссылку</button></form>
       {%- endif %}
-      {%- if v and a.status in ('ok', 'error') and a.source != 'upload' %}
+      {%- if v and a.status in ('ok', 'error') and a.source not in ('upload', 'fourpda') %}
       <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/check') }}"><button>Проверить обновление</button></form>
+      {%- elif v and a.source == 'fourpda' and a.source_page and prefix == '/android' %}{# вложение закреплено: новое выбирают в теме #}
+      <a class="btn secondary" href="{{ post_url('/android/4pda/topic') }}&amp;{{ {'url': a.source_page} | urlencode }}">Выбрать новую версию в теме</a>
       {%- endif %}
       {% if v %}<button type="button" class="secondary" data-dialog="versions-{{ a.package }}">Версии и закрепления</button>{% endif %}
       <button type="button" class="secondary" data-dialog="source-{{ a.package }}">Сменить источник</button>
