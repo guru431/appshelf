@@ -702,20 +702,19 @@ def _register_scope(app, w, scope: Scope):
             requeue(c, shelf, app_row)
         return back(p)
 
-    def change(request: Request, package: str, fn):
+    def change(request: Request, package: str, fn, missing=not_found):
         """Действие, которое может удалить каталоги на полке: архив недоступен — 503 и ничего не тронуто.
-        fn(c, root, shelf_id) → False — нет такой версии (404)."""
+        fn(c, root, shelf_id) → False — нет такой версии: ответ missing() (по умолчанию 404)."""
         try:
             with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT), w.conn() as c:
                 jobs._archive(cfg)
                 shelf, app_row = own(c, request, package)
-                if app_row is None or not fn(c, fetch.shelf_root(cfg, shelf), shelf.id):
-                    return not_found()
+                done = app_row is not None and fn(c, fetch.shelf_root(cfg, shelf), shelf.id)
         except jobs.ArchiveUnavailable:
             return catalog_page(request, 503, ARCHIVE_DOWN)
         except ipatool.IpatoolError:
             return catalog_page(request, 409, "Полка занята скачиванием — повторите через минуту")
-        return back(p)
+        return back(p) if done else missing()
 
     @app.post(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
     def remove(request: Request, package: str):
@@ -747,27 +746,37 @@ def _register_scope(app, w, scope: Scope):
     def unpin_version(request: Request, package: str, version_id: int):
         return change(request, package, lambda c, root, sid: db.unpin_version(c, root, sid, package, version_id))
 
-    @app.get(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
-    def remove_version_page(request: Request, package: str, version_id: int):
+    def remove_version_page(request: Request, package: str, version_id: int, status_code: int = 200, error: str = ""):
+        """Подтверждение удаления; после устаревшего подтверждения — та же страница с новым снимком (409) или,
+        если версии уже нет, страница 404 с «Назад»."""
         with w.conn() as c:
             shelf, app_row = own(c, request, package)
             row = db.old_version(c, shelf.id, package, version_id) if app_row is not None else None
+        cancel = p + f"?person={request.state.who.id}"
         if row is None:
-            return not_found()
+            return w.page(request, "confirm.html", scope.nav, 404, refused=True, cancel=cancel,
+                          question="Этой версии уже нет на полке: её удалили или заменили.")
         pinned = " Закрепление будет снято." if row["pinned"] else ""
-        return w.page(request, "confirm.html", scope.nav,
+        return w.page(request, "confirm.html", scope.nav, status_code, error=error,
                       question=f"Удалить версию {row['version_name']} приложения «{row['app_name']}»? "
                                f"Файл APK и ссылка установки этой версии удалятся.{pinned}",
                       action=f"{p}/apps/{package}/versions/{version_id}/remove", button="Удалить версию",
-                      cancel=p + f"?person={request.state.who.id}",
-                      hidden={"snapshot": store.version_snapshot(row)})
+                      cancel=cancel, hidden={"snapshot": store.version_snapshot(row)})
+
+    @app.get(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
+    def confirm_remove_version(request: Request, package: str, version_id: int):
+        return remove_version_page(request, package, version_id)
 
     @app.post(p + "/apps/{package}/versions/{version_id}/remove", response_class=HTMLResponse, dependencies=deps)
     def remove_version(request: Request, package: str, version_id: int, snapshot: str = Form("")):
         if not snapshot:
             return PlainTextResponse("Подтвердите удаление на странице версии", status_code=400)
         return change(request, package,
-                      lambda c, root, sid: db.remove_version(c, root, sid, package, version_id, snapshot))
+                      lambda c, root, sid: db.remove_version(c, root, sid, package, version_id, snapshot),
+                      missing=lambda: remove_version_page(
+                          request, package, version_id, 409,
+                          "Версия изменилась, пока страница была открыта (например, её закрепили в другой вкладке). "
+                          "Проверьте и подтвердите удаление заново."))
 
     @app.post(p + "/apps/{package}/source", response_class=HTMLResponse, dependencies=deps)
     def change_source(request: Request, package: str, source: str = Form(""), ref: str = Form(""),

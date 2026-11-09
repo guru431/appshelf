@@ -93,8 +93,29 @@ def test_stale_confirmation_cannot_remove_replacement_file(web, conn, saved_vers
     snapshot = snapshot_from(web.client.get(remove_url(s)))
     # A manual import can reuse a removed SQLite id for another historical APK.
     conn.execute(f"UPDATE {s.table} SET sha256=? WHERE id=?", ("b" * 64, s.old["id"]))
-    assert web.client.post(remove_url(s), data={"snapshot": snapshot}).status_code == 404
+    stale = web.client.post(remove_url(s), data={"snapshot": snapshot})
     assert (s.root / s.old["dir"] / "payload").is_file()
+    if s.platform == "apple":
+        assert stale.status_code == 404
+        return
+    # Android: та же страница подтверждения с причиной и новым снимком — удалить можно, проверив заново.
+    assert stale.status_code == 409 and "Версия изменилась" in stale.text
+    fresh = re.search(r'name="snapshot" value="([a-f0-9]{64})"', stale.text).group(1)
+    assert fresh != snapshot
+    assert web.client.post(remove_url(s), data={"snapshot": fresh}, follow_redirects=False).status_code == 303
+    assert not (s.root / s.old["dir"]).exists()
+
+
+def test_confirmation_of_removed_version_offers_way_back(web, conn, saved_versions):
+    s = saved_versions
+    if s.platform == "apple":
+        pytest.skip("Apple: отдельная ветка")
+    snapshot = snapshot_from(web.client.get(remove_url(s)))
+    assert web.client.post(remove_url(s), data={"snapshot": snapshot}, follow_redirects=False).status_code == 303
+    again = web.client.post(remove_url(s), data={"snapshot": snapshot})
+    assert again.status_code == 404 and "text/html" in again.headers["content-type"]
+    assert "уже нет на полке" in again.text and ">Назад</a>" in again.text and 'name="snapshot"' not in again.text
+    assert web.client.get(remove_url(s)).status_code == 404
 
 
 def test_removal_failure_keeps_database_and_files(web, conn, saved_versions):
