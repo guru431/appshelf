@@ -109,12 +109,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         # X-Forwarded-Host: Apache дописывает свой к присланному клиентом, а Host от Apache — localhost сокета
         origin = request.headers.get("origin")
         if origin == "null" and request.headers.get("sec-fetch-site") == "same-origin":
-            # Referrer-Policy: no-referrer (глобально в Apache) превращает Origin своего POST в null;
-            # Sec-Fetch-Site ставит сам браузер, со страницы его не подделать
+            # Referrer-Policy: no-referrer превращает Origin своего POST в null — страницы задают same-origin сами
+            # (meta в base.html), это — для открытых до того; Sec-Fetch-Site ставит браузер, со страницы не подделать
             origin = None
         if request.method == "POST" and origin is not None and urlsplit(origin).netloc.lower() != site:
             return PlainTextResponse("Forbidden: cross-origin POST", status_code=403)
-        return await call_next(request)
+        response = await call_next(request)
+        # и для ответов без страницы (скрипт service worker); глобальный заголовок Apache может его заменить —
+        # тогда страницы держит meta
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
 
     @app.middleware("http")
     async def auth(request: Request, call_next):

@@ -162,8 +162,8 @@ def referer_path(request: Request) -> str:
 
 
 def back_to(request: Request, target: str) -> str:
-    """Куда вернуться: путь из ссылки (back=…), иначе Referer — его браузер не шлёт, раз Apache отдаёт
-    Referrer-Policy: no-referrer."""
+    """Куда вернуться: путь из ссылки (back=…), иначе Referer своей страницы (политика страниц — same-origin;
+    без него — каталог)."""
     return safe_next(target) if target else referer_path(request)
 
 

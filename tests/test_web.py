@@ -74,6 +74,17 @@ def test_cross_origin_post_forbidden(web, conn, cfg, clock):
     assert r.status_code == 303 and store.list_apps(conn, 1) == []
 
 
+def test_pages_keep_origin_of_own_posts(web, make_web, cfg, conn):
+    # Safari до 16.4 не шлёт Sec-Fetch-Site: при глобальном no-referrer его POST нёс бы Origin: null и получал 403.
+    # Политика самой страницы (meta сильнее заголовка) — same-origin: свой POST несёт Origin, чужим сайтам Referer нет
+    for client, path in ((web.client, "/"), (make_web(cfg, conn).client, "/login")):
+        r = client.get(path)
+        assert r.status_code == 200 and '<meta name="referrer" content="same-origin">' in r.text.split("</head>")[0]
+        assert r.headers["referrer-policy"] == "same-origin"
+    r = web.client.post("/logout", headers={"Origin": "null"}, follow_redirects=False)   # без Sec-Fetch-Site
+    assert r.status_code == 403
+
+
 def test_catalog_shows_install_and_previous(web, conn, cfg, clock):
     seed_app(conn, cfg, clock, versions=("12.15.0", "12.16.0"))
     r = web.client.get("/")
