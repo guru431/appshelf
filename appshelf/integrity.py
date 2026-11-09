@@ -8,6 +8,7 @@ IDEAS-archive.md). По каждой строке versions — каталог, �
 против каталогов <пакет>-<versionCode>, deep — ещё SHA-256 APK."""
 from __future__ import annotations
 
+import hashlib
 import os
 import plistlib
 import re
@@ -16,14 +17,17 @@ import sqlite3
 from collections import Counter, defaultdict
 from contextlib import closing, suppress
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timezone
 from importlib.metadata import version as package_version
 from pathlib import Path
 
-from . import ipa, jobs, people, store
+from . import ipa, jobs, people, store, webauth
 from .android import db as android_db, fetch as android_fetch
 from .config import TOKEN_RE, Config
 
 DAILY_RE = re.compile(r"^appshelf-\d{4}-\d{2}-\d{2}\.db$")
+STAMP = "backup.stamp"  # status/: время последнего удачного ночного снимка — для мониторинга, как nightly.stamp
+REBUILD_DAYS = 90       # ipatool пересобирается раз в квартал (и после DSA openssl)
 
 KINDS = {  # вид проблемы → подпись в кратком итоге; порядок — порядок итога
     "no_shelf": "нет каталога полки, а версии в базе есть",
@@ -117,15 +121,16 @@ class Report:
         return "\n".join(lines)
 
 
-def open_ro(path: Path) -> sqlite3.Connection:
-    """База только на чтение (URI mode=ro): ни перехода схемы, ни записи в WAL. Схема — ровно этой версии appshelf."""
+def open_ro(path: Path, any_schema: bool = False) -> sqlite3.Connection:
+    """База только на чтение (URI mode=ro): ни перехода схемы, ни записи в WAL. Схема — ровно этой версии appshelf;
+    any_schema — любой (снимку не нужно её читать: после отката кода база бывает новее)."""
     if not path.is_file():
         raise DbError(f"базы {path} нет")
     c = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
     c.row_factory = sqlite3.Row
     try:
         version = c.execute("PRAGMA user_version").fetchone()[0]
-        if version != store.SCHEMA_VERSION:
+        if version != store.SCHEMA_VERSION and not any_schema:
             raise DbError(f"{path}: схема версии {version}, а этой версии appshelf нужна {store.SCHEMA_VERSION}")
     except sqlite3.DatabaseError as e:
         c.close()
@@ -185,16 +190,23 @@ def restore_report(cfg: Config, db: Path, secrets_dir: Path, cookie_key: Path, *
         google = c.execute("SELECT COUNT(*) FROM google_accounts WHERE play!='none'").fetchone()[0]
         users = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         schema = c.execute("PRAGMA user_version").fetchone()[0]
-    settings_ok = (secrets_dir / "appshelf.env").is_file() and (secrets_dir / "appshelf.env").stat().st_size > 0
-    cookie_ok = cookie_key.is_file() and cookie_key.stat().st_size >= 32
+    files = {"appshelf.env": _nonempty(secrets_dir / "appshelf.env"),
+             # другой длины ключ appshelf-web не примет и не стартует (webauth.load_key)
+             "cookie-key": cookie_key.is_file() and cookie_key.stat().st_size == webauth.KEY_LEN}
+    if cfg.sources_ca is not None:  # корни НУЦ: без них RuStore не скачивает; в наборе — рядом с appshelf.env
+        files["APPSHELF_SOURCES_CA"] = _nonempty(secrets_dir / cfg.sources_ca.name)
     return {"code_version": package_version("appshelf"), "schema_version": schema,
-            "offline_ok": report.ok and settings_ok and cookie_ok, "archive": report.as_dict(),
-            "protected_files": {"appshelf.env": settings_ok, "cookie-key": cookie_ok},
+            "offline_ok": report.ok and all(files.values()), "archive": report.as_dict(),
+            "protected_files": files,
             "connections_policy": "reconnect", "manual_steps": [
                 {"provider": "Apple", "accounts": apple, "action": "повторный вход каждого Apple ID на новом сервере"},
                 {"provider": "Google Play", "accounts": google, "action": "повторное подключение личных аккаунтов Play"},
                 {"provider": "4PDA", "participants": users, "action": "повторный импорт личной сессии при необходимости"}],
             "external_connections_verified": False}
+
+
+def _nonempty(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
 
 
 def _shelf(cfg: Config, acct, versions: list, deep: bool, rep: Report) -> None:
@@ -314,16 +326,24 @@ def _apk(root: Path, sid: int, v, deep: bool, rep: Report) -> None:
 def backup(db: Path, out: Path) -> Path:
     """Согласованный снимок живой базы (sqlite3 backup API) в out/appshelf.db, 0600; out создаётся или пуст.
     Перечень версий и SHA-256 — в самом снимке (versions); проверка копии — check по снимку и копии архива.
-    Снимок — один файл без WAL; пишется во временный и переименовывается: оборванный не выглядит готовым."""
+    Снимок — один файл без WAL; пишется во временный и переименовывается: оборванный или не прошедший
+    PRAGMA quick_check не выглядит готовым. Версия схемы любая: после отката кода база бывает новее его."""
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
         raise BackupError(f"каталог {out} не пуст — нужен новый или пустой")
     tmp, dst = out / ".appshelf.db.tmp", out / "appshelf.db"
     os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))  # 0600 сразу: в снимке люди и токены полок
     try:
-        with closing(open_ro(db)) as src, closing(sqlite3.connect(tmp)) as d:
+        with closing(open_ro(db, any_schema=True)) as src, closing(sqlite3.connect(tmp)) as d:
             src.backup(d)
             d.execute("PRAGMA journal_mode=DELETE")  # живая база в WAL — флаг переехал бы в снимок
+            try:
+                bad = [r[0] for r in d.execute("PRAGMA quick_check")] != ["ok"]
+            except sqlite3.DatabaseError:
+                bad = True
+            if bad:
+                raise BackupError(f"снимок {db} не прошёл PRAGMA quick_check — база повреждена, прежние снимки "
+                                  "не тронуты")
         os.replace(tmp, dst)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -353,3 +373,42 @@ def daily_backup(db: Path, dest: Path, work: Path, day: str, keep: int) -> Path:
     for old in sorted(p for p in dest.iterdir() if DAILY_RE.match(p.name))[:-keep]:
         old.unlink()
     return final
+
+
+def builds(cfg: Config, today: date) -> list[str]:
+    """Собраны ли bin/ipatool и bin/ipatool-auth из выложенных исходников и когда — для appshelf check, на его код
+    возврата не влияет. Отпечаток — как в deploy/install.sh: SHA-256 подряд UPSTREAM и патчей (у ipatool-auth —
+    UPSTREAM и *.go), дата сборки — время файла отпечатка. Исходников рядом с bin/ нет (не сервер) — пусто."""
+    src, bin_dir = cfg.ipatool_bin.parent.parent / "ipatool", cfg.ipatool_bin.parent
+    if not src.is_dir():
+        return []
+    lines = []
+    for name, parts in (("ipatool", [src / "UPSTREAM", *sorted(src.glob("patches/*.patch"), key=lambda p: p.name)]),
+                        ("ipatool-auth", [src / "auth" / "UPSTREAM",
+                                          *sorted((src / "auth").glob("*.go"), key=lambda p: p.name)])):
+        h = hashlib.sha256()
+        try:
+            for p in parts:
+                h.update(p.read_bytes())
+        except FileNotFoundError:  # исходников этой сборки в выложенном коде нет — сверять не с чем
+            continue
+        stamp = bin_dir / f"{name}.src-sha256"
+        try:
+            built = datetime.fromtimestamp(stamp.stat().st_mtime, timezone.utc).date()
+            same = stamp.read_text(encoding="ascii", errors="replace").strip() == h.hexdigest()
+        except FileNotFoundError:
+            lines.append(f"{name}: не собран")
+            continue
+        line = f"{name}: собран {built}" + (" из выложенных исходников" if same else
+                                             " НЕ из выложенных исходников — пересоберите")
+        if (today - built).days > REBUILD_DAYS:
+            line += f"; старше {REBUILD_DAYS} дней"
+        lines.append(line)
+    return lines + ["пересборка — после DSA openssl или раз в квартал: bash deploy/build-ipatool.sh (со своей машины)"]
+
+
+def outside_archive(cfg: Config, path: Path) -> None:
+    """Снимок внутри архива Apache раздал бы через /d/ без входа по предсказуемому имени: токены всех полок, адреса
+    Apple ID, соль и хэш PIN."""
+    if path.resolve().is_relative_to(cfg.archive.resolve()):
+        raise BackupError(f"{path} — внутри архива {cfg.archive}, а его раздаёт Apache: снимки — вне архива")

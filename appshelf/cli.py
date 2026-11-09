@@ -9,6 +9,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 from . import integrity, ipatool, jobs, nightly, people, store
@@ -132,12 +133,17 @@ def check(cfg, args) -> int:
     except (integrity.DbError, jobs.ArchiveUnavailable) as e:
         print(e, file=sys.stderr)
         return 2
-    print(json.dumps(rep.as_dict(), ensure_ascii=False, indent=1) if args.json else rep.text())
+    builds = integrity.builds(cfg, date.fromisoformat(jobs.now_iso()[:10]))  # на код возврата не влияет
+    if args.json:
+        print(json.dumps({**rep.as_dict(), "ipatool": builds}, ensure_ascii=False, indent=1))
+    else:
+        print("\n".join([rep.text(), *builds]))
     return 0 if rep.ok else 1
 
 
 def backup(cfg, out: Path) -> int:
     try:
+        integrity.outside_archive(cfg, out)
         dst = integrity.backup(cfg.db, out)
     except (integrity.DbError, integrity.BackupError) as e:
         print(e, file=sys.stderr)
@@ -154,12 +160,17 @@ def backup(cfg, out: Path) -> int:
 
 
 def daily(cfg, keep: int) -> int:
-    """Ночной снимок (appshelf-backup.timer). Сбой — код 2 и строка в журнале службы."""
+    """Ночной снимок (appshelf-backup.timer). Сбой — код 2 и строка в журнале службы; удачный — ещё отметка
+    status/backup.stamp для мониторинга (как nightly.stamp)."""
     if cfg.backup_dir is None:
         print("не задан APPSHELF_BACKUP_DIR в appshelf.env — каталог ночных снимков", file=sys.stderr)
         return 2
+    now = jobs.now_iso()
     try:
-        dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", jobs.now_iso()[:10], keep)
+        integrity.outside_archive(cfg, cfg.backup_dir)
+        dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", now[:10], keep)
+        cfg.status_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.status_dir / integrity.STAMP).write_text(now + "\n", encoding="utf-8")
     except (integrity.DbError, integrity.BackupError, OSError) as e:
         print(e, file=sys.stderr)
         return 2

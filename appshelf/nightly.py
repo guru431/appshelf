@@ -7,15 +7,19 @@ from __future__ import annotations
 
 import shutil
 import traceback
+from collections import Counter
 from datetime import datetime, timedelta
 
-from . import notify, people, removed, store
+from . import integrity, notify, people, removed, store
 from .android import db as android_db, fetch as android_fetch
 from .ipatool import SessionExpired
-from .jobs import (ACCOUNT_GONE, Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired,
+from .jobs import (ACCOUNT_GONE, Env, LowSpace, app_failed, describe, fetch_version, hold, low_space, mark_expired,
                    move_shelves, nightly_lock, refresh_history)
 
 STAMP = "nightly.stamp"
+INTEGRITY = "Целостность: "  # часть итога со сводкой appshelf check — только владельцу (_integrity)
+INTEGRITY_KEY = "integrity_mail_sent"
+INTEGRITY_SUBJECT = "appshelf: проверка целостности нашла проблемы"
 EXPIRED = "остановлена: истёк вход в Apple ID"
 GONE = "остановлена: Apple ID удалён"
 NO_LOGIN = "пропущена: нет входа ни в один Apple ID"
@@ -64,7 +68,8 @@ def _run(env: Env, c) -> str:
         digests(env, c)
     except Exception:  # письма не должны оставить проверку без отметки для Zabbix
         traceback.print_exc()
-    return _finish(env, c, apple + (SEP + android if android else ""))
+    summary = _integrity(env, c)
+    return _finish(env, c, SEP.join(p for p in (apple, android, summary) if p))
 
 
 def _run_account(env: Env, c, acct, work, full: bool) -> str:
@@ -145,7 +150,7 @@ def result_for(result: str, email: str) -> str:
     """Итог для полки одного Apple ID: его часть «<email>: …» без адреса — адреса других Apple ID участникам не
     показываем. Итог без адресов (пропущена целиком, прогон до перехода на несколько Apple ID) — как есть."""
     prefix = f"{email}: "
-    apple_parts = [part for part in result.split(SEP) if not part.startswith("Android: ")]
+    apple_parts = [part for part in result.split(SEP) if not part.startswith(("Android: ", INTEGRITY))]
     for part in apple_parts:
         if part.startswith(prefix):
             return part[len(prefix):]
@@ -200,6 +205,25 @@ def digests(env: Env, c) -> int:
 def _address(c, uid: int) -> str:
     mail = [g.email for g in people.google_of(c, uid)] + [a.email for a in people.accounts_of(c, uid)]
     return next((m for m in mail if "@" in m), "")
+
+
+def _integrity(env: Env, c) -> str:
+    """Сводка appshelf check (без --deep) в итоге ночи — только владельцу: участникам result_for её не показывает.
+    Ничего не удаляет. Под download_lock: скачивание посреди проверки дало бы ложные .partial и сироты. Проблемы —
+    письмо владельцу, одно на эпизод; чистая проверка эпизод закрывает."""
+    try:
+        with hold(env.cfg.download_lock):
+            rep = integrity.check(env.cfg, c)
+        if rep.ok:
+            notify.reset(c, INTEGRITY_KEY)
+            return f"{INTEGRITY}проблем нет"
+        notify.once(c, INTEGRITY_KEY, INTEGRITY_SUBJECT, f"{rep.text()}\n\nПодробно — appshelf check на сервере; "
+                    "ночная проверка ничего не удаляет.\n", env.send, env.cfg.mail_to, env.now())
+        counts = Counter(p.kind for p in rep.problems)
+        return f"{INTEGRITY}проблем {len(rep.problems)}: " + \
+            ", ".join(f"{label} — {counts[kind]}" for kind, label in integrity.KINDS.items() if counts[kind])
+    except Exception as e:  # сводка не должна оставить проверку без отметки для Zabbix
+        return f"{INTEGRITY}не проверена — {describe(e)}"
 
 
 def _finish(env: Env, c, result: str) -> str:
