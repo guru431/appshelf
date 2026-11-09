@@ -88,6 +88,24 @@ def test_repeated_code_submit_shares_refusal(make_web, cfg, conn, acct):
     assert wb.app.state.w.limiter.email_wait("owner@example") == 0 and len(wb.app.state.w.limiter._fails) == 1
 
 
+def test_owner_sign_in_on_new_device_mails_owner(make_web, cfg, conn, acct, clock):
+    # вход владельцем там, где его записи не было, — возможная кража пароля или ссылки: письмо владельцу
+    wb = make_web(cfg, conn)
+    r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False,
+                       headers={"user-agent": "Mozilla/5.0 (iPhone)", "x-forwarded-for": "1.2.3.4, 198.51.100.7"})
+    assert r.status_code == 303
+    [(subject, body)] = wb.sent
+    assert subject == signin.NEW_DEVICE_SUBJECT and "Apple ID owner@example" in body and clock.iso() in body
+    assert "198.51.100.7" in body and "1.2.3.4" not in body and "iPhone" in body and "pw" not in body
+    wb.client.post("/login", data={"email": "owner@example", "password": "pw"})          # тот же браузер
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    TestClient(wb.app, base_url=BASE).post("/login", data={"email": "petr@example", "password": "pw"})
+    assert len(wb.sent) == 1                                  # не новое устройство и не владелец
+    token = people.create_link(conn, people.LOGIN, "", acct.user_id, clock.iso())
+    assert TestClient(wb.app, base_url=BASE).post(f"/l/{token}", follow_redirects=False).status_code == 303
+    assert len(wb.sent) == 2 and "запасная ссылка" in wb.sent[1][1] and petr.user_id != acct.user_id
+
+
 def test_foreign_next_after_login_stays_on_site(make_web, cfg, conn, acct):  # open redirect
     wb = make_web(cfg, conn)
     for target in ("https://evil.example/x", "//evil.example/x", "/\\evil.example"):

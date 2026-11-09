@@ -42,6 +42,7 @@ IN_PROGRESS = "Вход этим Apple ID уже выполняется — до
 EXPIRED_STEP = "Срок шага истёк — введите Apple ID и пароль заново"
 TOO_MANY = "Слишком много неудачных попыток — подождите минуту"
 JOINED_SUBJECT = "appshelf: новый участник"
+NEW_DEVICE_SUBJECT = "appshelf: вход владельца на новом устройстве"
 INVITE_AGE = 86400  # cookie принятого приглашения: сутки на первый вход
 
 
@@ -79,14 +80,24 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
                   invited=bool(request.cookies.get(INVITE_COOKIE)))
 
 
-def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None):
+def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None, how: str = ""):
     """Человек добавлен к вошедшим в этом браузере (spec 2026-10-12 §4): его запись — на год, записи остальных —
-    как были; активная полка — aid (None — у человека нет Apple ID, выбор полки не меняется)."""
+    как были; активная полка — aid (None — у человека нет Apple ID, выбор полки не меняется).
+    Владелец вошёл (how — чем) там, где его годной записи не было, — письмо ему: так видна кража пароля или ссылки."""
     with w.conn() as c:
-        value = webauth.with_user(w.key, w.signed(c, request), user, w.epoch())
+        signed = w.signed(c, request)
+        value = webauth.with_user(w.key, signed, user, w.epoch())
     w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
     if aid is not None:
         w.set_cookie(resp, ACCT_COOKIE, str(aid), webauth.COOKIE_AGE)
+    if how and user.role == people.OWNER and all(u.id != user.id for u, _ in signed):
+        address = request.headers.get("x-forwarded-for", "").split(",")[-1].strip()  # последний дописал Apache
+        notify.send_quietly(w.env.send, NEW_DEVICE_SUBJECT,
+                            f"Владелец «{user.name}» вошёл в браузере, где его входа не было: {how}.\n"
+                            f"Время: {w.now()}\nАдрес: {address or '—'}\n"
+                            f"Браузер: {request.headers.get('user-agent', '')[:200] or '—'}\n"
+                            "Если это были не вы — смените пароль и нажмите «Выйти везде» у себя в «Участниках»: "
+                            f"{w.cfg.public_base}/admin\n", w.cfg.mail_to)
     return resp
 
 
@@ -175,9 +186,9 @@ def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: st
     return aid, uid
 
 
-def admitted(w: WebCtx, request: Request, user, aid: int, next_: str):
+def admitted(w: WebCtx, request: Request, user, aid: int, next_: str, how: str = ""):
     """Вход Apple ID состоялся: человек — к вошедшим в браузере, cookie шага кода и приглашения — прочь."""
-    resp = signed_in(w, request, back(safe_next(next_)), user, aid)
+    resp = signed_in(w, request, back(safe_next(next_)), user, aid, how)
     resp.delete_cookie(LOGIN_COOKIE, path="/")
     resp.delete_cookie(INVITE_COOKIE, path="/")
     return resp
@@ -212,7 +223,8 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
         user = people.get_user(c, uid)
     if done is not None:
         done((uid, aid))
-    return admitted(w, request, user, aid, next_)
+    # первый вход владельца — его регистрация, а не новое устройство
+    return admitted(w, request, user, aid, next_, "" if intent.owner else f"Apple ID {intent.email}")
 
 
 def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *, user_id: int | None = None,
@@ -365,7 +377,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             accounts = people.accounts_of(c, uid) if user is not None else []
         if user is None:
             return login_page(w, request, error=LINK_GONE, status_code=400)
-        return signed_in(w, request, back("/"), user, accounts[0].id if accounts else None)
+        return signed_in(w, request, back("/"), user, accounts[0].id if accounts else None, "запасная ссылка")
 
     def logged_out():
         resp = back("/login")

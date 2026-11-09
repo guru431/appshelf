@@ -121,7 +121,7 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
             notify.send_quietly(w.env.send, JOINED_SUBJECT,
                                 f"{user.name}, Google {cl.email}, {how}.\nУчастники: {cfg.public_base}/admin\n",
                                 cfg.mail_to)
-        resp = signed_in(w, request, back(flow.next), user, accounts[0].id if accounts else None)
+        resp = signed_in(w, request, back(flow.next), user, accounts[0].id if accounts else None, f"Google {cl.email}")
         w.set_cookie(resp, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
         resp.delete_cookie(google.COOKIE, path="/")
         resp.delete_cookie(INVITE_COOKIE, path="/")
