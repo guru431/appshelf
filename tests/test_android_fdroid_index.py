@@ -174,11 +174,35 @@ def test_catalog_rollback_and_failed_replace_preserve_generation(tmp_path, monke
         cat.info(PKG)
     assert cat.cache.read_bytes() == before
     http.raw[ARCHIVE + "entry.jar"] = (200, {}, stamped(1800000001000))
+    cat._retry_at = 0
     monkeypatch.setattr(index.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("replace failed")))
     with pytest.raises(net.SourceError, match="прежнее поколение сохранено"):
         cat.info(PKG)
     assert cat.cache.read_bytes() == before
     assert list(tmp_path.glob("*.partial")) == []
+
+
+def test_failed_refresh_is_not_repeated_until_retry(tmp_path, monkeypatch):
+    """Каталог не прошёл проверку: следующие приложения и поиски не качают его заново до RETRY."""
+    checked = []
+
+    def verify(raw, signer):
+        checked.append(signer)
+        raise net.SourceError("подпись каталога F-Droid не прошла проверку доверенным ключом")
+
+    monkeypatch.setattr(index, "verify", verify)
+    now = [10.0]
+    http = FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, catalog([build(2, "new")]))})
+    cat = index.Catalog(http, archive=True, clock=lambda: now[0], cache_dir=tmp_path)
+    for _ in range(3):
+        with pytest.raises(net.SourceError, match="подпись"):
+            cat.info(PKG)
+    with pytest.raises(net.SourceError, match="подпись"):
+        cat.search("telegram")
+    assert len(http.calls) == len(checked) == 1
+    now[0] += index.RETRY
+    monkeypatch.setattr(index, "verify", lambda raw, signer: None)
+    assert cat.info(PKG)[1].code == 2 and len(http.calls) == 2
 
 
 def test_catalog_rejects_unknown_cache_format_and_expired_signed_timestamp(tmp_path):
@@ -214,6 +238,7 @@ def test_v2_signed_entry_authenticates_json_and_normalized_apk_hash(tmp_path):
         cat.info(PKG)
     assert cat.cache.read_bytes() == before
     http.raw[ARCHIVE + "index-v2.json"] = (200, {"content-encoding": "gzip"}, b"damaged-gzip")
+    cat._retry_at = 0
     with pytest.raises(net.SourceError, match="сжатый каталог.*повреждён"):
         cat.info(PKG)
     assert cat.cache.read_bytes() == before
