@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <p>Удалённые из App Store приложения (банки и их клоны, VK, МАКС…): Apple их не показывает в истории покупок,
-но то, что есть у вашего Apple ID, скачивается. Состояние у каждой строки; не удавшуюся проверку повторит следующая.</p>
+но то, что есть у вашего Apple ID, скачивается. Не удавшуюся проверку повторит следующая.</p>
 <nav class="sortbar" aria-label="Состояние в аккаунте">
   {%- for value, label, n in filters %}<a href="/blocked?{{ {'status': value, 'q': q} | urlencode }}"
     {%- if shown == value %} class="on" aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>{% endfor %}

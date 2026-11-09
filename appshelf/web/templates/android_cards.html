@@ -191,16 +191,26 @@
   var KEY = 'appshelf-apk-downloads';
   function load() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
   function newer(a, b) { try { return BigInt(a) > BigInt(b); } catch (e) { return false; } }   // versionCode до 2^63
+  // «Есть обновление для меня»: переключатель над списком — только если в этом браузере скачивали версию старше полки
+  var filter = document.createElement('label'), toggle = document.createElement('input'), label = document.createElement('span');
+  filter.className = 'check mine-filter'; toggle.type = 'checkbox'; filter.append(toggle, label); filter.hidden = true;
+  var first = document.querySelector('.app'); if (first) first.before(filter);
+  toggle.addEventListener('change', show);
   function show() {
-    var seen = load();
+    var seen = load(), updates = new Set();
     document.querySelectorAll('.app[data-package]').forEach(function (card) {
       var mark = card.querySelector('[data-downloaded]'), got = seen[card.dataset.package];
       if (!mark || !got) return;
+      if (newer(card.dataset.code, got.code)) updates.add(card);
       mark.textContent = got.code === card.dataset.code ? 'Скачана в этом браузере'
         : newer(card.dataset.code, got.code) ? 'Вы скачивали ' + got.name + ' — на полке ' + card.dataset.version
         : 'Вы скачивали ' + got.name;
       mark.hidden = false;
     });
+    if (!updates.size) toggle.checked = false;
+    filter.hidden = !updates.size;
+    label.textContent = 'Есть обновление для меня · ' + updates.size;
+    document.querySelectorAll('.app').forEach(function (card) { card.hidden = toggle.checked && !updates.has(card); });
   }
   addEventListener('click', function (e) {
     var link = e.target.closest && e.target.closest('[data-apk-download]');

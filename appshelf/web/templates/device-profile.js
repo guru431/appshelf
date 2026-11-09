@@ -36,7 +36,7 @@
       var dismiss = line.querySelector('[data-device-dismiss]'), closed = false;
       function label(select, none) { return select.value ? select.selectedOptions[0].textContent : none; }
       text.textContent = profile ? 'Устройство: Android ' + label(form.elements.sdk, 'не указан') + ' · ' +
-        label(form.elements.abi, 'архитектура не указана') : 'Для какого устройства? Укажите — карточки покажут совместимость';
+        label(form.elements.abi, 'архитектура не указана') : 'Для какого устройства?';
       text.nextElementSibling.textContent = profile ? 'изменить' : 'указать';
       try { closed = !!localStorage.getItem(invite); } catch (_) {}
       if (dismiss) dismiss.hidden = !!profile;
