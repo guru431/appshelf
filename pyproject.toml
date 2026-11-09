@@ -39,7 +39,7 @@ addopts = "-n 4 --dist loadfile -m 'not integration and not manual'"
 # pytest-timeout: зависший тест падает за 30 с со стеком, а не держит прогон
 timeout = 30
 markers = [
-    "integration: ходит на debian и в Apple (bin/ipatool по SSH)",
+    "integration: живые проверки на сервере (bin/ipatool, Apple, Google Play по SSH из .env) и локальные наборы без внешней сети (Chromium, JDK, apksigner) — CLAUDE.md, «Команды»",
     "manual: запускается руками",
 ]
 # tmp_path — только у упавших тестов: три прогона по умолчанию в pytest-of-<user> забивали C: (2026-10-21)

@@ -20,16 +20,19 @@ google-play-protocol; форматы источников — `tests/data/*/READ
   (HTTP источников: только https и глобальные адреса; прокси — только для Play), `rustore.py`, `play.py` (клиент Google
   Play: обмен токена, details, delivery) и `pb.py` (protobuf без зависимостей), `appgallery.py` (updateCheck по пакету),
   `fdroid.py` (пакетный API, сборки по ABI), `fdroid_index.py` (основной и архивный каталоги, версии, SHA-256),
-  `github.py` (стабильные выпуски с APK), `upstream.py` (репозиторий по ссылкам автора),
+  `github.py` (стабильные выпуски с APK), `forge.py` (то же для codeberg.org и gitlab.com), `upstream.py`
+  (репозиторий по ссылкам автора), `uploads.py` (докачка своего APK),
   `search.py` (поток состояний и результатов поиска), `discovery.py` (публичный поиск Play),
   `apkpure.py` (app_version, protobuf), `links.py` (страница магазина →
   источник и пакет), `sources.py`, `fetch.py` (конвейер, задания, сверка подписи с RuStore), `pin.py` (PIN публичной
   полки, перебор, cookie гостя); гостевая страница `/p` — в `web/android.py`.
-- `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; правка и обновление — `ipatool/README.md`.
+- `ipatool/` — `UPSTREAM` и `patches/*.patch` форка ipatool-cpp; `auth/` — клиент входа `bin/ipatool-auth`
+  (закреплённый Go-ipatool в `auth/UPSTREAM` и адаптер; ему `auth login --password-stdin` передаёт патч 11).
+  Правка и обновление обоих — `ipatool/README.md`, устройство входа — `ipatool/auth/README.md`.
 - `deploy/` — юниты systemd, образец vhost Apache и `appshelf.env`, `deploy.sh` (git archive HEAD → сервер),
-  `install.sh` (установка на сервере от root), `build-ipatool.sh` (сборка ipatool → сервер) и его шаг в Docker
-  `build-ipatool-docker.sh`.
-- Сервер: код `/var/_sh/appshelf`, данные `/var/lib/appshelf` (ссылка `data`), секреты `/etc/appshelf`;
+  `install.sh` (установка на сервере от root: отказ во время ночной проверки, автооткат, если `/healthz` не ответил),
+  `build-ipatool.sh` (сборка `bin/ipatool` и `bin/ipatool-auth` → сервер) и его шаг в Docker `build-ipatool-docker.sh`.
+- Сервер: код `/var/_sh/appshelf`, данные `/var/lib/appshelf`, секреты `/etc/appshelf`;
   архив IPA — `APPSHELF_PUB` (сетевая шара, CIFS). База и `tmp/` — только локально: SQLite на CIFS портится,
   а `os.replace` из `tmp/` в архив — EXDEV.
 - Боевые значения (хост, домен, путь архива, мониторинг, откат) — не в репозитории: `.env` (не в git,
@@ -48,15 +51,18 @@ google-play-protocol; форматы источников — `tests/data/*/READ
 - Выкладка: `bash deploy/deploy.sh` (куда — `.env`). Сборка ipatool — после выкладки, тоже со своей машины:
   `bash deploy/build-ipatool.sh` (Docker на сервере нет — сборка на хосте `APPSHELF_BUILD_SSH` из `.env`).
 - Запасная ссылка входа: `appshelf login-link --email <Apple ID>`, новый токен полки: `appshelf rotate-token --email
-  <Apple ID>` (Android-полки участника — `--email <Apple ID> --android`, публичной — `--public`), проверка
+  <Apple ID>` (Android-полки участника — `--email <Apple ID> --android` или `--user-id <№> --android`, публичной —
+  `--public`; при сбое — повторить ту же команду), проверка
   целостности: `appshelf check [--deep]` (только чтение), снимок базы: `appshelf backup --out <каталог>` (ночной —
   `appshelf-backup.timer`) — на сервере, от `appshelf`, с `appshelf.env`; от root CLI откажется.
 
 ## Правила
 - Докачка APK: `android/uploads.py`, `web/uploads.py`, `apk_transfers.js`; части по 1 МиБ, два потока,
   авторизация и явный `person` на каждом запросе, SHA-256 частей и штатный apksigner после сборки.
-  Файлы и квитанции — `data_dir/uploads/` и `android_uploads`, срок 7 дней без новых частей; временные данные
-  ограничены 2 ГБ плюс место для сборки одного APK. Это вне `tmp/web`: recover не должен удалять докачку.
+  Файлы и квитанции — `data_dir/uploads/` и `android_uploads`, срок 7 дней без новых частей, без единой части —
+  час (затихшая на час держит в резерве только полученное). Резерв — 2 ГБ на сервер плюс место для сборки одного
+  APK, участнику — до 1 ГБ и не больше 2 незавершённых; продолжение без места — 507. Список и отмена — на
+  «Добавить» (владелец — всех). Это вне `tmp/web`: recover не должен удалять докачку.
   Service worker не кэширует страницы; файл в IndexedDB удаляется после передачи или отмены. Android может
   остановить браузер: поддерживается продолжение при возвращении, постоянная работа в фоне не гарантируется.
 - 4PDA: `android/fourpda.py`, `fourpda_login.py`, `web/fourpda.py`; только личная Android-полка.
@@ -72,8 +78,13 @@ google-play-protocol; форматы источников — `tests/data/*/READ
 - Пароль Apple ID — только stdin ipatool и память appshelf-web (≤ 10 мин); не в файлы, логи, `jobs.error`, argv.
 - ipatool запускать только от `appshelf` с `HOME=/etc/appshelf/accounts/<id>` (и `IPATOOL_DEVICE_MAC` из
   `accounts.device_mac`, если не пуст): HOME выбирает учётку Apple ID (путь в ключ не входит), ключ — от
-  machine-id, а у root ещё и от product_uuid: файл, сохранённый root'ом, служба не расшифрует.
+  machine-id, а у root ещё и от product_uuid: файл, сохранённый root'ом, служба не расшифрует. Вход — только с
+  `--password-stdin` (иначе прежний C++-вход, его Apple отклоняет): его выполняет `bin/ipatool-auth`, состояние
+  устройства — `HOME/.ipatool/adi-state`. Кэш библиотек входа — `bin/ipatool-auth-cache`, root (appshelf только
+  читает: helper сверяет SHA-256 и загружает библиотеку раздельно); готовит его `build-ipatool.sh` (`--prepare`).
 - appshelf-web — строго один процесс uvicorn: незавершённые входы, счётчики лимитов и обработчик заданий живут в его памяти.
+- Cookie с состоянием — только через `WebCtx.cookie` / `set_cookie` / `delete_cookie`: на https имена из
+  `HOST_COOKIES` получают префикс `__Host-`, старые имена читаются до 2028-01-01 (`web/common.py`).
 - PUB_TOKEN — только в `/etc/appshelf/appshelf.env` и имени каталога Apple ID, перенесённого из первой версии;
   каталоги остальных Apple ID — свои случайные токены (`accounts.shelf`); не в git, конфиге Apache, выводе команд.
 - Вход в панель — Apple ID (пароля страниц нет); новый Apple ID — только по приглашению или из «Добавить» уже
@@ -99,7 +110,7 @@ google-play-protocol; форматы источников — `tests/data/*/READ
 - Сеть к источникам APK — только через `android/net.py`: адрес проверяется перед каждым запросом и после каждого
   редиректа, проверка сертификата не отключается (доп. корни НУЦ — файл `APPSHELF_SOURCES_CA`).
 - Публикация APK требует успешного AOSP `apksigner verify`; одного извлечённого сертификата недостаточно.
-  Каталог F-Droid проверяется Java JarFile с закреплённым сертификатом, кэш — только локально в `data/cache/fdroid`.
+  Каталог F-Droid проверяется Java JarFile с закреплённым сертификатом, кэш — только локально в `data_dir/cache/fdroid`.
 - Android-полка — у участника (`android_shelves.user_id`); удаление участника удаляет и её (`jobs._remove`).
 - Публичная Android-полка — одна (`user_id IS NULL`), менять её — только владельцу (проверка на сервере).
 - PIN публичной полки — только соль и хэш в `state`; сам PIN не в git, базе, журнале, `jobs.error`, письмах. Адрес
