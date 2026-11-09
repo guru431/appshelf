@@ -337,23 +337,37 @@ def _rejected_key(shelf_id: int, package: str) -> str:
     return f"android_rejected:{shelf_id}:{package}"
 
 
-def rejected_apk(c, shelf_id: int, package: str, sha256: str) -> bool:
+def _rejected(c, shelf_id: int, package: str) -> dict:
+    """{"sha256": [хэши отклонённых файлов], "codes": [[источник, versionCode], …]}; прежний формат — список хэшей."""
     row = c.execute("SELECT value FROM state WHERE key=?", (_rejected_key(shelf_id, package),)).fetchone()
-    return row is not None and sha256 in json.loads(row["value"])
+    value = json.loads(row["value"]) if row is not None else {}
+    return {"sha256": value, "codes": []} if isinstance(value, list) else {"sha256": [], "codes": [], **value}
+
+
+def rejected_apk(c, shelf_id: int, package: str, sha256: str) -> bool:
+    return sha256 in _rejected(c, shelf_id, package)["sha256"]
+
+
+def rejected_code(c, shelf_id: int, package: str, source: str, version_code: int) -> bool:
+    """Эту версию этого источника уже отклонили: проверка обновления не скачивает её заново (решает по-прежнему хэш
+    файла — store_apk; пересобранную сборку той же версии проверка увидит со следующей версией)."""
+    return [source, version_code] in _rejected(c, shelf_id, package)["codes"]
 
 
 def reject_pending(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
-    """Удалить только выбранную pending; отказ относится к хэшу файла, а не версии или ключу."""
+    """Удалить только выбранную pending; отказ относится к хэшу файла, а не версии или ключу. Версия источника
+    запоминается, чтобы ночная проверка не качала тот же файл каждую ночь."""
     with tx(c):
-        row = c.execute("SELECT dir, sha256 FROM android_versions WHERE id=? AND shelf_id=? AND package=? "
-                        "AND role='pending'", (version_id, shelf_id, package)).fetchone()
+        row = c.execute("SELECT dir, sha256, source, version_code FROM android_versions WHERE id=? AND shelf_id=? "
+                        "AND package=? AND role='pending'", (version_id, shelf_id, package)).fetchone()
         if row is None:
             return False
-        key = _rejected_key(shelf_id, package)
-        previous = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
-        hashes = set(json.loads(previous["value"])) if previous is not None else set()
-        hashes.add(row["sha256"])
-        c.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)", (key, json.dumps(sorted(hashes))))
+        rejected = _rejected(c, shelf_id, package)
+        hashes = set(rejected["sha256"]) | {row["sha256"]}
+        codes = {tuple(x) for x in rejected["codes"]} | {(row["source"], row["version_code"])}
+        c.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)",
+                  (_rejected_key(shelf_id, package),
+                   json.dumps({"sha256": sorted(hashes), "codes": [list(x) for x in sorted(codes)]})))
         c.execute("DELETE FROM android_versions WHERE id=?", (version_id,))
     remove_dirs(root, [row["dir"]])
     return True

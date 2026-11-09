@@ -70,6 +70,37 @@ def test_higher_pending_does_not_block_current_updates(ctx, cfg, conn, clock, tm
     assert versions(conn, shelf) == {"current": 6, "previous": 5, "pending": 1000}
 
 
+def test_pending_and_rejected_versions_are_not_downloaded_again(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    ctx.sources.got[PKG] = Got("Пример", cert_sha(b"CERT-B"), None)   # RuStore сам сменил ключ
+    ctx.sources._latest[PKG] = Latest(6, "", True)
+
+    def check():
+        ctx.sources.calls.clear()
+        result = fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "work")
+        return result, [c for c in ctx.sources.calls if c[0] == "fetch"]
+
+    assert check() == ("pending", [("fetch", "rustore", PKG)])
+    assert check() == ("same", [])                                    # ждёт решения — не качаем
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert db.reject_pending(conn, fetch.shelf_root(cfg, shelf), shelf.id, PKG, pending["id"])
+    assert check() == ("same", [])                                    # отклонена — тоже
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "next.apk", version_code=7, cert=b"CERT-B")
+    ctx.sources._latest[PKG] = Latest(7, "", True)
+    assert check() == ("pending", [("fetch", "rustore", PKG)])        # следующая версия — снова решение
+
+
+def test_rejection_stored_in_old_format_is_still_honoured(ctx, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    store.set_state(conn, f"android_rejected:{shelf.id}:{PKG}", json.dumps([ipa.sha256(alien)]))
+    assert db.rejected_apk(conn, shelf.id, PKG, ipa.sha256(alien))
+    assert not db.rejected_code(conn, shelf.id, PKG, "rustore", 6)
+    job = run(ctx, conn, shelf, "upload", clock, path=str(alien), name="", package=PKG)
+    assert job["status"] == "error" and "отклонён" in job["error"]
+
+
 def test_pending_version_is_not_at_predictable_path_until_accepted(ctx, cfg, conn, clock, tmp_path):
     """Каталог полки Apache отдаёт по /d/: версия с другим ключом до решения владельца лежит под случайным именем."""
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))

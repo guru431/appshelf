@@ -249,7 +249,8 @@ def _notice(error: str) -> str:
 
 def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, retry_split: bool = False) -> str:
     """Проверка обновления карточки (кроме своего файла): "updated" | "pending" | "same". RuStore, Google Play,
-    AppGallery, APKPure: versionCode не больше текущего принятого — без скачивания; ссылка
+    AppGallery, APKPure: versionCode не больше текущего принятого или та же версия источника ждёт решения по подписи
+    либо отклонена — без скачивания; ссылка
     (ETag/Last-Modified/Length) и F-Droid (рекомендуемая версия) — метка та же — тоже. Иначе — скачать и сравнить
     versionCode самого APK. Новая версия из Play или APKPure только набором файлов — "same" и отметка у карточки
     (текущая остаётся); эту версию Play следующие ночи уже не запрашивают. Метка сверки с RuStore без скачивания
@@ -263,8 +264,14 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, 
     known = current["version_code"] if current is not None else None
     split_mark = f"split:{latest.version_code}" if app["source"] == "play" else ""
     note = ""
+    pending = c.execute("SELECT source, version_code FROM android_versions WHERE shelf_id=? AND package=? "
+                        "AND role='pending'", (shelf.id, pkg)).fetchone()
+    # та же версия того же источника уже ждёт решения по подписи или отклонена — не скачивать её каждую ночь
+    decided = latest.version_code is not None and (
+        pending is not None and (pending["source"], pending["version_code"]) == (app["source"], latest.version_code)
+        or db.rejected_code(c, shelf.id, pkg, app["source"], latest.version_code))
     if not force and known is not None and (latest.version_code is not None and latest.version_code <= known
-                                            or latest.version_code is None and not latest.changed):
+                                            or latest.version_code is None and not latest.changed or decided):
         result = "same"
         note = _notice(app["last_error"])  # не скачивали — сверку с RuStore не повторяли
     elif not force and not retry_split and known is not None and split_mark and app["source_etag"] == split_mark:
