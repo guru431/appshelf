@@ -37,6 +37,25 @@ func TestStateEncryptedAndAccountPasswordNeverPersisted(t *testing.T) {
     if _,err=state.Get("anisette-v4"); !errors.Is(err,errState) { t.Fatal("modified state accepted") }
 }
 
+func TestUnreadableStateDoesNotBlockLoginButMissingKeyDoes(t *testing.T) {
+    previous:=machineIDPath
+    t.Cleanup(func(){machineIDPath=previous})
+    dir:=t.TempDir()
+    machineIDPath=filepath.Join(dir,"machine-id")
+    if err:=os.WriteFile(machineIDPath,[]byte("0123456789abcdef0123456789abcdef\n"),0600); err!=nil { t.Fatal(err) }
+    state:=&deviceState{path:filepath.Join(dir,"adi-state")}
+    if err:=state.usable(); err!=nil { t.Fatal("missing state refused",err) }
+    if err:=state.Set("anisette-v4",[]byte("old")); err!=nil { t.Fatal(err) }
+    // A cloned VM or moved accounts directory: the state belongs to another machine-id.
+    if err:=os.WriteFile(machineIDPath,[]byte("fedcba9876543210fedcba9876543210\n"),0600); err!=nil { t.Fatal(err) }
+    if _,err:=state.Get("anisette-v4"); !errors.Is(err,errState) { t.Fatal("foreign state accepted") }
+    if err:=state.usable(); err!=nil { t.Fatal("unreadable state blocks login",err) }
+    if err:=state.Set("anisette-v4",[]byte("new")); err!=nil { t.Fatal(err) }
+    if loaded,err:=state.Get("anisette-v4"); err!=nil || string(loaded)!="new" { t.Fatal("state not replaced",err) }
+    if err:=os.Remove(machineIDPath); err!=nil { t.Fatal(err) }
+    if err:=state.usable(); !errors.Is(err,errState) { t.Fatal("login allowed although its state cannot be saved") }
+}
+
 func TestNetscapeCookiesRetainScopeAndSecondStepContinuity(t *testing.T) {
     previousClock:=cookieNow
     frozen:=time.Unix(1700000000,0)

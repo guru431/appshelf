@@ -30,6 +30,12 @@ if sudo -u www-data test -r "$ENV_FILE"; then
   echo "ОШИБКА: www-data читает $ENV_FILE (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
   exit 1
 fi
+# ночная проверка (до 4 ч) держит прежний код в памяти и догружает модули лениво: после pip и подмены — смесь версий
+if systemctl is-active --quiet appshelf-nightly.service; then
+  echo "ОШИБКА: идёт ночная проверка — выложить после неё или прервать (прерванное доделает следующая ночь):" >&2
+  echo "  sudo systemctl stop appshelf-nightly.service" >&2
+  exit 1
+fi
 
 chown -R root:"$GROUP" "$NEW"
 chmod -R u=rwX,go=rX "$NEW"
@@ -49,8 +55,17 @@ fi
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
 rm -rf "$OLD"
 install -d -o root -g root -m 0700 "$OLD"
+restore_previous() {
+  for p in "${PARTS[@]}"; do if [ -e "$OLD/$p" ]; then rm -rf "$R/$p"; mv "$OLD/$p" "$R/$p"; fi; done
+}
+install_units() {
+  for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer appshelf-backup.service appshelf-backup.timer; do
+    install -m 0644 "$R/deploy/$u" "/etc/systemd/system/$u"
+  done
+  systemctl daemon-reload
+}
 # сбой посреди подмены — прежние части на место: иначе на диске смесь нового и прежнего кода
-trap 'for p in "${PARTS[@]}"; do if [ -e "$OLD/$p" ]; then rm -rf "$R/$p"; mv "$OLD/$p" "$R/$p"; fi; done' ERR
+trap restore_previous ERR
 for p in "${PARTS[@]}"; do  # убранные из репозитория файлы уходят вместе с прежним каталогом
   if [ -e "$R/$p" ]; then mv "$R/$p" "$OLD/"; fi
   mv "$NEW/$p" "$R/$p"
@@ -58,10 +73,7 @@ done
 trap - ERR
 rm -rf "$NEW"
 
-for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer appshelf-backup.service appshelf-backup.timer; do
-  install -m 0644 "$R/deploy/$u" "/etc/systemd/system/$u"
-done
-systemctl daemon-reload
+install_units
 # ночной снимок базы — когда задан его каталог (README «Резервная копия»)
 if grep -qE "^APPSHELF_BACKUP_DIR=.+" "$ENV_FILE"; then
   systemctl enable --quiet --now appshelf-backup.timer
@@ -90,21 +102,47 @@ if [ "$want_auth" != "$(cat "$R/bin/ipatool-auth.src-sha256" 2>/dev/null || true
   echo "ВНИМАНИЕ: native-клиент входа требует сборки: bash deploy/build-ipatool.sh" >&2
 fi
 
-systemctl restart appshelf-web
-# Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
-# От www-data — так к сокету ходит Apache; /healthz без пароля.
-code=000
-for _ in $(seq 1 20); do
-  code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null || true)
-  if [ "$code" = 200 ]; then
-    rm -rf "$OLD"
-    echo "OK: appshelf-web отвечает на /run/appshelf/web.sock"
-    exit 0
-  fi
-  sleep 0.5
-done
+restart_and_check() {
+  systemctl restart appshelf-web
+  # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
+  # От www-data — так к сокету ходит Apache; /healthz без пароля.
+  code=000
+  for _ in $(seq 1 20); do
+    code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null || true)
+    if [ "$code" = 200 ]; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+if restart_and_check; then
+  rm -rf "$OLD"
+  echo "OK: appshelf-web отвечает на /run/appshelf/web.sock"
+  exit 0
+fi
 echo "ОШИБКА: appshelf-web не ответил 200 на /healthz за 10 с (от www-data, последний код $code)" >&2
 systemctl status appshelf-web --no-pager 2>&1 | tail -n 15 >&2
 journalctl -u appshelf-web -n 20 --no-pager >&2
-echo "Прежний код — $OLD: for p in ${PARTS[*]}; do rm -rf $R/\$p; mv $OLD/\$p $R/; done; systemctl restart appshelf-web" >&2
+# Автооткат — только если база годится прежнему коду, по правилу store.connect: схема не новее его SCHEMA_VERSION
+# или её переход записал в state schema_readable_by не новее (иначе прежний код не стартует: MigrationError).
+DATA="$(sed -n 's/^APPSHELF_DATA=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
+old_schema="$(sed -n 's/^SCHEMA_VERSION = \([0-9][0-9]*\)$/\1/p' "$OLD/appshelf/store.py" 2>/dev/null || true)"
+if [ -n "$old_schema" ] && sudo -u appshelf "$R/.venv/bin/python" -I - "${DATA:-/var/lib/appshelf}/appshelf.db" "$old_schema" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+version = db.execute("PRAGMA user_version").fetchone()[0]
+row = db.execute("SELECT value FROM state WHERE key='schema_readable_by'").fetchone()
+sys.exit(0 if min(version, int(row[0]) if row else version) <= int(sys.argv[2]) else 1)
+PY
+then
+  restore_previous
+  install_units
+  if restart_and_check; then
+    echo "Возвращён прежний код: appshelf-web отвечает. Новая версия НЕ выложена — причина выше." >&2
+  else
+    echo "ОШИБКА: прежний код тоже не ответил на /healthz (последний код $code) — смотреть journalctl -u appshelf-web" >&2
+  fi
+  exit 1
+fi
+echo "Автооткат невозможен (нет прежнего кода или база новее его). Прежний код — $OLD:" >&2
+echo "  for p in ${PARTS[*]}; do rm -rf $R/\$p; mv $OLD/\$p $R/; done; systemctl restart appshelf-web" >&2
 exit 1
