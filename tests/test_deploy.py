@@ -41,7 +41,63 @@ def test_failed_swap_puts_previous_code_back():
     # mv, упавший посреди подмены, оставлял на диске смесь нового и прежнего кода
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     swap = text.index('mv "$NEW/$p" "$R/$p"')
-    assert text.index("' ERR") < swap < text.index("trap - ERR")
+    assert text.index("trap restore_previous ERR") < swap < text.index("trap - ERR")
+
+
+def test_install_refuses_while_nightly_check_runs():
+    # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    check = text.index("systemctl is-active --quiet appshelf-nightly.service")
+    assert check < text.index('pip" install') < text.index('mv "$NEW/$p" "$R/$p"')
+    assert "exit 1" in text[check:text.index("fi", check)]
+
+
+def install_rollback_check():
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    start = text.index("<<'PY'\n") + len("<<'PY'\n")
+    return text, text[start:text.index("\nPY\n", start)]
+
+
+@pytest.mark.parametrize("version, readable_by, ok", [
+    (11, None, True),      # схема не новее прежнего кода
+    (12, "11", True),      # аддитивный переход объявил её годной прежнему коду
+    (12, "12", False),     # переход несовместим — прежний код не стартует (MigrationError)
+    (12, None, False),     # ключа нет — годна только своей версии
+])
+def test_rollback_only_when_database_is_readable_by_previous_code(tmp_path, monkeypatch, version, readable_by, ok):
+    import sqlite3
+    import sys
+    _, check = install_rollback_check()
+    db = tmp_path / "appshelf.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    if readable_by:
+        c.execute("INSERT INTO state VALUES ('schema_readable_by', ?)", (readable_by,))
+    c.execute(f"PRAGMA user_version = {version}")
+    c.commit()
+    c.close()
+    monkeypatch.setattr(sys, "argv", ["-", db.as_posix(), "11"])
+    with pytest.raises(SystemExit) as e:
+        exec(check, {})
+    assert (e.value.code == 0) is ok
+
+
+def test_rollback_reads_schema_version_of_previous_code():
+    # install.sh берёт SCHEMA_VERSION прежнего кода sed'ом из его store.py — строка должна остаться такой
+    from appshelf import store
+    text, _ = install_rollback_check()
+    assert "sed -n 's/^SCHEMA_VERSION = \\([0-9][0-9]*\\)$/\\1/p' \"$OLD/appshelf/store.py\"" in text
+    lines = Path(store.__file__).read_text(encoding="utf-8").splitlines()
+    assert [s for s in lines if re.fullmatch(r"SCHEMA_VERSION = [0-9]+", s)] == [f"SCHEMA_VERSION = {store.SCHEMA_VERSION}"]
+
+
+def test_failed_healthcheck_rolls_back_to_previous_code():
+    # неудачная выкладка откатывалась только вручную, по подсказке в выводе
+    text, _ = install_rollback_check()
+    failed = text.index("не ответил 200 на /healthz")
+    check = text.index("<<'PY'", failed)
+    back = text.index("  restore_previous\n", check)
+    assert check < back < text.index("  install_units\n", back) < text.index("restart_and_check", back)
 
 
 def test_build_refuses_host_without_machine_id():
@@ -185,6 +241,15 @@ def test_vhost_upload_limit_covers_own_and_public_shelf():
                  "/android/public/apps/ru.x/upload"):
         assert re.match(pattern, path), path
     assert not re.match(pattern, "/android/add/link")
+
+
+def test_vhost_sets_headers_the_code_relies_on():
+    # заголовки жили только в глобальной настройке боевого сервера: по образцу их не восстановить
+    text = (DEPLOY / "apache-appshelf.conf").read_text(encoding="utf-8")
+    vhost = text[text.index("<VirtualHost"):text.index("<Location />")]
+    assert 'Header setifempty Referrer-Policy "same-origin"' in vhost and "no-referrer\"" not in vhost
+    assert 'Header always set X-Content-Type-Options "nosniff"' in vhost
+    assert 'Header always set Strict-Transport-Security "max-age=' in vhost
 
 
 def test_units_allow_google_dir():
