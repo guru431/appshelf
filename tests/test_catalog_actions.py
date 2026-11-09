@@ -119,3 +119,29 @@ def test_check_all_updates_once(web, conn, cfg, clock):
     queued = conn.execute("SELECT account_id, app_id FROM jobs WHERE status='queued' ORDER BY app_id").fetchall()
     assert [tuple(r) for r in queued] == [(1, 1), (1, 2)]
     assert {a.app_id: a.status for a in store.list_apps(conn, 1)} == {1: "queued", 2: "queued", 3: "queued"}
+
+
+def test_action_on_missing_app_is_a_page_with_way_back(web, conn, cfg, clock):
+    r = web.client.post("/apps/999/unpublish")              # сняли в другой вкладке
+    assert r.status_code == 404 and r.headers["content-type"].startswith("text/html")
+    assert "Приложение не найдено" in r.text and 'href="/"' in r.text
+
+
+def test_app_gone_during_action_is_a_page(web, conn, cfg, clock, monkeypatch):
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    def gone(*args, **kwargs):
+        raise store.AppGone(123)
+    monkeypatch.setattr(store, "check_update", gone)
+    r = web.client.post("/apps/123/check")
+    assert r.status_code == 404 and r.headers["content-type"].startswith("text/html")
+    assert "больше не существует" in r.text
+
+
+def test_pin_when_share_fails_during_move_is_503(web, conn, cfg, clock, monkeypatch):
+    seed_app(conn, cfg, clock, versions=("1.0", "1.1"))
+    old = conn.execute("SELECT id FROM versions WHERE app_id=123 AND role='previous'").fetchone()[0]
+    def unavailable(*args, **kwargs):
+        raise jobs.ArchiveUnavailable("архив недоступен")
+    monkeypatch.setattr(jobs, "pin_version", unavailable)
+    r = web.client.post(f"/apps/123/versions/{old}/pin")
+    assert r.status_code == 503 and "Архив недоступен" in r.text

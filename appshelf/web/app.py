@@ -99,9 +99,15 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     app = FastAPI(title="appshelf", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.w, app.state.worker = w, worker
 
+    def gone(request: Request, text: str = "Приложение не найдено: его сняли с публикации или удалили."):
+        """Нет того, с чем работала страница (удалили в другой вкладке, чужое): 404 страницей с путём назад."""
+        android = request.url.path.startswith("/android")
+        return w.page(request, "confirm.html", "a_catalog" if android else "catalog", 404, refused=True,
+                      cancel="/android" if android else "/", question=text)
+
     @app.exception_handler(store.AppGone)
     async def app_gone(request, error):
-        return PlainTextResponse("Полка или приложение больше не существует", status_code=404)
+        return gone(request, "Полка или приложение больше не существует.")
 
     site = urlsplit(cfg.public_base).netloc.lower()
 
@@ -382,7 +388,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         aid = request.state.acct.id
         with w.conn() as c:
             if not store.has_purchase(c, aid, app_id):  # чужое или несуществующее — как нет
-                return not_found()
+                return gone(request, "Покупка не найдена на этой полке.")
             store.publish(c, aid, app_id, now())
         return done(request)
 
@@ -391,7 +397,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         aid = request.state.acct.id
         with w.conn() as c:
             if not store.has_app(c, aid, app_id):
-                return not_found()
+                return gone(request)
             store.retry(c, aid, app_id, now())
         return done(request)
 
@@ -407,7 +413,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         aid = request.state.acct.id
         with w.conn() as c:
             if not store.has_app(c, aid, app_id):  # чужое или не опубликованное — как нет
-                return not_found()
+                return gone(request)
             store.check_update(c, aid, app_id, now())
         return done(request)
 
@@ -416,7 +422,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         a = request.state.acct
         with w.conn() as c:
             if not store.has_app(c, a.id, app_id):
-                return not_found()
+                return gone(request)
             try:
                 jobs.unpublish(cfg, c, a, app_id)
             except jobs.ArchiveUnavailable:
@@ -426,7 +432,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return done(request)
 
     def change_version(request: Request, app_id: int, version_id: int, fn, *, archive_error=PIN_ARCHIVE_DOWN,
-                       missing=not_found):
+                       missing=None):
         """Изменение версии может удалить файл: архив недоступен — 503 и ничего не тронуто."""
         a = request.state.acct
         try:
@@ -436,7 +442,9 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             try:
                 if not fn(cfg, c, a, app_id, version_id):
-                    return missing()
+                    return missing() if missing else gone(request, "Версия не найдена: её уже удалили или заменили.")
+            except jobs.ArchiveUnavailable:  # шара отвалилась во время доделки прерванного переноса полки
+                return catalog_page(request, 503, archive_error)
             except jobs.AccountBusy:
                 return catalog_page(request, 503, SHELF_BUSY)
         return done(request)
