@@ -20,7 +20,7 @@ from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, android, google_signin, pwa, signin
-from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind
+from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png
 from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
@@ -295,7 +295,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         if item is None or item.current is None:
             return not_found()
         url = "itms-services://?action=download-manifest&url=" + cfg.shelf_url(a, item.current["dir"], "manifest.plist")
-        return Response(android._qr_png(url), media_type="image/png", headers={"Cache-Control": "private, no-store"})
+        return Response(qr_png(url), media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
     def matches(needle: str, alias: dict, app_id: int, *texts: str) -> bool:
         return any(needle in t.casefold() for t in texts) or needle in alias.get(app_id, "")

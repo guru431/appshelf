@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, people, store
 from .accounts import ACCOUNT_BUSY, ARCHIVE_DOWN
-from .common import CREATED_COOKIE, WebCtx, back
+from .common import CREATED_COOKIE, WebCtx, back, qr_png
 
 SELF = "Себя удалить нельзя"
 CREATED = CREATED_COOKIE  # новая ссылка до показа на /admin: ответ на POST — переход, «обновить» её не повторит
@@ -35,8 +35,7 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                        for u in people.list_users(c)]
         # QR — в самой странице: с компьютера ссылку открывают камерой телефона, сразу в Safari, а не во встроенном
         # браузере мессенджера; токен не попадает ни в адрес картинки, ни в журнал
-        from .android import _qr_png  # android.py импортирует owner_only отсюда
-        qr =base64.b64encode(_qr_png(created_link)).decode() if created_link else ""
+        qr =base64.b64encode(qr_png(created_link)).decode() if created_link else ""
         return w.page(request, "admin.html", "admin", invites=invites, persons=persons, created_link=created_link,
                       created_qr=qr)
 

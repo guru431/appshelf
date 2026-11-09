@@ -5,7 +5,6 @@
 страница проверяет доступ и состав доставки Google Play перед постановкой задания."""
 from __future__ import annotations
 
-import io
 import hashlib
 import json
 import re
@@ -14,10 +13,8 @@ import urllib.parse
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import lru_cache
 from pathlib import Path
 
-import qrcode
 from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
@@ -26,7 +23,7 @@ from ..android import db, fdroid_index, fetch, forge, github, links, net, pin, p
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
-from .common import TEMPLATES, back, filter_shelf, mutation_url
+from .common import TEMPLATES, back, filter_shelf, mutation_url, qr_png
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
@@ -122,12 +119,6 @@ def _lock_mail(until: str, base: str) -> str:
             f"Открыть сразу — «Открыть ввод PIN» на публичной полке: Android → меню «Полка» → «Публичная» ({base}/android/public) или смена "
             f"PIN там же; если PIN мог утечь — смените его.")
 
-
-@lru_cache(maxsize=128)
-def _qr_png(url: str) -> bytes:
-    data = io.BytesIO()
-    qrcode.make(url, box_size=4, border=4).save(data, format="PNG")
-    return data.getvalue()
 
 
 def register_routes(app, w) -> None:
@@ -310,7 +301,7 @@ def register_routes(app, w) -> None:
                     or db.downloadable_version(c, shelf.id, package, version) is None):
                 return PlainTextResponse("not found", status_code=404)
         link = fetch.app_url(cfg, shelf, package) + (f"?version={version}" if version else "")
-        return Response(_qr_png(link), media_type="image/png",
+        return Response(qr_png(link), media_type="image/png",
                         headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/android/status")
