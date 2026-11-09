@@ -208,7 +208,8 @@ def test_apk_upload_progress_and_retry_after_failure(web, conn, cfg, clock, tmp_
             page.add_init_script("""Object.defineProperty(window, 'indexedDB', {value:undefined});
               window.uploadRequests = [];
               window.XMLHttpRequest = class extends EventTarget {
-                constructor() { super(); this.upload = new EventTarget(); this.status = 0; }
+                constructor() { super(); this.upload = new EventTarget(); this.status = 0; this.responseText = ''; }
+                getResponseHeader(name) { return name.toLowerCase() === 'content-type' && this.contentType || null; }
                 open(method, url) { this.method = method; this.url = url; }
                 send(body) { this.body = body; window.uploadRequests.push(this); }
               };""")
@@ -265,6 +266,10 @@ def test_apk_upload_progress_and_retry_after_failure(web, conn, cfg, clock, tmp_
                 button.click()
                 page.evaluate("uploadRequests[3].status = 401; uploadRequests[3].dispatchEvent(new Event('load'))")
                 assert "войдите снова" in status.inner_text() and button.is_enabled()
+                button.click()  # отказ проверки полки — text/plain: показать его текст, а не код
+                page.evaluate("""() => Object.assign(uploadRequests[4], {status: 403, contentType: 'text/plain; charset=utf-8',
+                  responseText: 'Нет доступа к указанной полке. Обновите страницу.'}).dispatchEvent(new Event('load'))""")
+                assert "Нет доступа к указанной полке" in status.inner_text() and "HTTP" not in status.inner_text()
             assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 0
         finally:
             browser.close()
@@ -325,6 +330,89 @@ def test_android_upload_with_generic_file_type(web, conn, cfg, tmp_path, prefix,
             view = db.list_apps(conn, shelf.id)[0]
             assert (view.current["version_code"], view.previous["version_code"]) == (2, 1)
             assert not list((cfg.tmp_dir / "web").glob("up-*.apk"))
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
+def test_pending_uploads_tray_link_and_plain_errors(web, conn, cfg, clock, acct, tmp_path, local_chromium):
+    """«Добавить» lists server uploads missing from this browser; the tray keeps its nodes and links to the card."""
+    from appshelf.android import uploads
+    from helpers import make_account
+    android_app(conn, cfg, clock, acct.user_id)
+    member = make_account(conn, clock, email="member@example.org", role="member", legacy=False, name="Мария")
+    left = uploads.Uploads(cfg).create(conn, member.user_id, db.ensure_shelf(conn, member.user_id, clock.iso()).id,
+                                       {"client_id": "c" * 32, "size": 5, "fingerprint": "0" * 64,
+                                        "filename": "member.apk"}, clock.iso())
+    refuse = []
+
+    def route(target):
+        request, url = target.request, urlsplit(target.request.url)
+        if refuse and request.method == "POST" and url.path == "/android/uploads":
+            target.fulfill(status=403, content_type="text/plain; charset=utf-8",
+                           body="Нет доступа к указанной полке. Обновите страницу.")
+            return
+        result = web.client.request(request.method, url.path + ("?" + url.query if url.query else ""),
+                                    content=request.post_data_buffer,
+                                    headers={"content-type": request.headers.get("content-type", ""),
+                                             "x-chunk-sha256": request.headers.get("x-chunk-sha256", "")},
+                                    follow_redirects=False)
+        target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.add_init_script("Object.defineProperty(navigator, 'serviceWorker', {value:undefined});")
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("https://apps.example/**", route)
+            page.goto("https://apps.example/android/add")
+            pending = page.locator("[data-pending-uploads]")
+            cancel = pending.get_by_role("button", name="Отменить загрузку member.apk", exact=True)
+            cancel.wait_for()
+            assert "Мария" in pending.inner_text()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            cancel.click()
+            pending.wait_for(state="hidden")
+            assert not conn.execute("SELECT 1 FROM android_uploads WHERE id=?", (left["id"],)).fetchone()
+
+            refuse.append(True)
+            form = page.locator("form[data-apk-upload]")
+            form.locator('input[type="file"]').set_input_files(make_apk(tmp_path / "refused.apk"))
+            form.get_by_role("button", name="Загрузить", exact=True).click()
+            status = form.get_by_role("status")
+            page.wait_for_function("s => s.textContent.includes('Нет доступа')", arg=status.element_handle())
+            assert "HTTP" not in status.inner_text()
+            refuse.clear()
+            form.get_by_role("button", name="Отменить", exact=True).click()  # без номера загрузки — по client_id
+            form.locator("[data-upload-feedback]").wait_for(state="hidden")
+
+            page.evaluate("""() => new Promise((resolve, reject) => {
+              const r = indexedDB.open('appshelf-apk-uploads', 1);
+              r.onsuccess = () => {
+                const tx = r.result.transaction('uploads', 'readwrite');
+                tx.objectStore('uploads').put({key: 'card', clientId: 'd'.repeat(32), owner: %d,
+                  endpoint: '/android/uploads?person=%d', package: '%s', target: '/android', size: 10,
+                  fingerprint: '1'.repeat(64), filename: 'card.apk', name: '', loaded: 0, state: 'paused',
+                  message: 'На паузе', updated: Date.now(), blob: null});
+                tx.oncomplete = resolve; tx.onerror = reject;
+              };
+              r.onerror = reject;
+            })""" % (acct.user_id, acct.user_id, PKG))
+            page.reload()
+            tray = page.get_by_role("region", name="Загрузки APK")
+            link = tray.get_by_role("link", name="Выбрать тот же файл для продолжения", exact=True)
+            assert link.get_attribute("href") == f"/android?person={acct.user_id}#source-{PKG}"
+            page.evaluate("window.trayButton = document.querySelector('[aria-label=\"Загрузки APK\"] [data-upload-cancel]')")
+            page.evaluate("dispatchEvent(new Event('online'))")
+            page.wait_for_timeout(500)
+            assert page.evaluate("window.trayButton.isConnected")
+            link.click()
+            page.wait_for_url(f"**/android?person={acct.user_id}#source-{PKG}")
+            assert page.locator(f'dialog[id="source-{PKG}"][open]').is_visible()
+            assert not errors
         finally:
             browser.close()
 

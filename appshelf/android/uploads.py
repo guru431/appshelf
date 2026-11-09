@@ -18,7 +18,9 @@ from . import db, net
 
 CHUNK_SIZE = 1024 * 1024
 MAX_RESERVED = 2 * GB
+USER_RESERVED = GB  # один участник не занимает всё место для загрузок
 TTL = timedelta(days=7)
+EMPTY_TTL = timedelta(hours=1)  # без единой части загрузка брошена; затихшая на этот срок держит только полученное
 LOCK = threading.RLock()  # One web process; also shared with user deletion and recovery.
 HEX = re.compile(r"[a-f0-9]{32}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
@@ -41,14 +43,16 @@ class Uploads:
         return self.root / upload_id
 
     def cleanup(self, c, now: str) -> None:
-        cutoff = (datetime.fromisoformat(now) - TTL).isoformat()
+        moment = datetime.fromisoformat(now)
+        cutoff, empty = (moment - TTL).isoformat(), (moment - EMPTY_TTL).isoformat()
         with LOCK:
             for row in c.execute("SELECT u.* FROM android_uploads u WHERE "
-                                 "(u.updated_at < ? OR NOT EXISTS (SELECT 1 FROM users WHERE id=u.user_id) "
+                                 "(u.updated_at < ? OR (u.job_id IS NULL AND u.parts='{}' AND u.updated_at < ?) "
+                                 "OR NOT EXISTS (SELECT 1 FROM users WHERE id=u.user_id) "
                                  "OR NOT EXISTS (SELECT 1 FROM android_shelves WHERE id=u.shelf_id) "
                                  "OR (u.package<>'' AND NOT EXISTS (SELECT 1 FROM android_apps a "
                                  "WHERE a.shelf_id=u.shelf_id AND a.package=u.package)))",
-                                 (cutoff,)).fetchall():
+                                 (cutoff, empty)).fetchall():
                 if self.active(c, row):
                     continue
                 shutil.rmtree(self.folder(row["id"]), ignore_errors=True)
@@ -57,7 +61,7 @@ class Uploads:
                 known = {r[0] for r in c.execute("SELECT id FROM android_uploads")}
                 for folder in self.root.iterdir():
                     if folder.is_dir() and HEX.fullmatch(folder.name) and folder.name not in known:
-                        shutil.rmtree(folder)
+                        store.rmtree_logged(folder)  # сбой удаления не останавливает обработчик заданий
 
     def remove_user(self, c, user_id: int) -> None:
         with LOCK:
@@ -82,7 +86,8 @@ class Uploads:
                         (upload_id, user_id, shelf_id)).fetchone()
         if row is None:
             raise UploadError(404, "Загрузка недоступна. Отмените эту передачу и выберите файл заново")
-        if row["job_id"] is None and datetime.fromisoformat(now) - datetime.fromisoformat(row["updated_at"]) > TTL:
+        age = datetime.fromisoformat(now) - datetime.fromisoformat(row["updated_at"])
+        if row["job_id"] is None and (age > TTL or age > EMPTY_TTL and not json.loads(row["parts"])):
             raise UploadError(410, "Срок докачки истёк. Отмените эту передачу и загрузите файл заново")
         return row
 
@@ -90,6 +95,51 @@ class Uploads:
     def view(row) -> dict:
         return {"id": row["id"], "size": row["size"], "fingerprint": row["fingerprint"],
                 "chunk_size": CHUNK_SIZE, "parts": json.loads(row["parts"]), "job_id": row["job_id"]}
+
+    @staticmethod
+    def received(row) -> int:
+        return sum(min(CHUNK_SIZE, row["size"] - int(index) * CHUNK_SIZE) for index in json.loads(row["parts"]))
+
+    def reserved(self, row, moment: datetime) -> int:
+        """Место загрузки: идущая — заявленный размер, затихшая — полученные части, переданная — файл до обработки."""
+        if row["job_id"] is not None:
+            folder = self.folder(row["id"])
+            return row["size"] if folder.is_dir() and any(folder.iterdir()) else 0
+        if moment - datetime.fromisoformat(row["updated_at"]) < EMPTY_TTL:
+            return row["size"]
+        return self.received(row)
+
+    def pending(self, c, user_id: int, everyone: bool, now: str) -> list[dict]:
+        """Незавершённые загрузки участника (владельцу — всех) для страницы «Добавить»."""
+        with LOCK, store.tx(c):
+            self.cleanup(c, now)
+            rows = c.execute("SELECT u.*, p.name AS person FROM android_uploads u JOIN users p ON p.id=u.user_id "
+                             "WHERE u.job_id IS NULL AND (? OR u.user_id=?) ORDER BY u.created_at",
+                             (everyone, user_id)).fetchall()
+        return [{"id": r["id"], "filename": r["filename"], "name": r["name"], "package": r["package"],
+                 "size": r["size"], "received": self.received(r), "updated_at": r["updated_at"],
+                 "person": r["person"], "mine": r["user_id"] == user_id} for r in rows]
+
+    def by_id(self, c, upload_id: str):
+        """Любая загрузка — для отмены владельцем со страницы «Добавить»."""
+        self.folder(upload_id)
+        row = c.execute("SELECT * FROM android_uploads WHERE id=?", (upload_id,)).fetchone()
+        if row is None:
+            raise UploadError(404, "Загрузка уже отменена или завершена")
+        return row
+
+    def cancel_client(self, c, user_id: int, client_id) -> dict:
+        """Отмена передачи, чей ответ на создание не дошёл до браузера: по её client_id, без номера загрузки."""
+        if not isinstance(client_id, str) or not HEX.fullmatch(client_id):
+            raise UploadError(400, "Неверные сведения о файле")
+        with LOCK:
+            row = c.execute("SELECT * FROM android_uploads WHERE user_id=? AND client_id=?",
+                            (user_id, client_id)).fetchone()
+            if row is not None and row["job_id"] is not None:
+                return {"job_id": row["job_id"]}
+            if row is not None:
+                self.cancel(c, row)
+        return {"cancelled": True}
 
     def create(self, c, user_id: int, shelf_id: int, payload: dict, now: str) -> dict:
         if not isinstance(payload, dict):
@@ -123,15 +173,14 @@ class Uploads:
                                  (user_id, shelf_id, size, fingerprint, package)).fetchone()
             if previous is not None:
                 return self.view(previous)
-            pending = c.execute("SELECT COUNT(*) FROM android_uploads WHERE user_id=? AND job_id IS NULL",
-                                (user_id,)).fetchone()[0]
-            reserved = 0
-            for item in c.execute("SELECT * FROM android_uploads").fetchall():
-                folder = self.folder(item["id"])
-                if item["job_id"] is None or folder.is_dir() and any(folder.iterdir()):
-                    reserved += item["size"]
-            if pending >= 2 or reserved + size > MAX_RESERVED:
-                raise UploadError(429, "Завершите или отмените предыдущую загрузку перед началом новой")
+            moment, rows = datetime.fromisoformat(now), c.execute("SELECT * FROM android_uploads").fetchall()
+            mine = [item for item in rows if item["user_id"] == user_id and item["job_id"] is None]
+            if len(mine) >= 2 or sum(self.reserved(item, moment) for item in mine) + size > USER_RESERVED:
+                raise UploadError(429, "Завершите или отмените предыдущую загрузку перед началом новой. "
+                                       "Незавершённые загрузки — на странице «Добавить»")
+            if sum(self.reserved(item, moment) for item in rows) + size > MAX_RESERVED:
+                raise UploadError(429, "Место для загрузок на сервере сейчас занято другими передачами. Повторите "
+                                       "позже; владелец может отменить брошенные загрузки на странице «Добавить»")
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             upload_id = secrets.token_hex(16)
             folder = self.folder(upload_id)
@@ -162,6 +211,13 @@ class Uploads:
                 if parts[key] != digest:
                     raise UploadError(409, "Сохранённая часть отличается. Выберите исходный файл")
                 return self.view(row)
+            moment = datetime.fromisoformat(now)
+            if moment - datetime.fromisoformat(row["updated_at"]) >= EMPTY_TTL:
+                # затихшая держала только полученное: продолжить — снова занять весь размер, если место есть
+                others = c.execute("SELECT * FROM android_uploads WHERE id<>?", (row["id"],)).fetchall()
+                if sum(self.reserved(item, moment) for item in others) + row["size"] > MAX_RESERVED:
+                    raise UploadError(507, "На сервере сейчас нет места, чтобы продолжить загрузку. Полученные "
+                                           "части сохранены; отправка продолжится позже")
             folder = self.folder(row["id"])
             temp, dest = folder / f"{index}.tmp", folder / f"{index}.part"
             try:
@@ -194,7 +250,8 @@ class Uploads:
                         raw = path.read_bytes() if path.is_file() else b""
                         if hashlib.sha256(raw).hexdigest() != parts[str(index)]:
                             del parts[str(index)]
-                            c.execute("UPDATE android_uploads SET parts=? WHERE id=?", (json.dumps(parts), row["id"]))
+                            c.execute("UPDATE android_uploads SET parts=?,updated_at=? WHERE id=?",
+                                      (json.dumps(parts), now, row["id"]))
                             raise UploadError(409, "Сохранённая часть повреждена. Продолжите загрузку: повторится только эта часть")
                         output.write(raw)
                     output.flush()

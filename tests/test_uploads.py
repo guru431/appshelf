@@ -217,6 +217,118 @@ def test_schema_10_migration_preserves_data_and_is_reopenable(cfg, conn, acct):
         reopened.close()
 
 
+def test_upload_without_parts_expires_after_an_hour(cfg, conn, clock, acct):
+    manager = uploads.Uploads(cfg)
+    shelf = db.ensure_shelf(conn, acct.user_id, clock.iso())
+    empty = manager.create(conn, acct.user_id, shelf.id, payload(b"empty"), clock.iso())
+    started = manager.create(conn, acct.user_id, shelf.id, payload(b"start", client_id="b"*32), clock.iso())
+    row = manager.get(conn, started["id"], acct.user_id, shelf.id, clock.iso())
+    manager.part(conn, row, 0, b"start", hashlib.sha256(b"start").hexdigest(), clock.iso())
+    clock.advance(2 * 3600)
+    with pytest.raises(uploads.UploadError) as gone:
+        manager.get(conn, empty["id"], acct.user_id, shelf.id, clock.iso())
+    assert gone.value.status == 410
+    manager.cleanup(conn, clock.iso())
+    assert [r[0] for r in conn.execute("SELECT id FROM android_uploads")] == [started["id"]]
+    assert not manager.folder(empty["id"]).exists()
+
+
+def test_idle_upload_reserves_only_received_parts(cfg, conn, clock, acct, monkeypatch):
+    monkeypatch.setattr(uploads, "CHUNK_SIZE", 4)
+    monkeypatch.setattr(uploads, "MAX_RESERVED", 16)
+    manager = uploads.Uploads(cfg)
+    member = make_account(conn, clock, email="member@example.org", role="member", legacy=False)
+    mine = db.ensure_shelf(conn, acct.user_id, clock.iso())
+    theirs = db.ensure_shelf(conn, member.user_id, clock.iso())
+    raw = b"abcdefghijkl"
+    item = manager.create(conn, acct.user_id, mine.id, payload(raw), clock.iso())
+    row = manager.get(conn, item["id"], acct.user_id, mine.id, clock.iso())
+    manager.part(conn, row, 0, raw[:4], hashlib.sha256(raw[:4]).hexdigest(), clock.iso())
+    clock.advance(2 * 3600)  # брошена: держит только полученные 4 байта
+    other = manager.create(conn, member.user_id, theirs.id, payload(b"x" * 12), clock.iso())
+    with pytest.raises(uploads.UploadError) as full:
+        manager.part(conn, row, 1, raw[4:8], hashlib.sha256(raw[4:8]).hexdigest(), clock.iso())
+    assert full.value.status == 507
+    manager.cancel(conn, manager.get(conn, other["id"], member.user_id, theirs.id, clock.iso()))
+    assert manager.part(conn, row, 1, raw[4:8], hashlib.sha256(raw[4:8]).hexdigest(), clock.iso())["parts"].keys() == {"0", "1"}
+
+
+def test_reserve_limit_per_member_and_server_wide_text(cfg, conn, clock, acct, monkeypatch):
+    monkeypatch.setattr(uploads, "MAX_RESERVED", 16)
+    monkeypatch.setattr(uploads, "USER_RESERVED", 8)
+    manager = uploads.Uploads(cfg)
+    people_ = [acct.user_id] + [make_account(conn, clock, email=f"m{i}@example.org", role="member", legacy=False).user_id
+                                for i in range(2)]
+    shelves = [db.ensure_shelf(conn, uid, clock.iso()) for uid in people_]
+    manager.create(conn, people_[0], shelves[0].id, payload(b"x" * 8), clock.iso())
+    with pytest.raises(uploads.UploadError) as own:
+        manager.create(conn, people_[0], shelves[0].id, payload(b"y", client_id="b"*32), clock.iso())
+    assert own.value.status == 429 and "Завершите или отмените" in own.value.message
+    manager.create(conn, people_[1], shelves[1].id, payload(b"z" * 8), clock.iso())
+    with pytest.raises(uploads.UploadError) as server:
+        manager.create(conn, people_[2], shelves[2].id, payload(b"w"), clock.iso())
+    assert server.value.status == 429 and "Завершите" not in server.value.message and "на сервере" in server.value.message
+
+
+def test_pending_list_and_owner_cancel(web, conn, cfg, clock, acct):
+    member = make_account(conn, clock, email="member@example.org", role="member", legacy=False, name="Мария")
+    sign_in(web.client, cfg, conn, clock, member.user_id)
+    theirs = web.client.post(f"/android/uploads?person={member.user_id}", json=payload(b"member")).json()
+    mine = web.client.post(f"/android/uploads?person={acct.user_id}", json=payload(b"owner")).json()
+    listed = web.client.get(f"/android/uploads?person={member.user_id}")
+    assert listed.status_code == 200
+    assert [(u["id"], u["filename"], u["received"], u["size"], u["mine"]) for u in listed.json()["uploads"]] == [
+        (theirs["id"], "example.apk", 0, 6, True)]
+    everyone = web.client.get(f"/android/uploads?person={acct.user_id}").json()["uploads"]
+    assert {(u["id"], u["person"], u["mine"]) for u in everyone} == {(theirs["id"], "Мария", False),
+                                                                    (mine["id"], "Иван Петров", True)}
+    assert web.client.post(f"/android/uploads/{mine['id']}/cancel?person={member.user_id}").status_code == 404
+    assert web.client.post(f"/android/uploads/{theirs['id']}/cancel?person={acct.user_id}").status_code == 200
+    assert web.client.get(f"/android/uploads?person={member.user_id}").json()["uploads"] == []
+
+
+def test_cancel_by_client_id_without_session(web, conn, acct):
+    raw = b"cancel me"
+    item = web.client.post("/android/uploads", json=payload(raw)).json()
+    cancel = {"client_id": "a" * 32}
+    assert web.client.post(f"/android/uploads/cancel?person={acct.user_id}", json=cancel).json() == {"cancelled": True}
+    assert not uploads.Uploads(web.app.state.worker.env.cfg).folder(item["id"]).exists()
+    assert web.client.post(f"/android/uploads/cancel?person={acct.user_id}", json=cancel).json() == {"cancelled": True}
+    item = web.client.post("/android/uploads", json=payload(raw)).json()
+    post_part(web.client, "/android/uploads/" + item["id"], acct.user_id, 0, raw)
+    done = web.client.post("/android/uploads/" + item["id"] + "/finish").json()
+    assert web.client.post(f"/android/uploads/cancel?person={acct.user_id}", json=cancel).json() == {"job_id": done["job_id"]}
+    assert web.client.post(f"/android/uploads/cancel?person={acct.user_id}", json={"client_id": "x"}).status_code == 400
+
+
+def test_upload_cleanup_failure_does_not_stop_worker(web, cfg, conn, capsys, monkeypatch):
+    import os
+    import shutil
+    orphan = cfg.data_dir / "uploads" / ("f" * 32)
+    orphan.mkdir(parents=True)
+    real = shutil.rmtree
+
+    def busy(path, ignore_errors=False, onerror=None, onexc=None, **kwargs):
+        if str(path) != str(orphan):
+            return real(path, ignore_errors=ignore_errors, onerror=onerror, onexc=onexc, **kwargs)
+        error = PermissionError("busy")
+        if ignore_errors:
+            return None
+        if onexc:
+            return onexc(os.rmdir, path, error)
+        if onerror:
+            return onerror(os.rmdir, path, (PermissionError, error, None))
+        raise error
+
+    monkeypatch.setattr(shutil, "rmtree", busy)
+    uploads.Uploads(cfg).cleanup(conn, web.app.state.worker.env.now())
+    assert "busy" in capsys.readouterr().err
+    monkeypatch.setattr(uploads.Uploads, "cleanup", lambda *args: (_ for _ in ()).throw(OSError("uploads root")))
+    worker = web.app.state.worker
+    worker.recover()
+    assert worker.tick() is False
+
+
 @pytest.mark.parametrize("lost", ["missing", "changed"])
 def test_lost_part_is_invalidated_for_retry_without_losing_other_parts(cfg, conn, clock, acct, monkeypatch, lost):
     monkeypatch.setattr(uploads, "CHUNK_SIZE", 3)

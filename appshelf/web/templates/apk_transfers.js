@@ -8,6 +8,7 @@
   if (!worker) root.ApkUploads = true;
   var opened, registration, tray;
   var running = new Map(), controllers = new Map(), localFiles = new Map(), views = new Map(), intents = new Map();
+  var trayItems = new Map(), pendingRows = new Map();
   function random() { return Array.from(crypto.getRandomValues(new Uint8Array(16)), function (n) { return n.toString(16).padStart(2, '0'); }).join(''); }
   function open() {
     if (!opened) opened = new Promise(function (resolve, reject) {
@@ -80,6 +81,15 @@
     });
     await notify(key); return result;
   }
+  async function problem(response) {
+    // Текст отказа: JSON приложения или короткий text/plain проверки входа и полки (403, 409).
+    var type = response.headers.get('content-type') || '';
+    if (type.includes('application/json')) {
+      var value = await response.json().catch(function () { return {}; });
+      return value.error || (typeof value.detail === 'string' ? value.detail : '');
+    }
+    return type.startsWith('text/plain') && response.status !== 401 ? (await response.text()).trim().slice(0, 300) : '';
+  }
   async function request(record, suffix, options) {
     var abort = new AbortController(), key = record.key;
     if (!controllers.has(key)) controllers.set(key, new Set());
@@ -87,14 +97,9 @@
     var timer = setTimeout(function () { abort.abort(); }, 90000);
     try {
       var response = await fetch(url(record, suffix), Object.assign({cache: 'no-store', credentials: 'same-origin', signal: abort.signal}, options));
-      var json = (response.headers.get('content-type') || '').includes('application/json');
-      var value = json ? await response.json() : {};
-      if (!response.ok || !json) {
-        var detail = typeof value.detail === 'string' ? value.detail : '';
-        var error = new Error(value.error || detail || (response.status === 401 || response.ok ? 'Войдите снова, чтобы продолжить загрузку' : 'Сервер не принял часть файла (HTTP ' + response.status + ')'));
-        error.status = response.ok ? 401 : response.status; throw error;
-      }
-      return value;
+      if (response.ok && (response.headers.get('content-type') || '').includes('application/json')) return await response.json();
+      var error = new Error((!response.ok && await problem(response)) || (response.status === 401 || response.ok ? 'Войдите снова, чтобы продолжить загрузку' : 'Сервер не принял часть файла (HTTP ' + response.status + ')'));
+      error.status = response.ok ? 401 : response.status; throw error;
     } finally { clearTimeout(timer); group.delete(abort); }
   }
   function abort(key) { if (controllers.has(key)) controllers.get(key).forEach(function (control) { control.abort(); }); }
@@ -109,14 +114,19 @@
       edit(key, function (r) { if (r && r.lease === token) r.leaseUntil = Date.now() + 20000; return r; }).catch(function () {});
     }, 5000);
     try {
-      var file = supplied || record.blob;
-      var state = await request(record, record.session ? '/' + record.session : '', record.session ? {} : {
+      var file = supplied || record.blob, state, create = {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({client_id: record.clientId,
           size: record.size, filename: record.filename, name: record.name, fingerprint: record.fingerprint, package: record.package})
-      });
-      var current = await read(key);
-      if (!current || current.state === 'paused') return;
+      };
+      try { state = await request(record, record.session ? '/' + record.session : '', record.session ? {} : create); }
+      catch (error) {
+        // Сервер убрал загрузку (истёк срок, отменена со страницы «Добавить»): файл под рукой — начать заново.
+        if (!record.session || !file || ![404, 410].includes(error.status)) throw error;
+        state = await request(record, '', create);
+      }
+      // Номер загрузки — до проверки паузы: без него отмена не найдёт загрузку на сервере.
       record = await update(key, {session: state.id, message: 'Проверяем сохранённые части…'});
+      if (!record || record.state === 'paused') return;
       if (state.fingerprint !== record.fingerprint || state.size !== record.size) throw new Error('Выбран другой файл');
       if (!state.job_id) {
         if (!file) { await update(key, {state: 'paused', message: 'Выберите тот же файл, чтобы продолжить с сохранённого места'}); return; }
@@ -164,7 +174,7 @@
         var results = await Promise.allSettled([send(), send()]);
         var failed = results.find(function (result) { return result.status === 'rejected'; });
         if (failed) throw failed.reason;
-        current = await read(key);
+        var current = await read(key);
         if (!current || current.state === 'paused') return;
         if (confirmed() !== file.size) return;
         await update(key, {message: 'Файл передан. Собираем части на сервере…'});
@@ -212,6 +222,11 @@
         }
         if (error.status !== 404 && error.status !== 410) throw error;
       }
+    } else {
+      // Ответ на создание мог не дойти (отмена сразу после выбора файла): сервер найдёт загрузку по client_id.
+      var gone = await request(record, '/cancel', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({client_id: record.clientId})});
+      if (gone.job_id) { await update(key, {state: 'done', blob: null, jobId: gone.job_id}); localFiles.delete(key); return; }
     }
     await edit(key, function () { return null; }); localFiles.delete(key); await notify(key);
   }
@@ -323,22 +338,73 @@
       document.querySelector('main').prepend(tray);
     }
     if (!tray) return;
-    tray.replaceChildren(); tray.hidden = !records.length;
+    // Узлы живут, пока жива передача: кнопки не пересоздаются на каждую часть и нажатие не теряется.
+    var keys = new Set(records.map(function (r) { return r.key; }));
+    trayItems.forEach(function (item, key) {
+      if (!keys.has(key)) { item.title.remove(); item.box.remove(); item.link.remove(); trayItems.delete(key); }
+    });
+    tray.hidden = !records.length;
     records.forEach(function (record) {
-      var title = document.createElement('b'); title.textContent = record.filename; tray.append(title);
-      var box = document.createElement('div'); box.className = 'upload-feedback';
-      box.innerHTML = '<progress data-upload-progress max="100" aria-label="Отправка APK на сервер"></progress>' +
-        '<p data-upload-status role="status" aria-live="polite" aria-atomic="true"></p>' +
-        '<div class="upload-controls" data-upload-controls><button type="button" class="secondary sm" data-upload-pause></button>' +
-        '<button type="button" class="secondary sm" data-upload-cancel>Отменить</button></div>' +
-        '<p class="hint" data-upload-background>Полученные части хранятся 7 дней. После возвращения продолжим отправку.</p>';
-      display(box, record); controls(box, record.key, record); tray.append(box);
-      if (!record.blob && !localFiles.has(record.key)) {
-        var link = document.createElement('a'); link.href = record.target + '/add?person=' + currentUser;
-        link.textContent = 'Выбрать тот же файл для продолжения'; tray.append(link);
+      var item = trayItems.get(record.key);
+      if (!item) {
+        item = {title: document.createElement('b'), box: document.createElement('div'), link: document.createElement('a')};
+        item.box.className = 'upload-feedback';
+        item.box.innerHTML = '<progress data-upload-progress max="100" aria-label="Отправка APK на сервер"></progress>' +
+          '<p data-upload-status role="status" aria-live="polite" aria-atomic="true"></p>' +
+          '<div class="upload-controls" data-upload-controls><button type="button" class="secondary sm" data-upload-pause></button>' +
+          '<button type="button" class="secondary sm" data-upload-cancel>Отменить</button></div>' +
+          '<p class="hint" data-upload-background>Полученные части хранятся 7 дней. После возвращения продолжим отправку.</p>';
+        item.link.textContent = 'Выбрать тот же файл для продолжения';
+        tray.append(item.title, item.box, item.link); trayItems.set(record.key, item);
       }
+      item.title.textContent = record.filename;
+      display(item.box, record); controls(item.box, record.key, record);
+      // Новая версия карточки продолжается только из её формы: каталог с открытым диалогом источника.
+      item.link.href = record.package ? record.target + '?person=' + currentUser + '#source-' + encodeURIComponent(record.package)
+        : record.target + '/add?person=' + currentUser;
+      item.link.hidden = !!(record.blob || localFiles.has(record.key));
     });
   }
+  async function renderPending() {
+    // «Добавить»: загрузки на сервере, которых нет в лотке этого браузера (другое устройство, очищенные данные).
+    var section = document.querySelector('[data-pending-uploads]'), list = section && section.querySelector('[data-pending-list]');
+    if (!list) return;
+    var response = await fetch(section.dataset.uploadApi, {cache: 'no-store', credentials: 'same-origin'});
+    if (!response.ok) return;
+    var local = new Set((await read()).map(function (r) { return r.session; }));
+    var items = (await response.json()).uploads.filter(function (item) { return !local.has(item.id); });
+    var ids = new Set(items.map(function (item) { return item.id; }));
+    pendingRows.forEach(function (row, id) { if (!ids.has(id)) { row.remove(); pendingRows.delete(id); } });
+    items.forEach(function (item) {
+      if (pendingRows.has(item.id)) return;
+      var row = document.createElement('div'), body = document.createElement('div'), title = document.createElement('b');
+      var meta = document.createElement('div'), button = document.createElement('button');
+      row.className = 'row'; body.className = 'body'; meta.className = 'meta';
+      title.textContent = item.filename;
+      meta.textContent = size(item.received) + ' из ' + size(item.size) + (item.mine ? '' : ' · ' + item.person) +
+        ' · ' + item.updated_at.slice(0, 16).replace('T', ' ') + ' UTC';
+      button.type = 'button'; button.className = 'secondary sm'; button.textContent = 'Отменить';
+      button.setAttribute('aria-label', 'Отменить загрузку ' + item.filename);
+      button.onclick = async function () {
+        button.disabled = true;
+        try {
+          var target = new URL(section.dataset.uploadApi, location.origin);
+          target.pathname += '/' + item.id + '/cancel';
+          var result = await fetch(target, {method: 'POST', cache: 'no-store', credentials: 'same-origin'});
+          if (result.ok || result.status === 404) {
+            row.remove(); pendingRows.delete(item.id); section.hidden = !pendingRows.size; return;
+          }
+          meta.textContent = await problem(result) || 'Не удалось отменить загрузку (HTTP ' + result.status + ')';
+          meta.className = 'meta err';
+        } catch (error) { meta.textContent = 'Нет связи с сервером. Повторите отмену позже'; meta.className = 'meta err'; }
+        button.disabled = false;
+      };
+      body.append(title, meta); row.append(body, button); list.append(row); pendingRows.set(item.id, row);
+    });
+    section.hidden = !pendingRows.size;
+  }
+  var chosen = /^#source-/.test(location.hash) && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  if (chosen && chosen.tagName === 'DIALOG' && chosen.querySelector('form[data-apk-upload]') && !chosen.open) chosen.showModal();
   document.querySelectorAll('form[data-apk-upload]').forEach(function (form) {
     form.addEventListener('submit', async function (event) {
       event.preventDefault(); if (form.getAttribute('aria-busy') === 'true') return;
@@ -388,7 +454,10 @@
   }
   addEventListener('online', function () { restore().catch(function () {}); });
   addEventListener('pageshow', function () { restore().catch(function () {}); });
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) restore().catch(function () {}); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { restore().catch(function () {}); renderPending().catch(function () {}); }
+  });
   setInterval(function () { if (!document.hidden) restore().catch(function () {}); }, 10000);
   restore().catch(function () {});
+  renderPending().catch(function () {});
 })(globalThis);

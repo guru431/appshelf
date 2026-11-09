@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from .. import apk, store
+from .. import apk, people, store
 from ..android.uploads import CHUNK_SIZE, UploadError, Uploads
 from .admin import owner_only
 
@@ -33,6 +33,9 @@ def register(app, w, scope, shelf_of, ensure):
                         raise UploadError(404, "Приложение больше не находится на полке")
                     shelf = shelf or ensure(c, request)
                     result = manager.create(c, request.state.who.id, shelf.id, payload, w.now())
+                elif operation == "cancel" and request.state.who.role == people.OWNER:
+                    manager.cancel(c, manager.by_id(c, upload_id))  # владелец убирает и чужие брошенные
+                    result = {"cancelled": True}
                 else:
                     shelf = shelf_of(c, request)
                     if shelf is None:
@@ -69,6 +72,32 @@ def register(app, w, scope, shelf_of, ensure):
         except (ValueError, UnicodeDecodeError):
             return JSONResponse({"error": "Неверные сведения о файле"}, status_code=400)
         return await run_in_threadpool(run, request, "create", None, payload)
+
+    @app.get(prefix, dependencies=deps)
+    def pending(request: Request):
+        who = request.state.who
+        with w.conn() as c:
+            items = manager.pending(c, who.id, who.role == people.OWNER, w.now())
+        return JSONResponse({"uploads": items}, headers={"Cache-Control": "no-store"})
+
+    @app.post(prefix + "/cancel", dependencies=deps)
+    async def cancel_client(request: Request):
+        raw = await limited_body(request, 4096)
+        try:
+            payload = json.loads(raw or b"")
+            if not isinstance(payload, dict):
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "Неверные сведения о файле"}, status_code=400)
+
+        def cancel():
+            try:
+                with w.conn() as c:
+                    return JSONResponse(manager.cancel_client(c, request.state.who.id, payload.get("client_id")),
+                                        headers={"Cache-Control": "no-store"})
+            except UploadError as error:
+                return JSONResponse({"error": error.message}, status_code=error.status)
+        return await run_in_threadpool(cancel)
 
     @app.get(prefix + "/{upload_id}", dependencies=deps)
     def status(request: Request, upload_id: str):
