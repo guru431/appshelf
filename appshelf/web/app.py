@@ -35,6 +35,8 @@ UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с пу
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
 SHELF_BUSY = "Полка занята скачиванием — повторите через минуту"
 STATE_LINKS = (("recent", "новые за неделю"), ("errors", "ошибки"), ("active", "в очереди"))  # значения filter_shelf
+BLOCKED_FILTERS = {"owned": "Есть в аккаунте", "unknown": "Не проверено", "missing": "Нет в аккаунте",  # «Удалённые»
+                   "failed": "Ошибка проверки", "all": "Все"}
 
 
 def version_key(v: str) -> tuple:
@@ -320,7 +322,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                       refreshing=refreshing, refresh_error=refresh_error, refresh_error_at=refresh_error_at,
                       progress=progress_text(checking) if checking else "", sort=sort, dir=dir, sort_links=links)
 
-    def blocked_page(request: Request, q: str = "", status_code: int = 200, add_error: str = "", add_ref: str = ""):
+    def blocked_page(request: Request, q: str = "", status_code: int = 200, add_error: str = "", add_ref: str = "",
+                     shown: str = ""):
         aid = request.state.acct.id
         catalog = removed.load()
         with w.conn() as c:
@@ -348,20 +351,28 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                           "version_at": row["version_at"] if row is not None else "", "status": status,
                           "published": e["id"] in published})
         counts = {s: sum(1 for i in items if i["status"] == s) for s in ("owned", "missing", "unknown", "failed")}
+        # фильтр по состоянию; по умолчанию — что есть в аккаунте, если есть, иначе всё
+        if shown not in BLOCKED_FILTERS:
+            shown = "owned" if counts["owned"] else "all"
+        if shown != "all":
+            items = [i for i in items if i["status"] == shown]
         needle = q.strip().casefold()
         if needle:
             items = [i for i in items if needle in i["name"].casefold() or needle in i["catalog_name"].casefold()
                      or needle in i["aliases"]]
         order = {"owned": 0, "failed": 1, "unknown": 1, "missing": 2}
         items.sort(key=lambda i: (order[i["status"]], i["name"].casefold()))
+        filters = [(s, label, counts[s] if s != "all" else sum(counts.values()))
+                   for s, label in BLOCKED_FILTERS.items() if s != "failed" or counts[s] or shown == s]
         return w.page(request, "blocked.html", "blocked", status_code, items=items, counts=counts, q=q,
+                      shown=shown, filters=filters,
                       checking=refreshing == "check_removed", busy=busy, add_error=add_error, add_ref=add_ref,
                       progress=progress_text(progress) if progress else "",
                       last=last and {"at": last["at"], "text": counts_text(last)})
 
     @app.get("/blocked", response_class=HTMLResponse)
-    def blocked(request: Request, q: str = ""):
-        return blocked_page(request, q)
+    def blocked(request: Request, q: str = "", status: str = ""):
+        return blocked_page(request, q, shown=status)
 
     @app.post("/blocked/check")
     def blocked_check(request: Request):

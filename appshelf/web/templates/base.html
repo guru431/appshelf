@@ -290,8 +290,10 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
   header .acct .chip { justify-content: space-between; }
 }
 
-/* содержимое страниц: галочка в форме-карточке */
+/* содержимое страниц: галочка в форме-карточке, метки состояния «Удалённых» */
 .card > .check { margin-bottom: 14px; }
+.tag.state-owned { background: var(--tint); color: var(--link); }
+.tag.state-failed { background: var(--errtint); color: var(--err); }
 </style>
 </head>
 <body>

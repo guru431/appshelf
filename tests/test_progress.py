@@ -84,11 +84,11 @@ def test_result_stays_after_check_and_separates_errors(web, conn, monkeypatch):
     web.tool.on_call = fail_on(web.tool, 3)
     web.client.post("/blocked/check")
     web.app.state.worker.tick()
-    text = web.client.get("/blocked").text                                  # страницу открыли после окончания
+    text = web.client.get("/blocked?status=all").text                       # страницу открыли после окончания
     at = conn.execute("SELECT finished_at FROM jobs").fetchone()["finished_at"]
     assert f"последняя проверка {at[8:10]}.{at[5:7]} {at[11:16]} UTC: найдено 1, нет лицензии 1, ошибок 1" in text
-    assert "ID 3 · ошибка проверки" in text and "ID 2 · нет в аккаунте" in text
-    assert "ошибка проверки: 1" in text and "не проверено: 0" in text
+    assert 'state-failed">ошибка проверки' in text and 'state-missing">нет в аккаунте' in text
+    assert "Ошибка проверки · 1" in text and "Не проверено · 0" in text
     assert "progress" not in web.client.get("/api/status").json()
 
 
@@ -103,8 +103,8 @@ def test_new_check_keeps_earlier_errors_until_asked_again(web, conn, clock, monk
     store.enqueue_once(conn, 1, "check_removed", None, clock.iso())
     new = conn.execute("SELECT MAX(id) AS id FROM jobs").fetchone()["id"]
     store.set_progress(conn, new, {"done": 0, "total": 3, "added": 0, "missing": 0, "errors": 0, "failed": []})
-    text = web.client.get("/blocked").text
-    assert "ID 3 · ошибка проверки" in text and "ошибка проверки: 1" in text
+    text = web.client.get("/blocked?status=failed").text                    # фильтр «Ошибка проверки»
+    assert "ID 3</div>" in text and "Ошибка проверки · 1" in text
 
 
 def test_pages_show_progress_of_running_check(web, conn, clock):

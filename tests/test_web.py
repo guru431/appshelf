@@ -274,8 +274,22 @@ def test_blocked_page_marks_apps_missing_from_account(web, conn, clock, monkeypa
     store.mark_no_license(conn, 1, 2, clock.iso())
     r = web.client.get("/blocked")
     assert r.status_code == 200
-    assert "Есть в аккаунте: 1" in r.text and "нет в аккаунте: 1" in r.text and "не проверено: 1" in r.text
-    assert 'class="row inactive"' in r.text and "/apps/1/publish" in r.text and "/apps/2/publish" not in r.text
+    assert "Есть в аккаунте · 1" in r.text and "Нет в аккаунте · 1" in r.text and "Не проверено · 1" in r.text
+    assert "Все · 3" in r.text and "Ошибка проверки" not in r.text
+    # по умолчанию — что есть в аккаунте; остальное — своим фильтром, состояние — меткой, без серых строк
+    assert "/apps/1/publish" in r.text and "ВТБ Онлайн" not in r.text and 'row inactive' not in r.text
+    r = web.client.get("/blocked", params={"status": "missing"})
+    assert "ВТБ Онлайн" in r.text and "СберБанк Онлайн</b>" not in r.text
+    r = web.client.get("/blocked", params={"status": "all", "q": "альфа"})
+    assert "Альфа-Банк" in r.text and "ВТБ Онлайн" not in r.text and 'name="status" value="all"' in r.text
+    assert '<span class="tag state-unknown">не проверено' in r.text   # во «Все» состояние — меткой у строки
+
+
+def test_blocked_page_without_owned_apps_shows_everything(web, monkeypatch):
+    from appshelf import removed
+    monkeypatch.setattr(removed, "load", lambda: [{"id": 1, "name": "СберБанк Онлайн"}])
+    text = web.client.get("/blocked").text
+    assert "Есть в аккаунте · 0" in text and 'class="on" aria-current="true">Все · 1' in text and "СберБанк Онлайн" in text
 
 
 def test_history_and_removed_show_when_version_was_checked(web, conn, monkeypatch):
@@ -295,7 +309,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     monkeypatch.setattr(removed, "load", lambda: CATALOG_SBER)
     web.client.post("/blocked/add", data={"ref": "id492224193"})
     text = web.client.get("/blocked").text
-    assert "Есть в аккаунте: 0" in text and "не проверено: 1" in text
+    assert "Есть в аккаунте · 0" in text and "Не проверено · 1" in text
     assert "<b>СберБанк Онлайн</b>" in text and "App Store 492224193" not in text   # имя — из справочника
     assert "по ссылке, не подтверждено" in web.client.get("/history").text
     set_session(conn, 1, "ok")
@@ -303,7 +317,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     web.app.state.worker.tick()
     assert store.list_apps(conn, 1)[0].status == "nolicense"                  # повторять бесполезно
     text = web.client.get("/blocked").text
-    assert "Есть в аккаунте: 0" in text and "нет в аккаунте: 1" in text and "ID 492224193 · нет в аккаунте" in text
+    assert "Есть в аккаунте · 0" in text and "Нет в аккаунте · 1" in text and "state-missing" in text
     web.client.post("/apps/492224193/unpublish")
     assert store.list_purchases(conn, 1) == []                                # ложной покупки в «Истории» нет
 
@@ -316,7 +330,7 @@ def test_link_confirmed_by_download_is_owned(web, conn, monkeypatch, tmp_path):
     web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
     web.app.state.worker.tick()
     assert [r["source"] for r in store.list_purchases(conn, 1)] == ["license"]
-    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+    assert "Есть в аккаунте · 1" in web.client.get("/blocked").text
 
 
 def test_download_clears_earlier_no_license_mark(web, conn, clock, monkeypatch, tmp_path):
@@ -329,7 +343,7 @@ def test_download_clears_earlier_no_license_mark(web, conn, clock, monkeypatch, 
     web.tool.ipas[492224193] = make_ipa(tmp_path / "s.ipa", item_id=492224193)
     web.app.state.worker.tick()
     assert store.no_license_ids(conn, 1) == set()
-    assert "Есть в аккаунте: 1" in web.client.get("/blocked").text
+    assert "Есть в аккаунте · 1" in web.client.get("/blocked").text
 
 
 @pytest.mark.parametrize("catalog_row", [False, True])
