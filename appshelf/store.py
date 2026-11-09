@@ -509,7 +509,7 @@ def set_purchase_version(c, aid: int, app_id: int, version: str, now: str) -> No
 
 def set_downloaded(c, aid: int, app_id: int, version: str, now: str) -> None:
     """Apple отдал IPA: лицензия подтверждена (manual → license, прежняя отметка «нет лицензии» — прочь), версия из
-    него — в строку «Истории» не из DAAP (свои строки DAAP обновляет сам)."""
+    него — в строку «Покупок» не из DAAP (свои строки DAAP обновляет сам)."""
     c.execute("UPDATE purchases SET version=?, version_at=?, source='license' "
               "WHERE account_id=? AND app_id=? AND source != 'daap'", (version, now, aid, app_id))
     clear_no_license(c, aid, app_id)
@@ -537,7 +537,7 @@ def clear_no_license(c, aid: int, app_id: int) -> None:
 
 
 def add_known(c, aid: int, app_id: int, name: str, source: str) -> None:
-    """Строка «Истории» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст. source —
+    """Строка «Покупок» для приложения, которого нет в DAAP (удалено из App Store): bundle id пуст. source —
     'license' (лицензию нашла проверка справочника) или 'manual' (добавлено по ссылке); прежнюю строку и её source
     не трогаем. Удалённому Apple ID строку не вставляем — AccountGone."""
     cur = c.execute("INSERT OR IGNORE INTO purchases (account_id, app_id, name, refreshed_at, source) "
@@ -548,7 +548,7 @@ def add_known(c, aid: int, app_id: int, name: str, source: str) -> None:
 
 
 def unconfirmed(c, aid: int, app_id: int) -> bool:
-    """Строка «Истории» добавлена по ссылке, и лицензию Apple не подтвердил (ни скачивание, ни справочник)."""
+    """Строка «Покупок» добавлена по ссылке, и лицензию Apple не подтвердил (ни скачивание, ни справочник)."""
     return c.execute("SELECT 1 FROM purchases WHERE account_id=? AND app_id=? AND source='manual'",
                      (aid, app_id)).fetchone() is not None
 
@@ -911,7 +911,7 @@ def account_running(c, aid: int) -> bool:
 
 
 def refresh_status(c, aid: int) -> tuple[str, str, str]:
-    """Для страницы «История»: (что идёт — "refresh_history" | "check_removed" | "", ошибка последнего
+    """Для страницы «Покупки» (/history): (что идёт — "refresh_history" | "check_removed" | "", ошибка последнего
     обновления истории, её время)."""
     active = next((k for k in ("refresh_history", "check_removed") if _active(c, aid, k, None)), "")
     last = c.execute("SELECT status, error, finished_at FROM jobs WHERE account_id=? AND kind='refresh_history' "

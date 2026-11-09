@@ -250,7 +250,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
 def unpublish(cfg: Config, c, acct, app_id: int) -> None:
     """Снять с публикации. Архив недоступен — ArchiveUnavailable и ничего не тронуто: файлы остались бы на шаре без
     строк, и удалить их из панели было бы нечем. Добавленное по ссылке, лицензию на которое Apple не подтвердил,
-    уходит и из «Истории»."""
+    уходит и из «Покупок»."""
     with shelf_change(cfg, c, acct) as fresh:
         if fresh is None:
             return
