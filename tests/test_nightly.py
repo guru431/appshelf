@@ -162,6 +162,17 @@ def test_digest_at_most_weekly_and_never_empty(ctx, cfg, conn, clock):
     assert nightly.digests(env, conn) == 0 and len(mails) == 2          # нового нет — письма нет
 
 
+def test_digest_keeps_update_after_previous_version_removed(ctx, cfg, conn, clock):
+    acct = ready(conn, cfg, clock)                                      # публикация скачала 1.0
+    clock.advance(3600)
+    store.add_version(conn, 1, cfg.shelf_root(acct), 123, store.NewVersion(
+        version="1.1", build="1", external_version_id="901", min_ios="13.0", device_family="iphone", size=1,
+        dir="123-1.1"), clock.iso())
+    conn.execute("DELETE FROM versions WHERE role='previous'")          # «Удалить 1.0»
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 1 and "СберБанк Онлайн 1.1" in mails[-1][1]
+
+
 def test_digest_turned_off_and_failed_mail_retried(ctx, cfg, conn, clock):
     ready(conn, cfg, clock, versions=("1.0", "1.1"))
     notify.set_digest(conn, 1, False)

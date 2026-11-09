@@ -24,11 +24,14 @@ SEP = " | "
 DIGEST_SUBJECT = "appshelf: что обновилось на полках"
 DIGEST_DAYS = 7       # письмо участнику — не чаще раза в 7 дней (по датам UTC: время конца проверки плавает)
 DIGEST_BACK_DAYS = 14  # прошлое письмо давно (ночи не было, писать было нечего) — новые версии не старше этого
-# новые версии полки: текущая скачана позже since и есть предыдущая — как метка «новая версия» в каталоге
+# новые версии полки: текущая скачана позже since и не первая с публикации — как метка «новая версия» в каталоге
+# (есть предыдущая или, если её удалили вручную, до текущей уже было скачивание — store.updated_ids)
 APPLE_NEW = """SELECT a.name, v.version FROM versions v JOIN apps a ON a.account_id = v.account_id
                    AND a.app_id = v.app_id WHERE v.account_id = ? AND v.role = 'current' AND v.downloaded_at > ?
-                   AND EXISTS (SELECT 1 FROM versions p WHERE p.account_id = v.account_id AND p.app_id = v.app_id
-                       AND p.role = 'previous')"""
+                   AND (EXISTS (SELECT 1 FROM versions p WHERE p.account_id = v.account_id AND p.app_id = v.app_id
+                       AND p.role = 'previous') OR EXISTS (SELECT 1 FROM jobs j WHERE j.account_id = v.account_id
+                       AND j.app_id = v.app_id AND j.kind IN ('publish', 'update') AND j.status = 'done'
+                       AND j.created_at >= a.published_at AND j.finished_at < v.downloaded_at))"""
 ANDROID_NEW = """SELECT a.name, v.version_name AS version FROM android_versions v JOIN android_apps a
                      ON a.shelf_id = v.shelf_id AND a.package = v.package WHERE v.shelf_id = ? AND v.role = 'current'
                      AND v.downloaded_at > ? AND EXISTS (SELECT 1 FROM android_versions p
