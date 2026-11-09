@@ -84,6 +84,19 @@ def test_link_merges_shelves_conflict_keeps_keeper(ctx, cfg, conn, clock):
         [("add", ""), ("check", "ru.y")]                                         # ждущие задания — за полкой
 
 
+def test_link_carries_signature_decisions_with_package(ctx, cfg, conn, clock):
+    own = owner(conn, clock)
+    g = google_only(conn, clock, "g1")
+    keep = put_version(cfg, conn, clock, own.user_id, "ru.x", 5)
+    gone = put_version(cfg, conn, clock, g, "ru.y", 1)
+    for key in (db._rejected_key, db.pending_mail_key):
+        conn.execute("INSERT INTO state (key, value) VALUES (?, '1')", (key(gone.id, "ru.y"),))
+    jobs.link_users(cfg, conn, own.user_id, g)
+    for key in (db._rejected_key, db.pending_mail_key):   # отклонённый ключ подписи не скачается заново
+        assert conn.execute("SELECT 1 FROM state WHERE key=?", (key(keep.id, "ru.y"),)).fetchone() is not None
+        assert conn.execute("SELECT 1 FROM state WHERE key=?", (key(gone.id, "ru.y"),)).fetchone() is None
+
+
 def test_link_moves_dirs_with_rename(ctx, cfg, conn, clock):
     own = owner(conn, clock)
     g = google_only(conn, clock, "g1")
