@@ -123,3 +123,19 @@ def test_deleting_apple_id_keeps_browser_signed_in_when_google_left(make_web, cf
     assert wb.client.get("/apple").status_code == 200
     r = wb.client.get("/history", follow_redirects=False)
     assert (r.status_code, r.headers["location"]) == (303, "/apple")
+
+
+def test_old_cookie_names_read_only_for_long_lived_cookies(web):
+    """После перехода на __Host- старые имена читаются только у долгоживущих cookie: поток входа или приглашение,
+    подложенные с соседнего поддомена под старым именем, не действуют."""
+    from types import SimpleNamespace
+    from appshelf.android import pin
+    from appshelf.web.common import INVITE_COOKIE, LOGIN_COOKIE
+    from appshelf import webauth
+    w = web.app.state.w
+    old = SimpleNamespace(cookies={LOGIN_COOKIE: "flow", INVITE_COOKIE: "invite", webauth.COOKIE: "auth",
+                                   pin.COOKIE: "guest"})
+    assert (w.cookie(old, LOGIN_COOKIE), w.cookie(old, INVITE_COOKIE)) == ("", "")
+    assert (w.cookie(old, webauth.COOKIE), w.cookie(old, pin.COOKIE)) == ("auth", "guest")
+    new = SimpleNamespace(cookies={w.cookie_name(LOGIN_COOKIE): "flow2"})
+    assert w.cookie(new, LOGIN_COOKIE) == "flow2"
