@@ -165,6 +165,71 @@ def test_missing_verifier_and_timeout_fail_closed(tmp_path, monkeypatch):
         apk.verify_apk(DATA / "v2-5.apk")
 
 
+@pytest.mark.integration
+@pytest.mark.timeout(120)
+def test_v31_rotation_keeps_original_signer(tmp_path):
+    """v3.1 (--rotation-min-sdk-version 33): до API 32 действует прежний ключ — им APK и встаёт на полку."""
+    rotated = DATA / "v31-rotated-6.apk"
+    assert apk.verify_apk(rotated) == OLD
+    assert apk.verified_rotation(rotated, OLD, NEW) == 33
+    assert apk.verified_rotation(rotated, "f" * 64, NEW) == 0
+
+
+# Сохранённый вывод apksigner 0.9 (Build Tools) для v3-rotated-6.apk (v3.0) и v31-rotated-6.apk (v3.1), без SHA-1/MD5.
+V30_VERIFY = f"""Signer #1 certificate DN: CN=Appshelf Test Fixture
+Signer #1 certificate SHA-256 digest: {NEW}
+"""
+V31_VERIFY = f"""Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate DN: CN=Appshelf Test Fixture
+Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {NEW}
+Signer (minSdkVersion=24, maxSdkVersion=32) certificate DN: CN=Appshelf Test Fixture
+Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: {OLD}
+"""
+V31_VERIFY_28 = f"""Signer #1 certificate DN: CN=Appshelf Test Fixture
+Signer #1 certificate SHA-256 digest: {OLD}
+"""
+LINEAGE = f"""Signer #1 in lineage certificate DN: CN=Appshelf Test Fixture
+Signer #1 in lineage certificate SHA-256 digest: {OLD}
+Has installed data capability: true
+Signer #2 in lineage certificate DN: CN=Appshelf Test Fixture
+Signer #2 in lineage certificate SHA-256 digest: {NEW}
+Has installed data capability: true
+"""
+
+
+def fake_apksigner(monkeypatch, verify: str, per_sdk: dict[str, str]):
+    import subprocess
+    monkeypatch.setenv("APPSHELF_APKSIGNER", "apksigner")
+
+    def run(args, **kw):
+        if "lineage" in args:
+            out = LINEAGE
+        elif "--min-sdk-version" in args:
+            out = per_sdk[args[args.index("--min-sdk-version") + 1]]
+        else:
+            out = verify
+        return SimpleNamespace(returncode=0, stdout=out)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+@pytest.mark.parametrize("verify, per_sdk, signer, rotation", [
+    (V30_VERIFY, {"28": V30_VERIFY, "33": V30_VERIFY}, NEW, 28),
+    (V31_VERIFY, {"28": V31_VERIFY_28, "33": V31_VERIFY}, OLD, 33),
+], ids=["v3.0", "v3.1"])
+def test_rotation_output_formats(monkeypatch, verify, per_sdk, signer, rotation):
+    fake_apksigner(monkeypatch, verify, per_sdk)
+    path = DATA / "v3-rotated-6.apk"
+    assert apk.verify_apk(path) == signer
+    assert apk.verified_rotation(path, OLD, NEW) == rotation
+
+
+def test_v31_two_signers_for_one_range_refused(monkeypatch):
+    twice = V31_VERIFY.replace("minSdkVersion=33, maxSdkVersion=2147483647", "minSdkVersion=24, maxSdkVersion=32")
+    fake_apksigner(monkeypatch, twice, {})
+    with pytest.raises(apk.ApkError, match="ровно одного"):
+        apk.verify_apk(DATA / "v3-rotated-6.apk")
+
+
 def test_multiple_verified_signers_are_not_reduced_to_first(tmp_path, monkeypatch):
     import subprocess
     monkeypatch.setenv("APPSHELF_APKSIGNER", "apksigner")
