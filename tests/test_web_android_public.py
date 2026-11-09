@@ -115,6 +115,15 @@ def test_owner_adds_to_public_and_worker_fills_it(web, conn, tmp_path):
     assert 'href="/android/public/add"' in page                                          # «Добавить в публичную»
 
 
+def test_busy_public_shelf_polls_its_own_status(web, conn, tmp_path):
+    """Адрес опроса — в <script>: там «&amp;» браузер не раскодирует, и сервер ответил бы о личной полке."""
+    web.client.post("/android/public/add/rustore", data={"package": PKG, "name": "Пример"})
+    page = web.client.get("/android/public").text
+    url = json.loads(re.search(r"fetch\((\"[^\"]*\")\)", page).group(1))
+    assert url == "/api/android/status?person=1&public=1"
+    assert web.client.get(url).json() == {"busy": True, "apps": {PKG: "queued"}}
+
+
 def test_personal_and_public_are_separate(web, conn, tmp_path):
     add_public(web, conn, tmp_path, label="Публичное")
     web.sources.apks["https://bank.example/mine.apk"] = make_apk(tmp_path / "m.apk", package="ru.mine", label="Своё")
