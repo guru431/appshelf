@@ -33,7 +33,8 @@
 </div>
 <form method="post" action="{{ post_url('/blocked/add') }}">
   <p class="hint">Нет в справочнике — вставьте ссылку App Store или ID приложения.</p>
-  <div class="field"><input name="ref" value="{{ add_ref }}" placeholder="apps.apple.com/ru/app/…/id492224193 или 492224193"><button>Добавить</button></div>
+  <div class="field"><input name="ref" value="{{ add_ref }}" placeholder="Ссылка или ID" aria-describedby="add-ref-hint"><button>Добавить</button></div>
+  <p class="hint" id="add-ref-hint">Например, apps.apple.com/ru/app/…/id492224193 или 492224193</p>
   {% if add_error %}<p class="err">{{ add_error }}</p>{% endif %}
 </form>
 {% endblock %}

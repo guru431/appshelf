@@ -5,9 +5,9 @@
   <span class="meta">{% if refreshing and acct.session != 'ok' %}ждёт входа в Apple ID
     {%- elif refreshing == 'refresh_history' %}обновляется…
     {%- elif refreshing == 'check_removed' %}история обновлена, проверяю справочник удалённых… <span id="progress">{{ progress }}</span>
-    {%- elif refreshed %}обновлено {{ refreshed[:16] | replace('T', ' ') }} UTC{% else %}ещё не загружалась{% endif %}</span>
+    {%- elif refreshed %}обновлено <span class="date">{{ refreshed[:16] | replace('T', ' ') }} UTC</span>{% else %}ещё не загружалась{% endif %}</span>
 </form>
-{% if refresh_error and not refreshing %}<p class="err">Последний раз не удалось обновить ({{ refresh_error_at[:16] | replace('T', ' ') }} UTC): {{ refresh_error }}</p>{% endif %}
+{% if refresh_error and not refreshing %}<p class="err">Последний раз не удалось обновить (<span class="date">{{ refresh_error_at[:16] | replace('T', ' ') }} UTC</span>): {{ refresh_error }}</p>{% endif %}
 <p class="hint">Удалённых из App Store приложений Apple в истории не показывает — те, что есть у вашего Apple ID,
 добавляются сюда из справочника (метка «удалено из App Store»). Весь справочник и добавление по ссылке —
 на странице <a href="/blocked">«Удалённые»</a>.</p>

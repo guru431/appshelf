@@ -86,7 +86,7 @@
 <div class="hint">
   <p>На iPhone в App Store должен быть выполнен вход этим же Apple ID ({{ acct.email }}) — иначе приложение при запуске
     попросит пароль. <a href="/help#apple">Справка</a></p>
-  <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] }}{% else %}ещё не запускалась{% endif %}</p>
+  <p>Ночная проверка: {% if nightly[0] %}<span class="date">{{ nightly[0][:16] | replace('T', ' ') }} UTC</span> —{{ nightly[1] }}{% else %}ещё не запускалась{% endif %}</p>
 </div>
 {{ dialog('Как установить на iPhone', ios_steps) }}
 {% endblock %}

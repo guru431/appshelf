@@ -405,14 +405,22 @@ def test_pending_uploads_tray_link_and_plain_errors(web, conn, cfg, clock, acct,
                   endpoint: '/android/uploads?person=%d', package: '%s', target: '/android', size: 10,
                   fingerprint: '1'.repeat(64), filename: 'card.apk', name: '', loaded: 0, state: 'paused',
                   message: 'На паузе', updated: Date.now(), blob: null});
+                tx.objectStore('uploads').put({key: 'loose', clientId: 'e'.repeat(32), owner: %d,
+                  endpoint: '/android/uploads?person=%d', package: '', target: '/android', size: 10,
+                  fingerprint: '2'.repeat(64), filename: 'loose.apk', name: '', loaded: 0, state: 'paused',
+                  message: 'На паузе', updated: Date.now(), blob: null});
                 tx.oncomplete = resolve; tx.onerror = reject;
               };
               r.onerror = reject;
-            })""" % (acct.user_id, acct.user_id, PKG))
+            })""" % (acct.user_id, acct.user_id, PKG, acct.user_id, acct.user_id))
             page.reload()
             tray = page.get_by_role("region", name="Загрузки APK")
-            link = tray.get_by_role("link", name="Выбрать тот же файл для продолжения", exact=True)
-            assert link.get_attribute("href") == f"/android?person={acct.user_id}#source-{PKG}"
+            links = tray.get_by_role("link", name="Выбрать тот же файл для продолжения", exact=True)
+            links.first.wait_for()
+            # новое приложение продолжается из сегмента «Файл» страницы «Добавить», версия карточки — из её диалога
+            assert sorted(links.evaluate_all("ls => ls.map(l => l.getAttribute('href'))")) == [
+                f"/android/add?person={acct.user_id}#add-file", f"/android?person={acct.user_id}#source-{PKG}"]
+            link = tray.locator(f'a[href$="#source-{PKG}"]')
             page.evaluate("window.trayButton = document.querySelector('[aria-label=\"Загрузки APK\"] [data-upload-cancel]')")
             page.evaluate("dispatchEvent(new Event('online'))")
             page.wait_for_timeout(500)
@@ -702,7 +710,13 @@ CONTRAST = '''e => {
   return (Math.max(lum(bg),lum(fg))+.05)/(Math.min(lum(bg),lum(fg))+.05);
 }'''
 NEW_TEXT = (".tip li, .tip .meta, .tip h2, .sortbar a, .tag, .add-seg a, .field-hint, [data-device-summary], .help p, "
-            ".help h3, .help-toggle, .mine-filter, .row .body .meta, .file-pick .btn")
+            ".help h3, .help-toggle, .mine-filter, .row .body .meta, .file-pick .btn, .done")
+# ширина текста плейсхолдера и место под него в поле
+PLACEHOLDER_FIT = '''e => {
+  const s = getComputedStyle(e), c = document.createElement('canvas').getContext('2d');
+  c.font = s.font;
+  return [c.measureText(e.placeholder).width, e.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)];
+}'''
 
 
 @pytest.mark.integration
@@ -761,6 +775,8 @@ def test_help_tip_segments_and_removed_filter(web, conn, cfg, clock, acct, width
             assert dialog.is_hidden()
             page.get_by_label("Действия с Test App", exact=True).click()
             assert page.locator(".more[open]").get_by_role("button", name="Скопировать ссылку").is_visible()
+            danger = page.locator(".more[open]").get_by_role("button", name="Снять с публикации")
+            assert danger.evaluate(CONTRAST) >= 4.5   # тёмная тема: красный на подложке меню
             page.keyboard.press("Escape")
             if desktop:
                 page.get_by_role("button", name="Показать QR-код для Test App").click()
@@ -781,6 +797,8 @@ def test_help_tip_segments_and_removed_filter(web, conn, cfg, clock, acct, width
             page.goto("https://apps.example/blocked")
             rows = page.locator(".card.list .row")
             assert rows.count() == 1 and "Test App" in rows.first.inner_text()
+            text, room = page.locator('input[name="ref"]').evaluate(PLACEHOLDER_FIT)
+            assert text <= room, (text, room)   # пример ссылки — подсказкой под полем
             page.get_by_role("link", name="Нет в аккаунте · 1").click()
             assert "ВТБ Онлайн" in rows.first.inner_text() and rows.count() == 1
             assert not errors

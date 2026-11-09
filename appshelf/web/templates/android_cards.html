@@ -164,7 +164,7 @@
     <h2 id="signer-title-{{ a.package }}">Сравнить версии · {{ a.name }}</h2>
     {% for version, label in [(a.current, 'Текущая'), (a.pending, 'Ожидающая')] if version %}
     <h3>{{ label }} · {{ version['version_name'] }} ({{ version['version_code'] }})</h3>
-    <p class="meta">{{ sources.get(version['source'], version['source']) }} · получена {{ version['downloaded_at'][:16] | replace('T', ' ') }} UTC</p>
+    <p class="meta">{{ sources.get(version['source'], version['source']) }} · получена <span class="date">{{ version['downloaded_at'][:16] | replace('T', ' ') }} UTC</span></p>
     <p class="meta">{{ 'Криптографическая подпись APK проверена' if version['signature_verified'] else 'Криптографическая проверка этой сохранённой версии не подтверждена' }}</p>
     <code>{{ version['signer'] }}</code><button type="button" class="sm secondary" data-copy="{{ version['signer'] }}">Скопировать отпечаток</button>
     {% endfor %}

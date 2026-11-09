@@ -361,7 +361,7 @@
       display(item.box, record); controls(item.box, record.key, record);
       // Новая версия карточки продолжается только из её формы: каталог с открытым диалогом источника.
       item.link.href = record.package ? record.target + '?person=' + currentUser + '#source-' + encodeURIComponent(record.package)
-        : record.target + '/add?person=' + currentUser;
+        : record.target + '/add?person=' + currentUser + '#add-file';
       item.link.hidden = !!(record.blob || localFiles.has(record.key));
     });
   }

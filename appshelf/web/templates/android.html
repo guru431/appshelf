@@ -41,8 +41,8 @@
 <details class="card"><summary>Гостевой доступ</summary>
   <p>Адрес для гостей: <a href="{{ guest.url }}">{{ guest.url }}</a> — гость вводит PIN и видит только этот список.</p>
   {% if not guest.set_at %}<p class="err">Задайте PIN — до этого гости ничего не видят.</p>
-  {% else %}<p class="meta">PIN задан {{ guest.set_at[:16] | replace('T', ' ') }} UTC.</p>{% endif %}
-  {% if guest.closed %}<p class="err">Ввод PIN закрыт до {{ guest.closed[:16] | replace('T', ' ') }} UTC: за сутки слишком
+  {% else %}<p class="meta">PIN задан <span class="date">{{ guest.set_at[:16] | replace('T', ' ') }} UTC</span>.</p>{% endif %}
+  {% if guest.closed %}<p class="err">Ввод PIN закрыт до <span class="date">{{ guest.closed[:16] | replace('T', ' ') }} UTC</span>: за сутки слишком
     много неверных PIN. Гости, уже вводившие PIN, полку видят.</p>
   <form method="post" action="{{ post_url('/android/public/pin/reopen') }}"><button class="tint">Открыть ввод PIN</button></form>{% endif %}
   <form method="post" action="{{ post_url('/android/public/pin') }}" class="field">
@@ -55,7 +55,7 @@
 {{ install_hints() }}
 <div class="hint">
   {% if public %}<p>Публичная полка — одна на сервер: её видят все участники и гости по PIN, наполняет владелец.</p>{% endif %}
-  <p>Ночная проверка: {% if nightly[0] %}{{ nightly[0][:16] | replace('T', ' ') }} UTC — {{ nightly[1] or 'Android-полки не проверялись' }}{% else %}ещё не запускалась{% endif %}
+  <p>Ночная проверка: {% if nightly[0] %}<span class="date">{{ nightly[0][:16] | replace('T', ' ') }} UTC</span> —{{ nightly[1] or 'Android-полки не проверялись' }}{% else %}ещё не запускалась{% endif %}
     · <a href="/help#android">Справка</a></p>
 </div>
 {% endblock %}

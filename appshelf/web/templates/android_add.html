@@ -138,7 +138,7 @@
 <form method="post" action="{{ post_url(prefix ~ '/add/link') }}" class="card">
   <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://…" required>
     <span class="field-hint">Страница в Google Play, AppGallery, F-Droid, IzzyOnDroid, APKPure, RuStore, репозиторий
-      GitHub{% if not public %}, APK на 4PDA{% endif %} или прямая ссылка на файл .apk</span></label>
+      GitHub, Codeberg или GitLab{% if not public %}, APK на 4PDA{% endif %} или прямая ссылка на файл .apk</span></label>
   <label>Название (необязательно)<input name="name"></label>
   <label class="check" data-link-apkpure{% if 'apkpure' not in link_url | lower %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск
     APKPure: он распространял подменённые APK; если пакета нет в RuStore, подпись не с чем сверить</label>

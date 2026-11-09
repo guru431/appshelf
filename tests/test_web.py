@@ -381,7 +381,7 @@ def test_login_after_empty_history_does_not_reload_it(make_web, cfg, conn, clock
     r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
     assert r.status_code == 303 and conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
     text = wb.client.get("/history").text
-    assert "ещё не загружалась" not in text and f"обновлено {clock.iso()[:16].replace('T', ' ')} UTC" in text
+    assert "ещё не загружалась" not in text and f"обновлено <span class=\"date\">{clock.iso()[:16].replace('T', ' ')} UTC" in text
     assert ("СберБанк Онлайн" if catalog_row else "История загружена — покупок в ней нет") in text
 
 

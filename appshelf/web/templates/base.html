@@ -169,6 +169,7 @@ main > .hint { margin-left: 4px; margin-right: 4px; }
 .err { color: var(--err); }
 .done { color: var(--ok); white-space: nowrap; }
 .date { white-space: nowrap; }  /* Chrome переносит «2024-05-⏎01» после дефиса */
+.whats-new { overflow-wrap: anywhere; }  /* текст источника: адреса без пробелов */
 .empty { padding: 48px 16px; color: var(--muted); text-align: center; }
 .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--fill); color: var(--muted);
        font-size: 12px; font-weight: 600; letter-spacing: 0; white-space: nowrap; vertical-align: 2px; }
@@ -272,7 +273,8 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 .action-list > button { width: 100%; margin-top: 6px; }
 .action-list > a { display: flex; justify-content: flex-start; text-align: left; margin-bottom: 6px;
                    min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
-.action-list .danger { margin-top: 8px; border-top: 1px solid var(--line); }
+.action-list .danger { margin-top: 8px; border-top: 1px solid var(--line);
+                       background-color: var(--raised); }  /* --err на --errtint поверх --raised — 3.96:1 в тёмной теме */
 [hidden] { display: none !important; }
 .shelf-filter select, dialog select { min-height: 44px; max-width: 100%; padding: 8px; border-radius: 10px;
                                     border: 1px solid var(--line); background: var(--raised); color: var(--fg); font: inherit; }
