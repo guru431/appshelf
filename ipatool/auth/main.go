@@ -80,7 +80,9 @@ func main() {
     if err!=nil { fail(1,"error","native authentication location unavailable") }
     if os.Geteuid()==0 { fail(1,"usage","run authentication as the application user") }
     if os.Getenv("XDG_CACHE_HOME")=="" {
-        cache:=filepath.Join(filepath.Dir(exe),"..","data","cache","ipatool-auth")
+        // Root-owned, beside the binary: upstream checks a cached library's SHA-256 and only then loads it,
+        // so the application user must not be able to replace it in between. deploy/build-ipatool.sh prepares it.
+        cache:=filepath.Join(filepath.Dir(exe),"ipatool-auth-cache")
         if err=os.MkdirAll(cache,0700); err!=nil { fail(1,"save_failed","native authentication cache unavailable") }
         _=os.Setenv("XDG_CACHE_HOME",cache)
     }

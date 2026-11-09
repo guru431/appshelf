@@ -219,7 +219,44 @@ def test_ipatool_built_from_deployed_sources_and_checked_on_server_before_swap()
     build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")
     assert '"tar -C $R -cf - ipatool"' in build
     swap = build.index('mv -f "$T/ipatool" "$R/bin/ipatool"')
-    assert build.index('sudo ldd "$T/bin/ipatool"') < swap and build.index('"$T/bin/ipatool" help') < swap
+    assert build.index('ldd "$T/ipatool"') < swap and build.index('"$T/ipatool" > /dev/null') < swap
+
+
+def server_script():
+    build = (DEPLOY / "build-ipatool.sh").read_text(encoding="utf-8")
+    return build[build.index('"${BUILD[@]}" "tar -C $W -cf - bin"'):]
+
+
+def test_new_binaries_run_on_server_only_as_appshelf():
+    # ldd, help и --help исполняли ELF с хоста сборки от root, хотя в работе им нужен только appshelf
+    script = server_script()
+    runs = [s.strip() for s in script.splitlines()
+            if not s.strip().startswith("#") and re.search(r'ldd |"\$T/ipatool(-auth)?" (>|--)', s)]
+    assert len(runs) == 5 and all("sudo -u appshelf " in s for s in runs), runs
+    assert not re.search(r'sudo "\$T|sudo ldd', script)
+    # проверяемые копии ставит root со своим режимом; распакованный архив appshelf не видит
+    assert 'install -d -o root -g root -m 0711 "$T"' in script
+    assert script.index('install -o root -g root -m 0755 "$T/bin/ipatool" "$T/ipatool"') < script.index('ldd "$T/ipatool"')
+
+
+def test_auth_cache_is_beside_binary_and_root_owned():
+    # кэш ложился в <bin>/../data/cache: без ссылки data → данные install.sh отдавал его root, вход ломался;
+    # а у appshelf на запись helper сверял SHA-256 Unicorn и загружал .so раздельно — файл можно было подменить
+    main = (DEPLOY.parent / "ipatool" / "auth" / "main.go").read_text(encoding="utf-8")
+    assert 'filepath.Join(filepath.Dir(exe),"ipatool-auth-cache")' in main and '"data"' not in main
+    script = server_script()
+    assert 'C="$R/bin/ipatool-auth-cache"' in script and "data/cache" not in script
+    prepare = script.index('sudo -u appshelf env XDG_CACHE_HOME="$S" "$T/ipatool-auth" --prepare')
+    owned = script.index('sudo chown -R root:root "$S"', prepare)
+    links = script.index("-links +1", owned)
+    readable = script.index('sudo chmod -R u=rwX,go=rX "$S"', links)
+    assert readable < script.index('sudo mv "$S" "$C"') < script.index('mv -f "$T/ipatool-auth" "$R/bin/ipatool-auth"')
+
+
+def test_build_leaves_no_preparing_helper_copy():
+    script = server_script()
+    assert ".ipatool-auth-preparing" not in script.replace('rm -rf "$T" "$S" "$R/bin/.ipatool-auth-preparing"', "")
+    assert 'trap "sudo rm -rf $T $S" EXIT' in script
 
 
 def test_web_unit_sets_tmpdir():
