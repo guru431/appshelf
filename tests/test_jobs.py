@@ -924,6 +924,16 @@ def test_download_after_move_goes_to_new_shelf(ctx, cfg, conn, clock, tmp_path):
     assert (cfg.shelf_root(moved) / "7-1.2.3").is_dir() and not cfg.shelf_root(petr).exists()
 
 
+def test_fetch_of_unpublished_app_does_not_download(ctx, cfg, conn, clock, tmp_path):
+    acct = published(conn, clock, app_id=7)
+    ctx.tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    store.take_job(conn)
+    jobs.unpublish(cfg, conn, acct, 7)                                 # сняли, пока скачивание ждало замок
+    with pytest.raises(store.AppGone):
+        jobs.fetch_version(ctx.env, conn, acct, 7, cfg.tmp_dir / "web")
+    assert ctx.tool.calls == [] and not cfg.shelf_root(acct).exists()
+
+
 def broken_move(cfg, conn, petr, monkeypatch):
     """rotate-token упал после переименования каталога (база занята на set_shelf): shelf — прежний, shelf_next — новый."""
     def locked(*a):

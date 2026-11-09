@@ -188,6 +188,8 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
         if fresh is None:  # Apple ID удалили, пока ждали замок: каталог полки в архиве заново не создаём
             raise store.AccountGone(acct.id)
         acct = _finish_move(cfg, c, fresh)
+        if not store.has_app(c, acct.id, app_id):  # сняли с публикации, пока ждали замок: не держать его скачиванием
+            raise store.AppGone(app_id)
         free = free_space(env)
         if free < FREE_MIN:
             raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно 4 ГБ")
