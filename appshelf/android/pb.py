@@ -2,6 +2,7 @@
 номерам и разбор в {номер: [значения]}. Схем нет: номера полей — в play.py, по заметкам живой проверки."""
 from __future__ import annotations
 
+MAX_GROUP_DEPTH = 100  # protobuf-java и upb ограничивают вложенность сотней
 
 class PbError(ValueError):
     """Байты — не protobuf: обрезано, неизвестный тип поля, путь ведёт не в сообщение."""
@@ -46,8 +47,11 @@ def _varint(data: bytes, p: int) -> tuple[int, int]:
             return n, p
 
 
-def _skip(data: bytes, p: int, wt: int, num: int) -> int:
-    """Конец значения с типом wt, начатого с p; группа — до своего конца."""
+def _skip(data: bytes, p: int, wt: int, num: int, depth: int = 0) -> int:
+    """Конец значения с типом wt, начатого с p; группа — до своего конца. Вложенность групп ограничена: иначе
+    несколько КБ байтов 0x0b дают RecursionError мимо обработчиков PbError."""
+    if depth > MAX_GROUP_DEPTH:
+        raise PbError("слишком глубокая вложенность групп")
     if wt == 0:
         return _varint(data, p)[1]
     if wt == 1:
@@ -66,7 +70,7 @@ def _skip(data: bytes, p: int, wt: int, num: int) -> int:
                 if key >> 3 != num:
                     raise PbError("чужой конец группы")
                 return p
-            p = _skip(data, p, key & 7, key >> 3)
+            p = _skip(data, p, key & 7, key >> 3, depth + 1)
     else:
         raise PbError(f"неизвестный тип поля {wt}")
     if q > len(data):
