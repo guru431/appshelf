@@ -34,6 +34,9 @@
     <div class="meta" data-apk-meta>{{ version_meta(a, v) }}</div>
     <div class="meta" data-downloaded hidden></div>
     {% endif %}
+    {# Текст источника — недоверенный: только экранированный текст, переводы строк — <br>; длина ограничена в db #}
+    {% if v and a.whats_new %}<details class="whats-new"><summary>Что нового в {{ v['version_name'] }}</summary>
+      <p class="meta">{% for line in a.whats_new.split('\n') %}{% if not loop.first %}<br>{% endif %}{{ line }}{% endfor %}</p></details>{% endif %}
     </div>
     {% if v %}
     {% if a.versions | length > 1 %}

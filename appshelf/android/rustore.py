@@ -26,6 +26,7 @@ class StoreApp:
     price: int             # > 0 — платное: без входа в RuStore не скачать
     icon_url: str
     size: int
+    whats_new: str = ""    # «Что нового» текущей версии; в поиске нет — ""
 
 
 def search(http: Http, query: str, limit: int = 20) -> list[StoreApp]:
@@ -71,6 +72,7 @@ def _app(a) -> StoreApp:
         return StoreApp(app_id=int(a["appId"]), package=str(a["packageName"]), name=str(a.get("appName") or ""),
                         version_name=str(a.get("versionName") or ""), version_code=int(a.get("versionCode") or 0),
                         signature=sig if len(sig) == 64 else "", price=int(a.get("price") or 0),
-                        icon_url=str(a.get("iconUrl") or ""), size=int(a.get("fileSize") or 0))
+                        icon_url=str(a.get("iconUrl") or ""), size=int(a.get("fileSize") or 0),
+                        whats_new=a["whatsNew"] if isinstance(a.get("whatsNew"), str) else "")
     except (AttributeError, KeyError, TypeError, ValueError):
         raise SourceError(UNKNOWN) from None

@@ -31,7 +31,7 @@ def test_direct_source_links_need_no_file_transfer_or_personal_session(monkeypat
     http = FakeHttp()
     src = sources.Sources(http, sleep=lambda _: None, pause=0)
     asset = "https://github.com/author/app/releases/download/v2/app.apk"
-    monkeypatch.setattr(src, "github_app", lambda ref: SimpleNamespace(asset_url=asset))
+    monkeypatch.setattr(src, "release_app", lambda source, ref: SimpleNamespace(asset_url=asset))
     assert src.download_url("github", "author/app") == asset
     assert src.download_url("fourpda", FILE) == FILE
     assert src.download_url("link", "https://example.org/app.apk") == "https://example.org/app.apk"

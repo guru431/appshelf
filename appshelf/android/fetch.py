@@ -21,7 +21,8 @@ from .sources import ACCOUNT_GONE, SplitOnly
 SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 SOURCE_NAMES = {"rustore": "RuStore", "link": "сайтом", "upload": "файлом", "play": "Google Play",
                 "appgallery": "AppGallery", "fdroid": "F-Droid", "fdroid_archive": "архивом F-Droid",
-                "izzy": "IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA"}
+                "izzy": "IzzyOnDroid", "github": "GitHub", "apkpure": "APKPure", "fourpda": "4PDA",
+                "codeberg": "Codeberg", "gitlab": "GitLab"}
 UPLOAD_LOST = "файл загрузки потерян при перезапуске сервера — загрузите его заново"
 SPLIT_UPDATE = "новая версия только набором файлов — на полке прежняя"
 SIGNER_DIFFERS = "подписан не так, как в RuStore: не встанет поверх версии оттуда"
@@ -216,6 +217,11 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
                                         signer_from=signer_from, allow_older=allow_older)
             if notice and result in ("updated", "pending"):
                 db.set_status(c, shelf.id, package, "ok", notice)
+            if got.whats_new and result in ("updated", "pending"):
+                row = c.execute("SELECT version_code FROM android_versions WHERE shelf_id=? AND package=? AND role=?",
+                                (shelf.id, package, "current" if result == "updated" else "pending")).fetchone()
+                if row is not None:
+                    db.set_whats_new(c, shelf.id, package, row["version_code"], got.whats_new)
             app = db.get_app(c, shelf.id, package)
             if source == "fourpda" and app is not None and app["source"] == "fourpda":
                 track_attachment = result == "updated"
@@ -409,6 +415,7 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
             store_apk(env, c, shelf, path, source=version["source"], source_ref=original["source_ref"],
                       expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon,
                       allow_older=True)
+        db.copy_whats_new(c, source_id, shelf.id, package)
         if fresh:
             db.set_source(c, shelf.id, package, original["source"], original["source_ref"], original["source_page"])
             c.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=? AND package=?",

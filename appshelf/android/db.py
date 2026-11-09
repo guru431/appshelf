@@ -28,6 +28,9 @@ JOB_ACCOUNT = """COALESCE(CASE WHEN json_valid(j.payload) AND json_extract(j.pay
                           (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
                                AND a.package = j.package AND a.source = 'play'))"""
 RUNNABLE = f"(j.kind = 'copy' OR NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok'))"
+WHATS_NEW_MAX = 2000
+# Управляющие символы (кроме перевода строки и табуляции) и невидимые символы направления текста
+WHATS_NEW_JUNK = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,7 @@ class AppView:
     paid: bool = False      # Google Play: купленное
     versions: tuple[sqlite3.Row, ...] = ()  # доступные APK по убыванию versionCode, без pending
     source_page: str = ""   # страница добавления, если её нельзя восстановить из source_ref (4PDA)
+    whats_new: str = ""     # «Что нового» текущей версии из источника — недоверенный текст
 
 
 # --- полки -------------------------------------------------------------------
@@ -139,6 +143,7 @@ def delete_shelf(c, shelf_id: int) -> None:
     c.execute("DELETE FROM state WHERE key LIKE ?", (f"android_rejected:{shelf_id}:%",))
     c.execute("DELETE FROM state WHERE key LIKE ?", (pending_mail_key(shelf_id, "%"),))
     c.execute("DELETE FROM state WHERE key LIKE ?", (updated_key(shelf_id, "%"),))
+    c.execute("DELETE FROM state WHERE key LIKE ?", (f"android_whatsnew:{shelf_id}:%",))
 
 
 # --- приложения --------------------------------------------------------------
@@ -192,14 +197,19 @@ def set_source(c, shelf_id: int, package: str, source: str, source_ref: str, sou
 
 def list_apps(c, shelf_id: int) -> list[AppView]:
     out = []
+    prefix = _whats_new_key(shelf_id, "")
+    notes = {r["key"][len(prefix):]: json.loads(r["value"]) for r in c.execute(
+        "SELECT key, value FROM state WHERE key LIKE ?", (prefix + "%",)) if r["key"].startswith(prefix)}
     for a in c.execute("SELECT * FROM android_apps WHERE shelf_id=?", (shelf_id,)).fetchall():
         versions = c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? "
                              "ORDER BY version_code DESC, (role='current') DESC, id DESC", (shelf_id, a["package"])).fetchall()
         vs = {r["role"]: r for r in reversed(versions)}
+        current = vs.get("current")
         out.append(AppView(a["package"], a["name"], a["source"], a["source_ref"], a["signer"], a["status"],
-                           a["last_error"], a["checked_at"], a["check_result"], vs.get("current"),
+                           a["last_error"], a["checked_at"], a["check_result"], current,
                            vs.get("previous"), vs.get("kept"), vs.get("pending"), bool(a["paid"]),
-                           tuple(v for v in versions if v["role"] != "pending"), a["source_page"]))
+                           tuple(v for v in versions if v["role"] != "pending"), a["source_page"],
+                           notes.get(a["package"], {}).get(str(current["version_code"]), "") if current else ""))
     return sorted(out, key=lambda v: (v.name.casefold(), v.package))
 
 
@@ -226,7 +236,7 @@ def apps_to_check(c) -> list[sqlite3.Row]:
     """Ночная проверка: все полки; свой файл (upload) не проверяется, Google Play — только аккаунтом с действующим
     подключением."""
     return c.execute("SELECT * FROM android_apps WHERE status IN ('ok', 'error') AND (source IN ('rustore', 'link', "
-                     "'appgallery', 'fdroid', 'fdroid_archive', 'izzy', 'github', 'apkpure') "
+                     "'appgallery', 'fdroid', 'fdroid_archive', 'izzy', 'github', 'codeberg', 'gitlab', 'apkpure') "
                      f"OR source = 'play' AND google_account_id IN ({PLAY_OK})) ORDER BY shelf_id, package").fetchall()
 
 
@@ -237,8 +247,9 @@ def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
                                             (shelf_id, package))]
         c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=?", (shelf_id, package))
         c.execute("DELETE FROM android_apps WHERE shelf_id=? AND package=?", (shelf_id, package))
-        c.execute("DELETE FROM state WHERE key IN (?, ?, ?)", (_rejected_key(shelf_id, package),
-                  pending_mail_key(shelf_id, package), updated_key(shelf_id, package)))
+        c.execute("DELETE FROM state WHERE key IN (?, ?, ?, ?)", (_rejected_key(shelf_id, package),
+                  pending_mail_key(shelf_id, package), updated_key(shelf_id, package),
+                  _whats_new_key(shelf_id, package)))
         c.execute("UPDATE android_jobs SET status='cancelled', error='снято с полки' "
                   "WHERE shelf_id=? AND package=? AND status='queued'", (shelf_id, package))
     remove_dirs(root, dirs)
@@ -360,6 +371,33 @@ def _rejected_key(shelf_id: int, package: str) -> str:
 def pending_mail_key(shelf_id: int, package: str) -> str:
     """Метка «письмо о версии с другим ключом отправлено»: снимается решением (принять, отклонить) и снятием с полки."""
     return f"android_pending:{shelf_id}:{package}"
+
+
+def _whats_new_key(shelf_id: int, package: str) -> str:
+    return f"android_whatsnew:{shelf_id}:{package}"
+
+
+def set_whats_new(c, shelf_id: int, package: str, version_code: int, text: str) -> None:
+    """«Что нового» версии из источника — в state ({versionCode: текст}, три последние версии). Текст недоверенный:
+    управляющие символы убраны, длина ограничена, показ — только как текст (без HTML и Markdown)."""
+    text = WHATS_NEW_JUNK.sub("", text.replace("\r\n", "\n").replace("\r", "\n"))
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in text.split("\n"))).strip()
+    if len(text) > WHATS_NEW_MAX:
+        text = text[:WHATS_NEW_MAX].rstrip() + "…"
+    if not text:
+        return
+    key = _whats_new_key(shelf_id, package)
+    row = c.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
+    notes = json.loads(row["value"]) if row is not None else {}
+    notes[str(version_code)] = text
+    notes = dict(sorted(notes.items(), key=lambda kv: int(kv[0]))[-3:])
+    c.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, ?)", (key, json.dumps(notes, ensure_ascii=False)))
+
+
+def copy_whats_new(c, from_shelf: int, to_shelf: int, package: str) -> None:
+    """Копия на публичную полку — вместе с текстами «Что нового» её версий."""
+    c.execute("INSERT OR REPLACE INTO state(key, value) SELECT ?, value FROM state WHERE key=?",
+              (_whats_new_key(to_shelf, package), _whats_new_key(from_shelf, package)))
 
 
 def _rejected(c, shelf_id: int, package: str) -> dict:

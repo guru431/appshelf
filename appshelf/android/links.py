@@ -1,6 +1,7 @@
 """Поле «Ссылка на приложение или APK» (план этапа 5, Task 1): страница приложения в магазине → (источник, ref),
 иначе — прямая ссылка на APK. Страницы не скачиваются — пакет или ID берётся из самого адреса. ref: пакет (play,
-fdroid, apkpure, rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link, fourpda)."""
+fdroid, apkpure, rustore), ID AppGallery (C…: пакет по нему узнаёт android/appgallery.py), адрес (link, fourpda),
+путь репозитория (github, codeberg, gitlab)."""
 from __future__ import annotations
 
 import re
@@ -8,7 +9,7 @@ import urllib.parse
 
 from ..apk import PACKAGE_RE
 from .net import FetchError, SourceError, check_url
-from . import fourpda, github
+from . import forge, fourpda, github
 
 APPGALLERY_ID_RE = re.compile(r"^C\d{6,12}$")
 PLAY_HOSTS = ("play.google.com",)
@@ -19,7 +20,8 @@ RUSTORE_HOSTS = ("rustore.ru", "www.rustore.ru", "apps.rustore.ru")
 APPGALLERY_MARKS = ("app", "appdl", "outGoingApp")   # …/app/C…, /appdl/C…, /outGoingApp/C…
 APKPURE_TAILS = ("download", "versions")
 NAMES = {"play": "Google Play", "appgallery": "AppGallery", "fdroid": "F-Droid", "apkpure": "APKPure",
-         "rustore": "RuStore", "fdroid_archive": "архива F-Droid", "izzy": "IzzyOnDroid", "github": "GitHub"}
+         "rustore": "RuStore", "fdroid_archive": "архива F-Droid", "izzy": "IzzyOnDroid", "github": "GitHub",
+         **forge.NAMES}
 
 
 def parse(url: str) -> tuple[str, str]:
@@ -45,6 +47,10 @@ def parse(url: str) -> tuple[str, str]:
         if not github.parse_ref(ref):
             raise FetchError("не похоже на репозиторий GitHub")
         return source, ref
+    if source in forge.SOURCES:
+        if not forge.parse_ref(source, ref):
+            raise FetchError(f"не похоже на репозиторий {NAMES[source]}")
+        return source, forge.parse_ref(source, ref)
     if source in ("fdroid", "fdroid_archive", "izzy") and "@" in ref:
         from .fdroid_index import split_ref
         try:
@@ -70,6 +76,9 @@ def page_url(source: str, ref: str, saved: str = "") -> str:
     if source == "github":
         repo = github.parse_ref(ref)
         return f"https://github.com/{repo}" if repo else ""
+    if source in forge.SOURCES:
+        repo = forge.parse_ref(source, ref)
+        return f"https://{forge.HOSTS[source]}/{repo}" if repo else ""
     if source == "appgallery":
         if APPGALLERY_ID_RE.fullmatch(ref):
             return f"https://appgallery.huawei.com/app/{ref}"
@@ -110,6 +119,13 @@ def _page(u: urllib.parse.SplitResult) -> tuple[str, str] | None:
     if host == "github.com" and (len(parts) == 2 or len(parts) == 3 and parts[2] == "releases"
                                  or len(parts) == 4 and parts[2:] == ["releases", "latest"]):
         return "github", "/".join(parts[:2])
+    # Страница проекта или его выпусков; ссылка на сам файл .apk остаётся прямой ссылкой.
+    if host == forge.HOSTS["codeberg"] and (len(parts) == 2 or len(parts) == 3 and parts[2] == "releases"
+                                            or len(parts) == 4 and parts[2:] == ["releases", "latest"]):
+        return "codeberg", "/".join(parts[:2])
+    if host == forge.HOSTS["gitlab"] and len(parts) >= 2 and parts[0] != "-" and not parts[-1].endswith(".apk") and (
+            "-" not in parts or parts[parts.index("-") + 1:] in (["releases"], ["releases", "permalink", "latest"])):
+        return "gitlab", "/".join(parts[:parts.index("-")] if "-" in parts else parts)
     if host in FDROID_HOSTS and len(parts) == 2 and parts[0] == "archive":
         match = re.fullmatch(r"(.+)_(\d+)\.apk", parts[1])
         if match:

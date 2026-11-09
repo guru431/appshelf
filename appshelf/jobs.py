@@ -542,8 +542,9 @@ def _merge_shelves(cfg: Config, c, src, dst, moved: list) -> None:
         if pkg in theirs:
             continue
         c.execute("UPDATE android_apps SET shelf_id=? WHERE shelf_id=? AND package=?", (dst.id, src.id, pkg))
-        # решения о подписи и метка обновления — вместе с пакетом
-        for key in (android_db._rejected_key, android_db.pending_mail_key, android_db.updated_key):
+        # решения о подписи, метка обновления и «Что нового» — вместе с пакетом
+        for key in (android_db._rejected_key, android_db.pending_mail_key, android_db.updated_key,
+                    android_db._whats_new_key):
             c.execute("UPDATE state SET key=? WHERE key=?", (key(dst.id, pkg), key(src.id, pkg)))
         for v in c.execute("SELECT id, dir, version_code FROM android_versions WHERE shelf_id=? AND package=?",
                            (src.id, pkg)).fetchall():

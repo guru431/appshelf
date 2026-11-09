@@ -1,0 +1,20 @@
+{
+ "id": 13496490,
+ "tag_name": "15.1.0",
+ "name": "15.1.0",
+ "body": "### IMPORTANT NOTE: This release enables shrinking and minification. If you run into any crashes, please report them with logs if possible.\r\n\r\n🚀 **Improvements**  \r\n- Improved DEX optimization for the build for performance and minification\r\n- Improved SVG rendering to use Glide for performance\r\n- Open upstream repository of a fork when clicking the fork card\r\n\r\n🐛 **Bug Fixes**  \r\n- Fixed merge PR when approvals are set and user is admin\r\n- Fixed notifications default mode\r\n- Fixed invalid issue opened via URL scheme\r\n\r\n📝 **Notes**  \r\n- Use Forgejo **17.0.x** OR Gitea **28.x** or above.\r\n\r\n📩 **Download Files**  \r\n- [Downloads](https://codeberg.org/gitnex/GitNex#user-content-downloads)",
+ "draft": false,
+ "prerelease": false,
+ "published_at": "2026-11-08T09:10:24+01:00",
+ "assets": [
+  {
+   "id": 2187714,
+   "name": "15.1.0.apk",
+   "size": 6251177,
+   "created_at": "2026-11-08T09:09:49+01:00",
+   "uuid": "248541bd-e7a4-4dcb-9839-f0bf8fc37f71",
+   "browser_download_url": "https://codeberg.org/gitnex/GitNex/releases/download/15.1.0/15.1.0.apk",
+   "type": "attachment"
+  }
+ ]
+}

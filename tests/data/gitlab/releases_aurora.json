@@ -1,0 +1,12 @@
+[
+ {
+  "name": "4.8.4",
+  "tag_name": "4.8.4",
+  "description": "Changelog : v4.8.4 (76)\\\n• Rebuilt the interface with modern Jetpack Compose\\\n• Support for multiple Google accounts\\\n• User reviews on the app details screen\\\n• Optional app lock via biometrics or device credentials\\\n• One-click install for favourites and a buy flow for paid apps\\\n• Reworked notifications with grouped summaries and settings\\\n• Revamped updates screen; self-updates now shown in the list\\\n• More reliable downloads/installs and microG installer support\\\n• Bug fixes and translation updates\n\n[AuroraStore-4.8.4.apk](/uploads/245eec8867a47057cbc54535f73b32ee/AuroraStore-4.8.4.apk)\n\n[AuroraStore-hw-4.8.4.apk](/uploads/ceb55e58163cf9e2d3f23478f3cf787d/AuroraStore-hw-4.8.4.apk)\n\n[AuroraStore-preload-4.8.4.apk](/uploads/3376fef895820893ddeb7154b056a07e/AuroraStore-preload-4.8.4.apk)",
+  "released_at": "2026-07-27T17:54:54.560Z",
+  "upcoming_release": false,
+  "assets": {
+   "links": []
+  }
+ }
+]
