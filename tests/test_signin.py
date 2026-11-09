@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -553,6 +554,18 @@ def test_invite_warns_signed_in_person(web, conn, clock):
     text = web.client.get("/login").text
     assert "Вы уже вошли как Иван Петров" in text and "станет отдельным участником" in text and "Safari" in text
     assert "Вы уже вошли" not in TestClient(web.app, base_url=BASE).get("/login").text
+
+
+@pytest.mark.parametrize("ua, says, never", [
+    ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1", "в Safari", "Chrome"),
+    ("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile", "в Chrome", "Safari"),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0", "по QR-коду", "Открывайте страницу"),
+])
+def test_login_hint_fits_device(make_web, cfg, conn, ua, says, never):
+    # совет про Safari Android-телефону и компьютеру только мешает
+    text = TestClient(make_web(cfg, conn).app, base_url=BASE, headers={"user-agent": ua}).get("/login").text
+    hints = " ".join(re.findall(r'<p class="hint">(.*?)</p>', text, re.S))
+    assert says in hints and never not in hints
 
 
 def test_wrong_code_while_adding_keeps_add_form(web, conn):
