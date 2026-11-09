@@ -107,11 +107,12 @@ def _job_view(j, filename: str = "") -> dict:
             "split_only": p.get("split_only", False), "alternatives": p.get("alternatives", [])}
 
 
-def _fresh(apps, now: str) -> set[str]:
-    """Метка «новая версия»: текущая скачана за NEW_VERSION_DAYS и есть предыдущая."""
+def _fresh(apps, now: str, updated: set[str]) -> set[str]:
+    """Метка «новая версия»: текущая скачана за NEW_VERSION_DAYS и пришла обновлением — есть предыдущая или
+    (её удалили вручную) метка ротации db.updated_packages."""
     since = datetime.fromisoformat(now) - timedelta(days=NEW_VERSION_DAYS)
-    return {a.package for a in apps
-            if a.previous is not None and datetime.fromisoformat(a.current["downloaded_at"]) >= since}
+    return {a.package for a in apps if (a.previous is not None or a.package in updated)
+            and datetime.fromisoformat(a.current["downloaded_at"]) >= since}
 
 
 def _lock_mail(until: str, base: str) -> str:
@@ -241,8 +242,9 @@ def register_routes(app, w) -> None:
             guest = pin.guest_ok(w.key, request.cookies.get(pin.COOKIE, ""), pin.epoch(c), w.now())
             closed = pin.closed_until(c, w.now())
             apps = [a for a in db.list_apps(c, shelf.id) if a.current is not None]
+            updated = db.updated_packages(c, shelf.id)
         allowed = guest or w.person(request) is not None
-        fresh = _fresh(apps, w.now())
+        fresh = _fresh(apps, w.now(), updated)
         apps, filters = filter_shelf(apps, request, fresh, android=True)
         return w.page(request, "guest.html", "guest", status_code, configured=True, allowed=allowed, **filters,
                       closed=closed, error=error, apps=apps if allowed else [], fresh=fresh,
@@ -358,6 +360,7 @@ def _register_scope(app, w, scope: Scope):
         with w.conn() as c:
             shelf = shelf_of(c, request)
             apps = db.list_apps(c, shelf.id) if shelf is not None else []
+            updated = db.updated_packages(c, shelf.id) if shelf is not None else set()
             cards = {a.package for a in apps}
             # задания без карточки: ссылка и свой файл, пока пакет не известен, и их ошибки — до «Скрыть»
             files = dict(c.execute("SELECT job_id, filename FROM android_uploads WHERE shelf_id=? AND job_id IS NOT NULL",
@@ -388,7 +391,7 @@ def _register_scope(app, w, scope: Scope):
         else:
             if free < jobs.BANNER_FREE:
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
-        fresh = _fresh(apps, w.now())
+        fresh = _fresh(apps, w.now(), updated)
         statuses = json.dumps({a.package: a.status for a in apps})
         apps, filters = filter_shelf(apps, request, fresh, android=True)
         resp = w.page(request, "android.html", scope.nav, status_code, apps=apps, jobs=pending, banners=banners, **filters,

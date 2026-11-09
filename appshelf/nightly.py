@@ -38,8 +38,10 @@ APPLE_NEW = """SELECT a.name, v.version FROM versions v JOIN apps a ON a.account
                        AND j.created_at >= a.published_at AND j.finished_at < v.downloaded_at))"""
 ANDROID_NEW = """SELECT a.name, v.version_name AS version FROM android_versions v JOIN android_apps a
                      ON a.shelf_id = v.shelf_id AND a.package = v.package WHERE v.shelf_id = ? AND v.role = 'current'
-                     AND v.downloaded_at > ? AND EXISTS (SELECT 1 FROM android_versions p
-                         WHERE p.shelf_id = v.shelf_id AND p.package = v.package AND p.role = 'previous')"""
+                     AND v.downloaded_at > ? AND (EXISTS (SELECT 1 FROM android_versions p
+                         WHERE p.shelf_id = v.shelf_id AND p.package = v.package AND p.role = 'previous')
+                     OR EXISTS (SELECT 1 FROM state s WHERE s.key = 'android_updated:' || v.shelf_id || ':' || v.package
+                         AND s.value = CAST(v.version_code AS TEXT)))"""
 
 
 def run(env: Env, c) -> str:

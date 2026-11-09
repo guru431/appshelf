@@ -173,6 +173,19 @@ def test_digest_keeps_update_after_previous_version_removed(ctx, cfg, conn, cloc
     assert nightly.digests(env, conn) == 1 and "СберБанк Онлайн 1.1" in mails[-1][1]
 
 
+def test_digest_keeps_android_update_after_previous_version_removed(ctx, cfg, conn, clock):
+    own = owner(conn, clock)
+    shelf = android_db.ensure_shelf(conn, own.user_id, clock.iso())
+    root = cfg.archive / shelf.shelf
+    android_db.put_app(conn, shelf.id, "ru.own", "Своё", "rustore", "ru.own", clock.iso())
+    for code in (1, 2):                                                 # 2.0 пришла обновлением — ротация
+        android_db.add_version(conn, root, shelf.id, "ru.own", android_db.NewApk(
+            f"{code}.0", code, 21, 34, "", "s", "rustore", 1, str(code) * 64, f"ru.own-{code}"), clock.iso())
+    conn.execute("DELETE FROM android_versions WHERE role='previous'")  # «Удалить 1.0»
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 1 and "Своё 2.0" in mails[-1][1]
+
+
 def test_digest_turned_off_and_failed_mail_retried(ctx, cfg, conn, clock):
     ready(conn, cfg, clock, versions=("1.0", "1.1"))
     notify.set_digest(conn, 1, False)

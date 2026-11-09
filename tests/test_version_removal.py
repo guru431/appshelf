@@ -162,3 +162,28 @@ def test_confirmation_keeps_target_after_another_tab_switches_shelf(web, conn, c
     response = web.client.request("POST", action, data={"snapshot": snapshot}, follow_redirects=False)
     assert response.status_code == 303
     assert not (s.root / s.old["dir"]).exists() and (s.root / s.current["dir"]).is_dir()
+
+
+def test_new_version_mark_survives_removal_of_previous(web, conn, saved_versions):
+    s = saved_versions
+    if s.platform == "apple":
+        pytest.skip("Apple: test_catalog_actions.test_new_version_mark_survives_removal_of_previous")
+    catalog = s.prefix.split("/apps/")[0]
+    assert web.client.get(catalog).context["fresh"] == {"ru.example.app"}
+    snapshot = snapshot_from(web.client.get(remove_url(s)))
+    assert web.client.post(remove_url(s), data={"snapshot": snapshot}, follow_redirects=False).status_code == 303
+    assert web.client.get(catalog).context["fresh"] == {"ru.example.app"}    # обновление осталось обновлением
+
+
+def test_first_android_version_is_not_new_after_reupload(web, conn, cfg, clock, acct):
+    shelf = db.ensure_shelf(conn, acct.user_id, clock.iso())
+    root = fetch.shelf_root(cfg, shelf)
+    for attempt in range(2):                     # сняли с полки и добавили заново: метка прошлой ротации не мешает
+        db.put_app(conn, shelf.id, "ru.example.app", "Example", "upload", "", clock.iso())
+        for n in ((1, 2) if attempt == 0 else (2,)):
+            (root / f"ru.example.app-{n}").mkdir(parents=True, exist_ok=True)
+            db.add_version(conn, root, shelf.id, "ru.example.app", db.NewApk(
+                f"{n}.0", n, 26, 34, "", "a" * 64, "upload", 10, str(n) * 64, f"ru.example.app-{n}"), clock.iso())
+        if attempt == 0:
+            db.remove_app(conn, root, shelf.id, "ru.example.app")
+    assert web.client.get("/android").context["fresh"] == set()

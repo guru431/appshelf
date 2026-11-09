@@ -138,6 +138,7 @@ def delete_shelf(c, shelf_id: int) -> None:
     c.execute("DELETE FROM android_shelves WHERE id=?", (shelf_id,))
     c.execute("DELETE FROM state WHERE key LIKE ?", (f"android_rejected:{shelf_id}:%",))
     c.execute("DELETE FROM state WHERE key LIKE ?", (pending_mail_key(shelf_id, "%"),))
+    c.execute("DELETE FROM state WHERE key LIKE ?", (updated_key(shelf_id, "%"),))
 
 
 # --- приложения --------------------------------------------------------------
@@ -236,8 +237,8 @@ def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
                                             (shelf_id, package))]
         c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=?", (shelf_id, package))
         c.execute("DELETE FROM android_apps WHERE shelf_id=? AND package=?", (shelf_id, package))
-        c.execute("DELETE FROM state WHERE key IN (?, ?)",
-                  (_rejected_key(shelf_id, package), pending_mail_key(shelf_id, package)))
+        c.execute("DELETE FROM state WHERE key IN (?, ?, ?)", (_rejected_key(shelf_id, package),
+                  pending_mail_key(shelf_id, package), updated_key(shelf_id, package)))
         c.execute("UPDATE android_jobs SET status='cancelled', error='снято с полки' "
                   "WHERE shelf_id=? AND package=? AND status='queued'", (shelf_id, package))
     remove_dirs(root, dirs)
@@ -259,18 +260,34 @@ def version_dir(c, shelf_id: int, root: Path, package: str, version_code: int, *
     return name
 
 
-def _rotate(c, shelf_id: int, package: str) -> list[str]:
-    """Место для новой current: current — previous, из более старых остаётся только закреплённая.
-    Каталоги удаляет вызывающий после COMMIT; pending не трогаем."""
+def _rotate(c, shelf_id: int, package: str, version_code: int) -> list[str]:
+    """Место для новой current (version_code): current — previous, из более старых остаётся только закреплённая.
+    Каталоги удаляет вызывающий после COMMIT; pending не трогаем. Была current — новая пришла обновлением: метка
+    updated_key, чтобы «новая версия» пережила ручное удаление previous."""
     old = [r["dir"] for r in c.execute("SELECT dir FROM android_versions WHERE shelf_id=? AND package=? "
                                        "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))]
     c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? "
               "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))
     c.execute("UPDATE android_versions SET role='kept' WHERE shelf_id=? AND package=? AND role='previous'",
               (shelf_id, package))
-    c.execute("UPDATE android_versions SET role='previous' WHERE shelf_id=? AND package=? AND role='current'",
-              (shelf_id, package))
+    if c.execute("UPDATE android_versions SET role='previous' WHERE shelf_id=? AND package=? AND role='current'",
+                 (shelf_id, package)).rowcount:
+        c.execute("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                  (updated_key(shelf_id, package), str(version_code)))
     return old
+
+
+def updated_key(shelf_id: int, package: str) -> str:
+    """versionCode current, пришедшей обновлением (_rotate); метка верна, пока current та же."""
+    return f"android_updated:{shelf_id}:{package}"
+
+
+def updated_packages(c, shelf_id: int) -> set[str]:
+    """Пакеты, чья current — обновление, а не первая версия: так и после ручного удаления previous."""
+    return {r["package"] for r in c.execute(
+        "SELECT v.package FROM android_versions v JOIN state s ON s.key = ? || v.package "
+        "AND s.value = CAST(v.version_code AS TEXT) WHERE v.shelf_id=? AND v.role='current'",
+        (updated_key(shelf_id, ""), shelf_id))}
 
 
 def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str) -> str:
@@ -291,7 +308,7 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
             role = "kept"
         else:
             role = "current"
-            old = _rotate(c, shelf_id, package)
+            old = _rotate(c, shelf_id, package, v.version_code)
             c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (v.signer, shelf_id, package))
         c.execute("""INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk,
                          abis, signer, source, size, sha256, dir, downloaded_at, role, signature_verified, rotation_min_sdk)
@@ -318,7 +335,7 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
             role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
             old = []
             if role == "current":
-                old = _rotate(c, shelf_id, package)
+                old = _rotate(c, shelf_id, package, p["version_code"])
                 c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
             name = p["dir"]
             if PENDING_DIR_RE.search(name):
