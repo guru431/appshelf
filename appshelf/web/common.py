@@ -18,6 +18,8 @@ from .login import Limiter, LoginFlow
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["gb"] = lambda size: f"{size / GB:.1f}"  # размер полки в ГБ — как в подтверждении удаления
+# размер IPA/APK в МБ на карточке: маленький APK — «< 1», а не «0»
+TEMPLATES.env.filters["mb"] = lambda size: "< 1" if size < 1048576 else str(int(size / 1048576 + .5))
 THEMES = ("light", "dark")
 ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID одного из вошедших
 WHO_COOKIE = "appshelf_who"        # активный участник Android-раздела: id одного из вошедших

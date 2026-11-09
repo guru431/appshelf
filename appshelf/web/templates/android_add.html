@@ -132,9 +132,15 @@
 <form method="post" action="{{ post_url(prefix ~ '/add/link') }}" class="card">
   <label>Ссылка на приложение или APK<input name="url" inputmode="url" value="{{ link_url }}" placeholder="https://f-droid.org/packages/… или https://…/app.apk" required></label>
   <label>Название (необязательно)<input name="name"></label>
-  <label><input type="checkbox" name="ack" value="1"> Для APKPure: APKPure распространял подменённые APK; если пакета
-    нет в RuStore, подпись не с чем сверить — понимаю</label>
+  <label class="check" data-link-apkpure{% if 'apkpure' not in link_url | lower %} hidden{% endif %}><input type="checkbox" name="ack" value="1">Понимаю риск
+    APKPure: он распространял подменённые APK; если пакета нет в RuStore, подпись не с чем сверить</label>
   <button>Добавить</button></form>
+<script>
+(function () {   // галочка риска APKPure — только для адреса APKPure
+  var box = document.querySelector('[data-link-apkpure]'), url = box.closest('form').elements.url;
+  url.addEventListener('input', function () { box.hidden = !/apkpure/i.test(url.value); });
+}());
+</script>
 <p class="hint">Понимает страницы приложений Google Play, AppGallery (или ID вида C102312137), F-Droid, IzzyOnDroid, APKPure, RuStore и репозитории GitHub —
   источник и пакет берутся из адреса. Иначе ссылка — на сам файл .apk на сайте банка или разработчика, только https:
   ночью полка проверяет, не сменился ли файл. Для F-Droid автоматически проверяется и архив. Выбранная версия

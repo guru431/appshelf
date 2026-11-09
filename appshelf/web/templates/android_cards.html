@@ -3,7 +3,7 @@
    android_version, apk_name, app_url (постоянная ссылка на приложение; нужна при edit или qr). Метка сверки с
    RuStore (notices) живёт в last_error — это не ошибка. #}
 {% macro version_meta(a, v) -%}
-{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ (v['size'] / 1048576) | round | int }} МБ
+{{ v['version_name'] }} · Android {{ android_version(v['min_sdk']) }}+ · {{ v['size'] | mb }} МБ
  · {{ sources.get(v['source'], v['source']) }} · подпись {{ v['signer'][:4] }}…{{ v['signer'][-4:] }}{{ ' · закреплена' if v['pinned'] }}
 {%- endmacro %}
 
@@ -74,7 +74,8 @@
     {% if v and p['version_code'] <= v['version_code'] %}<p class="meta">После подтверждения эта сборка появится в списке версий. По умолчанию останется последняя.</p>{% endif %}
     <p class="install"><button type="button" class="sm tint" data-dialog="signer-{{ a.package }}">Сравнить версии и решить</button></p>
     {% endif %}
-    {% if a.status == 'queued' %}<div class="meta">в очереди{% if waiting %} · {{ waiting.get(a.package, '') }}{% endif %}</div>
+    {% if a.status == 'queued' %}{% set r = (waiting.get(a.package, '') if waiting else '').replace('В очереди — ', '', 1) %}
+    <div class="meta">в очереди{% if r %} · {{ r[:1] | lower }}{{ r[1:] }}{% endif %}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     {% if a.source != 'upload' and edit %}<form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>{% endif %}

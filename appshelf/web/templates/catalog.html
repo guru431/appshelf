@@ -15,7 +15,7 @@
     <div><b>{{ a.name }}</b>
       {%- if a.app_id in fresh %}{% set d = a.current['downloaded_at'] %} <span class="tag new">новая версия · {{ d[8:10] }}.{{ d[5:7] }}</span>{% endif %}</div>
     {% if a.current %}
-    <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ (a.current['size'] / 1048576) | round | int }} МБ
+    <div class="meta">{{ a.current['version'] }} · iOS {{ a.current['min_ios'] }}+ · {{ a.current['size'] | mb }} МБ
       {%- set b = a.current['built'] %}{% if b %} · сборка {{ b[8:10] }}.{{ b[5:7] }}.{{ b[:4] }}{% endif %}
       {%- if a.current['pinned'] %} <span class="tag">закреплена</span>{% endif %}</div>
     {% endif %}
@@ -30,8 +30,9 @@
       <div class="app-qr" id="qr-{{ a.app_id }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}" alt="QR-код установки {{ a.name }} на iPhone" width="196" height="196" loading="lazy"></div>
     </div>{% endif %}
     {% endif %}
-    {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ (a.kept['size'] / 1048576) | round | int }} МБ</div>{% endif %}
-    {% if a.status == 'queued' %}<div class="meta">в очереди · {{ waiting.get(a.app_id) or ('ждёт входа в Apple ID' if acct.session != 'ok' else 'ожидает обработчика') }}</div>
+    {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ a.kept['size'] | mb }} МБ</div>{% endif %}
+    {% if a.status == 'queued' %}{% set r = (waiting.get(a.app_id) or ('Ждёт входа в Apple ID' if acct.session != 'ok' else 'Ожидает обработчика')).replace('В очереди — ', '', 1) %}
+    <div class="meta">в очереди · {{ r[:1] | lower }}{{ r[1:] }}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>
