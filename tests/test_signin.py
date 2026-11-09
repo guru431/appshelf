@@ -55,6 +55,39 @@ def test_known_apple_id_logs_in_with_2fa_code(make_web, cfg, conn, acct):  # Rev
                 assert b"S3cret-pw" not in f.read_bytes(), f
 
 
+def test_repeated_code_submit_gets_first_login(make_web, cfg, conn, acct, clock):
+    # двойное «Войти»: браузер бросил ответ первого запроса (и его cookie) — второй получает тот же вход, к Apple не идёт
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "S3cret-pw"})
+    before = dict(wb.client.cookies)
+    assert wb.client.post("/login/code", data={"code": "123456"}, follow_redirects=False).status_code == 303
+    wb.client.cookies.clear()
+    for name, value in before.items():
+        wb.client.cookies.set(name, value, domain=HOST)
+    r = wb.client.post("/login/code", data={"code": "123456", "next": "/history"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/history" and "appshelf_auth=" in cookies(r)
+    assert len(tool.calls) == 2 and wb.client.get("/", follow_redirects=False).status_code == 200
+    clock.advance(signin.TTL)                                 # итог первого живёт недолго
+    wb.client.cookies.clear()
+    for name, value in before.items():
+        wb.client.cookies.set(name, value, domain=HOST)
+    assert "Срок шага истёк" in wb.client.post("/login/code", data={"code": "123456"}).text
+
+
+def test_repeated_code_submit_shares_refusal(make_web, cfg, conn, acct):
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "pw"})
+    tool.errors["login"] = IpatoolError("invalid_credentials", "")
+    assert "Неверный пароль или код" in wb.client.post("/login/code", data={"code": "000000"}).text
+    r = wb.client.post("/login/code", data={"code": "000000"})
+    assert r.status_code == 400 and "Неверный пароль или код" in r.text and len(tool.calls) == 2
+    assert wb.app.state.w.limiter.email_wait("owner@example") == 0 and len(wb.app.state.w.limiter._fails) == 1
+
+
 def test_foreign_next_after_login_stays_on_site(make_web, cfg, conn, acct):  # open redirect
     wb = make_web(cfg, conn)
     for target in ("https://evil.example/x", "//evil.example/x", "/\\evil.example"):

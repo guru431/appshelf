@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from .. import jobs, notify, people, store, webauth
 from ..ipatool import IpatoolError
 from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WHO_COOKIE, WebCtx, back, back_to, safe_next
-from .login import TTL, Intent, LoginBusy, LoginExpired, LoginInProgress, LoginJoined, drop_home
+from .login import TTL, Intent, LoginBusy, LoginExpired, LoginFinished, LoginInProgress, LoginJoined, drop_home
 
 LOGIN_ERRORS = {
     "edge_rejected": "Apple отклонил запрос входа — попробуйте позже или сообщите владельцу",
@@ -175,9 +175,18 @@ def register(w: WebCtx, c, request: Request, intent: Intent, info: dict, now: st
     return aid, uid
 
 
-def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str):
+def admitted(w: WebCtx, request: Request, user, aid: int, next_: str):
+    """Вход Apple ID состоялся: человек — к вошедшим в браузере, cookie шага кода и приглашения — прочь."""
+    resp = signed_in(w, request, back(safe_next(next_)), user, aid)
+    resp.delete_cookie(LOGIN_COOKIE, path="/")
+    resp.delete_cookie(INVITE_COOKIE, path="/")
+    return resp
+
+
+def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str, done=None):
     """Apple впустил: известному Apple ID — свежий токен, новому — регистрация; устройству — cookie на год.
-    Историю Apple ID ещё не загружали — история и справочник удалённых ставятся сразу, не ждут ночи."""
+    Историю Apple ID ещё не загружали — история и справочник удалённых ставятся сразу, не ждут ночи.
+    done((user_id, account_id)) — после успеха: итог для повторного «Войти» (LoginFlow.settle)."""
     now = w.now()
     with w.conn() as c:
         if intent.account_id is not None:
@@ -201,10 +210,9 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
             store.enqueue_once(c, aid, "refresh_history", None, now)
             store.enqueue_once(c, aid, "check_removed", None, now)
         user = people.get_user(c, uid)
-    resp = signed_in(w, request, back(safe_next(next_)), user, aid)
-    resp.delete_cookie(LOGIN_COOKIE, path="/")
-    resp.delete_cookie(INVITE_COOKIE, path="/")
-    return resp
+    if done is not None:
+        done((uid, aid))
+    return admitted(w, request, user, aid, next_)
 
 
 def submit(w: WebCtx, request: Request, email: str, password: str, next_: str, *, user_id: int | None = None,
@@ -279,12 +287,12 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                               next_="/apple" if add else next, error=error, status_code=status_code,
                               action="/apple/add" if add else "/login", add=add)
 
-        if pending is None:
-            return again(EXPIRED_STEP, 400)
-        code = "".join(code.split())
-        if not (code.isdigit() and len(code) == 6):  # опечатка в форме — не попытка входа, шаг не расходуем
-            return again("Код — 6 цифр", 400, step=2)
-        if pending.account_id is not None:
+        # шага нет — возможно, это повторное «Войти»: finish отдаст итог первого запроса
+        if pending is not None:
+            code = "".join(code.split())
+            if not (code.isdigit() and len(code) == 6):  # опечатка в форме — не попытка входа, шаг не расходуем
+                return again("Код — 6 цифр", 400, step=2)
+        if pending is not None and pending.account_id is not None:
             with w.conn() as c:
                 gone = people.get_account(c, pending.account_id) is None
             if gone:  # Apple ID удалили, пока ждали код: в Apple не идём — иначе его HOME появится снова
@@ -292,15 +300,26 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                 return again(NOT_REGISTERED, 403)
         try:
             intent, info = w.flow.finish(flow_id, code)
+        except LoginFinished as e:  # браузер бросил ответ первого запроса вместе с cookie входа
+            uid, aid = e.outcome
+            with w.conn() as c:
+                user = people.get_user(c, uid)
+            return admitted(w, request, user, aid, next) if user is not None else again(EXPIRED_STEP, 400)
         except LoginExpired:
             return again(EXPIRED_STEP, 400)
+        except LoginJoined as e:  # отказ первого из двух одинаковых запросов: неудача уже посчитана
+            return again(login_error_text(e.error), 400)
         except IpatoolError as e:
             log_login_error(e, 2)
             if e.error in WRONG_PASSWORD:
                 w.limiter.fail()
                 w.limiter.email_fail(pending.email)
             return again(login_error_text(e), 400)
-        return complete(w, request, intent, info, next)
+        outcome = []
+        try:
+            return complete(w, request, intent, info, next, outcome.append)
+        finally:
+            w.flow.settle(flow_id, outcome[0] if outcome else None)
 
     @app.post("/login/cancel")
     def login_cancel(request: Request, next: str = Form("/")):

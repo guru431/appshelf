@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
-from appshelf.web.login import Intent, Limiter, LoginBusy, LoginExpired, LoginFlow, LoginInProgress, LoginJoined
+from appshelf.web.login import (Intent, Limiter, LoginBusy, LoginExpired, LoginFinished, LoginFlow, LoginInProgress,
+                                LoginJoined)
 from helpers import Clock, FakeTool
 
 KNOWN = Intent("owner@example", account_id=1)
@@ -319,6 +320,30 @@ def test_double_continue_shares_refusal():
     t.join(5)
     j.join(5)
     assert isinstance(joined["error"], LoginJoined) and joined["error"].error is out["error"]
+
+
+def test_double_submit_of_code_joins_first_finish():
+    # второй «Войти», пока первый ждёт Apple: к Apple не идёт, получает итог первого из settle
+    f, clock, _ = flow()
+    tool = needs_code()
+    _, flow_id, _ = f.start(tool, KNOWN, "pw")
+    release, entered = threading.Event(), threading.Event()
+    tool.on_login = lambda email: (entered.set(), release.wait(5))
+    t, out = in_thread(lambda: f.finish(flow_id, "123456"))
+    assert entered.wait(5)
+    done = f._finishing[flow_id].done = SpyEvent()
+    j, joined = in_thread(lambda: f.finish(flow_id, "123456"))
+    assert done.waiting.wait(5)
+    release.set()
+    t.join(5)
+    f.settle(flow_id, (1, 1))
+    j.join(5)
+    assert out["result"][0] == KNOWN and isinstance(joined["error"], LoginFinished)
+    assert joined["error"].outcome == (1, 1) and len(tool.calls) == 2
+    clock.advance(f.join_wait)
+    with pytest.raises(LoginExpired):                         # итог хранится недолго, пароля в нём нет
+        f.finish(flow_id, "123456")
+    assert f._finishing == {}
 
 
 def test_limiter_global_minute_and_apple_id_hour():

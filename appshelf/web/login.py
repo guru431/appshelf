@@ -41,11 +41,19 @@ class LoginInProgress(Exception):
 
 
 class LoginJoined(Exception):
-    """Повторное «Продолжить»: первый вход того же Apple ID отказан — его ошибка, неудача уже посчитана."""
+    """Повторное «Продолжить» или «Войти»: первый запрос того же входа отказан — его ошибка, неудача уже посчитана."""
 
     def __init__(self, error: IpatoolError):
         super().__init__(str(error))
         self.error = error
+
+
+class LoginFinished(Exception):
+    """Повторное «Войти»: первый запрос с тем же шагом кода уже вошёл — его итог (settle), к Apple не идём."""
+
+    def __init__(self, outcome):
+        super().__init__("login finished")
+        self.outcome = outcome
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,15 @@ class _Running:
     error: IpatoolError | None = None
 
 
+@dataclass
+class _Finishing:
+    """Шаг 2 у Apple или только что завершённый: повторное «Войти» с той же cookie получит его итог. Пароля нет."""
+    expires: float
+    done: threading.Event = field(default_factory=threading.Event)
+    outcome: object = None               # что передал settle: у signin — (user_id, account_id)
+    error: IpatoolError | None = None
+
+
 class LoginFlow:
     def __init__(self, clock=time.monotonic, ttl: float = TTL, schedule=_timer, limit: int = MAX_PENDING,
                  discard=drop_home, join_wait: float = JOIN_WAIT):
@@ -104,6 +121,7 @@ class LoginFlow:
         self.join_wait = join_wait
         self._pending: dict[str, _Pending] = {}
         self._running: dict[str, _Running] = {}
+        self._finishing: dict[str, _Finishing] = {}
         self._lock = threading.Lock()
 
     def _expire(self, flow_id: str, ref: weakref.ref) -> None:
@@ -121,6 +139,8 @@ class LoginFlow:
             dead = [(k, p) for k, p in self._pending.items() if now >= p.expires]
             for k, _ in dead:
                 del self._pending[k]
+            for k in [k for k, f in self._finishing.items() if now >= f.expires]:
+                del self._finishing[k]
         for _, p in dead:
             _drop(p)
             self.discard(p.intent)
@@ -193,20 +213,47 @@ class LoginFlow:
             self.discard(p.intent)
 
     def finish(self, flow_id: str, code: str) -> tuple[Intent, dict]:
-        """Шаг 2. Пароль удаляется из памяти при любом исходе; отказ — intent отброшен."""
+        """Шаг 2. Пароль удаляется из памяти при любом исходе; отказ — intent отброшен. Успех вызывающий
+        завершает settle(flow_id, итог).
+
+        Повтор с тем же flow_id (двойное «Войти»: браузер бросает первый запрос, а с ним и cookie входа) к Apple не
+        идёт: ждёт первый и получает его итог — LoginFinished(итог settle) или LoginJoined(отказ Apple). Итог
+        хранится join_wait после конца первого запроса; позже или без итога — LoginExpired."""
+        self.purge()
         with self._lock:
             p = self._pending.pop(flow_id, None)
+            if p is None:
+                other = self._finishing.get(flow_id)
+            else:
+                mine = self._finishing[flow_id] = _Finishing(self.clock() + self.ttl)
         if p is None:
-            raise LoginExpired()
+            if other is None or not other.done.wait(self.join_wait):
+                raise LoginExpired()
+            if other.error is not None:
+                raise LoginJoined(other.error)
+            if other.outcome is None:
+                raise LoginExpired()
+            raise LoginFinished(other.outcome)
         try:
             if self.clock() >= p.expires:
                 raise LoginExpired()
             return p.intent, p.tool.login(p.intent.email, p.password, code)
-        except BaseException:
+        except BaseException as e:
+            mine.error = e if isinstance(e, IpatoolError) else None
             self.discard(p.intent)
+            self.settle(flow_id, None)
             raise
         finally:
             _drop(p)
+
+    def settle(self, flow_id: str, outcome) -> None:
+        """Итог шага 2 для повторов (None — входа нет). Живёт join_wait."""
+        with self._lock:
+            f = self._finishing.get(flow_id)
+            if f is None or f.done.is_set():
+                return
+            f.outcome, f.expires = outcome, self.clock() + self.join_wait
+        f.done.set()
 
 
 class Limiter:
