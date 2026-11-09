@@ -9,7 +9,7 @@ from contextlib import closing
 
 import pytest
 
-from appshelf import cli, config, integrity, jobs, store
+from appshelf import cli, config, integrity, jobs, store, webauth
 from appshelf.config import GB
 from helpers import OWNER_EMAIL, TOKEN, FakeTool, make_account, owner, seed_app
 from ipa_factory import make_ipa
@@ -235,11 +235,13 @@ def test_daily_backup_keeps_last_snapshots(monkeypatch, tmp_path, clock, capsys)
     cli_shelf(cfg, clock, tmp_path)
     assert cli.main(["backup", "--daily"]) == 2                     # каталога нет: шара не смонтирована?
     assert "нет каталога" in capsys.readouterr().err and not dest.exists()
+    assert not (cfg.status_dir / integrity.STAMP).exists()            # сбой — отметки для мониторинга нет
     dest.mkdir(parents=True)
     (dest / "notes.txt").write_text("чужой файл", encoding="utf-8")
     for day in ("2026-10-19", "2026-10-20", "2026-10-21"):
         monkeypatch.setattr(jobs, "now_iso", lambda day=day: f"{day}T02:30:00+00:00")
         assert cli.main(["backup", "--daily", "--keep", "2"]) == 0
+    assert (cfg.status_dir / integrity.STAMP).read_text(encoding="utf-8") == "2026-10-21T02:30:00+00:00\n"
     assert sorted(p.name for p in dest.iterdir()) == ["appshelf-2026-10-20.db", "appshelf-2026-10-21.db", "notes.txt"]
     assert dump(dest / "appshelf-2026-10-21.db") == dump(cfg.db)
     assert not (cfg.tmp_dir / "backup").exists()                       # локальный черновик убран
@@ -255,6 +257,58 @@ def test_daily_backup_needs_backup_dir_setting(monkeypatch, tmp_path, clock, cap
     assert "APPSHELF_BACKUP_DIR" in capsys.readouterr().err
     with pytest.raises(SystemExit):                                    # набор восстановления или ночной — что-то одно
         cli.main(["backup", "--daily", "--out", str(tmp_path / "out")])
+
+
+def test_daily_backup_after_code_rollback(monkeypatch, tmp_path, clock, capsys):
+    # база с аддитивным переходом новее кода: connect её пускает, значит и снимать её надо
+    dest = tmp_path / "share" / "backup"
+    dest.mkdir(parents=True)
+    monkeypatch.setenv("APPSHELF_BACKUP_DIR", str(dest))
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    with closing(store.connect(cfg.db)) as c:
+        store.set_state(c, store.READABLE_BY_KEY, str(store.SCHEMA_VERSION))
+        c.execute(f"PRAGMA user_version = {store.SCHEMA_VERSION + 1}")
+    store.connect(cfg.db).close()                                     # откат разрешён — web работает
+    assert cli.main(["backup", "--daily"]) == 0
+    assert dump(next(dest.glob("appshelf-*.db"))) == dump(cfg.db)
+    capsys.readouterr()
+    assert cli.main(["check"]) == 2                                   # проверке нужна ровно своя схема
+    assert f"схема версии {store.SCHEMA_VERSION + 1}" in capsys.readouterr().err
+
+
+def test_backup_refuses_dir_inside_archive(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("APPSHELF_BACKUP_DIR", str(cfg.archive / "backup"))
+    cli_shelf(cfg, clock, tmp_path)
+    (cfg.archive / "backup").mkdir()
+    before = tree(cfg.archive)
+    assert cli.main(["backup", "--daily"]) == 2
+    assert "внутри архива" in capsys.readouterr().err
+    assert cli.main(["backup", "--out", str(cfg.archive / "set")]) == 2
+    assert "внутри архива" in capsys.readouterr().err
+    assert tree(cfg.archive) == before and not (cfg.status_dir / integrity.STAMP).exists()
+
+
+def test_damaged_snapshot_keeps_old_ones(tmp_path):
+    db = tmp_path / "live.db"
+    with closing(sqlite3.connect(db)) as c:
+        c.execute("CREATE TABLE t (x TEXT)")
+        c.execute("CREATE INDEX t_x ON t (x)")
+        c.executemany("INSERT INTO t VALUES (?)", [(f"строка {i:05}",) for i in range(3000)])
+        c.execute(f"PRAGMA user_version = {store.SCHEMA_VERSION}")
+        c.commit()
+        page = c.execute("PRAGMA page_size").fetchone()[0]
+    with open(db, "r+b") as f:                                        # порча страниц в середине файла
+        f.seek(page * 3 + 100)
+        f.write(b"\xff" * (page * 2))
+    dest = tmp_path / "share"
+    dest.mkdir()
+    (dest / "appshelf-2026-10-20.db").write_bytes(b"old")
+    with pytest.raises(integrity.BackupError, match="quick_check"):
+        integrity.daily_backup(db, dest, tmp_path / "work", "2026-10-21", keep=1)
+    assert sorted(p.name for p in dest.iterdir()) == ["appshelf-2026-10-20.db"]   # прежний не удалён
+    assert not (tmp_path / "work").exists()
 
 
 def test_check_refuses_snapshot_of_other_schema(monkeypatch, tmp_path, clock, capsys):
@@ -311,7 +365,7 @@ def test_restore_report_is_offline_private_and_includes_manual_connections(monke
     protected.mkdir()
     (protected / "appshelf.env").write_text("PRIVATE_ENV_VALUE", encoding="utf-8")
     key = protected / "cookie-key"
-    key.write_bytes(b"PRIVATE_COOKIE_KEY" * 2)
+    key.write_bytes(b"PRIVATE_COOKIE_KEY" + b"k" * 14)  # ровно webauth.KEY_LEN
     from appshelf.android import net
     def no_network(*args, **kwargs):
         pytest.fail("restore report must not contact providers")
@@ -331,6 +385,38 @@ def test_restore_report_is_offline_private_and_includes_manual_connections(monke
     key.unlink()
     assert cli.main(args) == 1
     assert not json.loads(capsys.readouterr().out)["protected_files"]["cookie-key"]
+
+
+def restore_set(monkeypatch, tmp_path):
+    cfg = cli_env(monkeypatch, tmp_path)
+    store.connect(cfg.db).close()
+    snapshot = integrity.backup(cfg.db, tmp_path / "set")
+    (tmp_path / "set" / "pub").mkdir()
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "appshelf.env").write_text("X=1", encoding="utf-8")
+    return ["restore-report", "--db", str(snapshot), "--archive", str(tmp_path / "set" / "pub"),
+            "--secrets-dir", str(protected), "--cookie-key", str(protected / "cookie-key")], protected
+
+
+def test_restore_report_rejects_cookie_key_service_would_not_load(monkeypatch, tmp_path, capsys):
+    args, protected = restore_set(monkeypatch, tmp_path)
+    (protected / "cookie-key").write_bytes(b"k" * 32 + b"\n")  # перевод строки после ручного копирования
+    with pytest.raises(ValueError):
+        webauth.load_key(protected / "cookie-key")               # appshelf-web с таким не стартует
+    assert cli.main(args) == 1
+    assert json.loads(capsys.readouterr().out)["protected_files"] == {"appshelf.env": True, "cookie-key": False}
+
+
+def test_restore_report_needs_sources_ca_when_configured(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("APPSHELF_SOURCES_CA", str(tmp_path / "etc" / "sources-ca.pem"))
+    args, protected = restore_set(monkeypatch, tmp_path)
+    (protected / "cookie-key").write_bytes(b"k" * 32)
+    assert cli.main(args) == 1
+    assert json.loads(capsys.readouterr().out)["protected_files"]["APPSHELF_SOURCES_CA"] is False
+    (protected / "sources-ca.pem").write_text("-----BEGIN CERTIFICATE-----", encoding="ascii")
+    assert cli.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["offline_ok"]
 
 def android_shelf(ctx, cfg, conn, clock, tmp_path):
     """Android-полка владельца с одной версией — настоящий конвейер (fetch.run_job), как на сервере."""

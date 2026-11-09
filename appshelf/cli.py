@@ -138,6 +138,7 @@ def check(cfg, args) -> int:
 
 def backup(cfg, out: Path) -> int:
     try:
+        integrity.outside_archive(cfg, out)
         dst = integrity.backup(cfg.db, out)
     except (integrity.DbError, integrity.BackupError) as e:
         print(e, file=sys.stderr)
@@ -154,12 +155,17 @@ def backup(cfg, out: Path) -> int:
 
 
 def daily(cfg, keep: int) -> int:
-    """Ночной снимок (appshelf-backup.timer). Сбой — код 2 и строка в журнале службы."""
+    """Ночной снимок (appshelf-backup.timer). Сбой — код 2 и строка в журнале службы; удачный — ещё отметка
+    status/backup.stamp для мониторинга (как nightly.stamp)."""
     if cfg.backup_dir is None:
         print("не задан APPSHELF_BACKUP_DIR в appshelf.env — каталог ночных снимков", file=sys.stderr)
         return 2
+    now = jobs.now_iso()
     try:
-        dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", jobs.now_iso()[:10], keep)
+        integrity.outside_archive(cfg, cfg.backup_dir)
+        dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", now[:10], keep)
+        cfg.status_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.status_dir / integrity.STAMP).write_text(now + "\n", encoding="utf-8")
     except (integrity.DbError, integrity.BackupError, OSError) as e:
         print(e, file=sys.stderr)
         return 2
