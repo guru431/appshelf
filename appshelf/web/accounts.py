@@ -57,8 +57,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             w.set_cookie(resp, webauth.COOKIE, value, webauth.COOKIE_AGE)
             return resp
         resp = back("/login")
-        resp.delete_cookie(webauth.COOKIE, path="/")
-        resp.delete_cookie(ACCT_COOKIE, path="/")
+        w.delete_cookie(resp, webauth.COOKIE)
+        w.delete_cookie(resp, ACCT_COOKIE)
         return resp
 
     @app.get("/apple", response_class=HTMLResponse)
@@ -274,6 +274,6 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         if left:
             return back("/apple")
         resp = back("/login")  # в браузере не осталось вошедших
-        resp.delete_cookie(webauth.COOKIE, path="/")
-        resp.delete_cookie(ACCT_COOKIE, path="/")
+        w.delete_cookie(resp, webauth.COOKIE)
+        w.delete_cookie(resp, ACCT_COOKIE)
         return resp

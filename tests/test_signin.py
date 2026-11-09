@@ -10,7 +10,7 @@ from starlette.testclient import TestClient
 from appshelf import jobs, people, store
 from appshelf.ipatool import AuthCodeRequired, IpatoolError
 from appshelf.web import signin
-from helpers import HOST, FakeTool, make_account, seed_app, sign_in
+from helpers import ACCT, AUTH, HOST, FakeTool, make_account, seed_app, sign_in
 
 BASE = f"https://{HOST}"
 
@@ -45,7 +45,7 @@ def test_known_apple_id_logs_in_with_2fa_code(make_web, cfg, conn, acct):  # Rev
     assert r.status_code == 303 and r.headers["location"] == "/history"
     assert tool.calls[-1] == ("login", "owner@example", "S3cret-pw", "123456")
     set_cookie = cookies(r)
-    assert "appshelf_auth=" in set_cookie and "appshelf_acct=1" in set_cookie
+    assert "__host-appshelf_auth=" in set_cookie and "__host-appshelf_acct=1" in set_cookie
     assert "httponly" in set_cookie and "secure" in set_cookie and "samesite=lax" in set_cookie
     assert "max-age=31536000" in set_cookie
     assert people.get_account(conn, 1).session == "ok"
@@ -337,18 +337,46 @@ def test_login_link_once_and_expires(make_web, cfg, conn, acct, clock):
 
 
 def test_logout_and_logout_everywhere(web, conn, cfg, clock):
-    old = web.client.cookies.get("appshelf_auth")
+    old = web.client.cookies.get(AUTH)
     r = web.client.post("/logout", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     other = TestClient(web.app, base_url=BASE)
     sign_in(other, cfg, conn, clock)
     r = other.post("/logout-all/1", follow_redirects=False)           # последний в браузере — как «Выйти»
     assert r.status_code == 303 and r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     assert people.get_user(conn, 1).epoch == 1
-    web.client.cookies.set("appshelf_auth", old, domain=HOST)
+    web.client.cookies.set(AUTH, old, domain=HOST)
     assert web.client.get("/", follow_redirects=False).status_code == 303   # старая cookie после «выйти везде»
+
+
+def test_host_prefixed_cookies_and_old_names(make_web, cfg, conn, acct, clock):
+    # __Host-: соседний поддомен не подложит cookie входа и выбора полки; старые имена действуют до конца их срока
+    wb = make_web(cfg, conn)
+    r = wb.client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
+    auth = next(h for h in r.headers.get_list("set-cookie") if h.startswith(AUTH + "="))
+    assert "secure" in auth.lower() and "path=/" in auth.lower() and "domain" not in auth.lower()
+    assert any(h.startswith(ACCT + "=1;") for h in r.headers.get_list("set-cookie"))
+    old = TestClient(wb.app, base_url=BASE)                  # браузер с cookie до выкладки префикса
+    old.cookies.set("appshelf_auth", wb.client.cookies.get(AUTH), domain=HOST)
+    assert old.get("/", follow_redirects=False).status_code == 200
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=acct.user_id)
+    wb.client.cookies.set("appshelf_acct", str(second.id), domain=HOST)   # старое имя не сильнее нового
+    assert '<span class="on" aria-current="true">owner@example</span>' in wb.client.get("/").text
+    r = wb.client.post("/logout", follow_redirects=False)
+    gone = [h for h in r.headers.get_list("set-cookie") if "max-age=0" in h.lower()]
+    assert any(h.startswith(AUTH + "=") and "secure" in h.lower() for h in gone)   # без Secure браузер отбросит
+    assert any(h.startswith("appshelf_auth=") for h in gone) and any(h.startswith(ACCT + "=") for h in gone)
+
+
+def test_plain_http_site_keeps_cookie_names(make_web, cfg, conn, acct):
+    # без https браузер __Host- не примет: имена прежние
+    wb = make_web(replace(cfg, public_base=f"http://{HOST}"), conn)
+    client = TestClient(wb.app, base_url=f"http://{HOST}")
+    r = client.post("/login", data={"email": "owner@example", "password": "pw"}, follow_redirects=False)
+    assert r.status_code == 303 and "appshelf_auth=" in cookies(r) and "__host-" not in cookies(r)
+    assert client.get("/", follow_redirects=False).status_code == 200
 
 
 def test_forget_one_person_keeps_the_others(web, conn, cfg, clock):  # 2026-10-12, Review Focus 3
@@ -362,7 +390,7 @@ def test_forget_one_person_keeps_the_others(web, conn, cfg, clock):  # 2026-10-1
     assert people.get_user(conn, shared.user_id).epoch == 0           # в других браузерах Общий жив
     r = web.client.post("/logout/1", follow_redirects=False)          # последний — как «Выйти»
     assert r.headers["location"] == "/login"
-    assert any(h.startswith("appshelf_auth=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
+    assert any(h.startswith(AUTH + "=") and "max-age=0" in h.lower() for h in r.headers.get_list("set-cookie"))
     assert web.client.get("/", follow_redirects=False).status_code == 303
 
 
@@ -450,8 +478,8 @@ def test_two_people_in_one_browser_show_all_their_shelves(web, conn, cfg, clock)
 
 
 def test_junk_around_a_good_cookie_entry_is_ignored(web):  # 2026-10-12, Review Focus 1
-    good = web.client.cookies.get("appshelf_auth")
-    web.client.cookies.set("appshelf_auth", f"junk|admin:1890000000:{'0' * 64}||{good}|9:9:9:zz", domain=HOST)
+    good = web.client.cookies.get(AUTH)
+    web.client.cookies.set(AUTH, f"junk|admin:1890000000:{'0' * 64}||{good}|9:9:9:zz", domain=HOST)
     r = web.client.get("/", follow_redirects=False)
     assert r.status_code == 200 and "owner@example" in r.text
 
@@ -488,10 +516,10 @@ def test_login_in_signed_in_browser_adds_the_person(web, conn, clock):  # 2026-1
     assert r.status_code == 303 and f"appshelf_acct={shared.id}" in cookies(r)
     page = web.client.get("/").text
     assert "/acct/1" in page and '<span class="on" aria-current="true">shared@example</span>' in page
-    before = web.client.cookies.get("appshelf_auth")
+    before = web.client.cookies.get(AUTH)
     clock.advance(3600)
     web.client.post("/login", data={"email": "owner@example", "password": "pw"})   # владелец входит заново
-    after = web.client.cookies.get("appshelf_auth")
+    after = web.client.cookies.get(AUTH)
     assert after.split("|")[1] == before.split("|")[1]                # запись Общего — как была, со своим сроком
     assert after.split("|")[0] != before.split("|")[0]                # своя — новая, на прежнем месте
 

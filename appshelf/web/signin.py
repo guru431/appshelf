@@ -381,8 +381,8 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
 
     def logged_out():
         resp = back("/login")
-        resp.delete_cookie(webauth.COOKIE, path="/")
-        resp.delete_cookie(ACCT_COOKIE, path="/")
+        w.delete_cookie(resp, webauth.COOKIE)
+        w.delete_cookie(resp, ACCT_COOKIE)
         return resp
 
     def forget(request: Request, uid: int):

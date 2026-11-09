@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 
 from appshelf import people
 from appshelf.android import db
-from helpers import HOST, make_account, sign_in
+from helpers import AUTH, HOST, WHO, make_account, sign_in
 from test_web_google import signed_uids
 
 
@@ -50,7 +50,7 @@ def test_web_link_both_apple_400_and_cookie_after_link(gweb, conn, cfg, clock):
     r = gweb.client.post("/apple/link", data={"a": uid, "b": 1}, follow_redirects=False)   # порядок полей не важен
     assert (r.status_code, r.headers["location"]) == (303, "/apple")
     assert people.get_user(conn, uid) is None and people.get_google(conn, gid).user_id == 1
-    assert signed_uids(gweb.client, cfg, conn, clock) == [1, petr.user_id] and r.cookies.get("appshelf_who") == "1"
+    assert signed_uids(gweb.client, cfg, conn, clock) == [1, petr.user_id] and r.cookies.get(WHO) == "1"
 
 
 def test_link_needs_both_signed_in(gweb, conn, cfg, clock):
@@ -96,7 +96,7 @@ def test_delete_last_google_of_google_only_person_signs_out_only_him(gweb, conn,
     uid2, gid2 = google_only(conn, clock, "g2")
     sign_in(alone, cfg, conn, clock, uid2)
     r = alone.post(f"/google/{gid2}/delete", follow_redirects=False)
-    assert (r.status_code, r.headers["location"]) == (303, "/login") and not alone.cookies.get("appshelf_auth")
+    assert (r.status_code, r.headers["location"]) == (303, "/login") and not alone.cookies.get(AUTH)
 
 
 def test_foreign_google_cannot_be_deleted(gweb, conn, cfg, clock):
