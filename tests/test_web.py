@@ -23,6 +23,8 @@ def test_privacy_without_login(web):
     r = TestClient(web.app, base_url=f"https://{HOST}").get("/privacy", follow_redirects=False)
     assert r.status_code == 200 and "Google" in r.text and "openid" in r.text and "пароль" in r.text.lower()
     assert "/admin" not in r.text and "Выйти" not in r.text
+    # как и форма подключения Play: ключ даёт доступ ко всему аккаунту — «доступа нет» только без Play
+    assert "ко всему аккаунту" in r.text and "Пока Google Play не подключён, доступа к почте" in r.text
 
 
 def test_pwa_manifest_and_icons_without_login(web):
