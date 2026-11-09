@@ -90,3 +90,32 @@ def test_first_download_is_not_new_version(web, conn, cfg, clock):
     finish_publish(conn, clock)
     clock.advance(60)
     assert "новая версия" not in web.client.get("/").text
+
+
+def test_catalog_state_links_only_nonzero(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, app_id=1, name="Работает", bundle_id="b1", versions=("1.0",))
+    seed_app(conn, cfg, clock, app_id=2, name="Ошибка", bundle_id="b2")
+    store.set_app_status(conn, 1, 2, "error", "ipatool: timeout")
+    seed_app(conn, cfg, clock, app_id=3, name="Ждёт", bundle_id="b3")       # queued
+    text = web.client.get("/").text
+    links = dict(re.findall(r'<a[^>]*href="/\?os=apple&amp;filter=(\w+)"[^>]*>([^<]+)</a>', text))
+    assert set(links) == {"errors", "active"} and "1" in links["errors"] and "1" in links["active"]
+    for mode, name in (("errors", "Ошибка"), ("active", "Ждёт")):
+        page = web.client.get("/", params={"os": "apple", "filter": mode}).text
+        assert name in page and "Работает" not in page
+
+
+def test_check_all_updates_once(web, conn, cfg, clock):
+    for app_id in (1, 2):
+        seed_app(conn, cfg, clock, app_id=app_id, name=f"A{app_id}", bundle_id=f"b{app_id}", versions=("1.0",))
+    seed_app(conn, cfg, clock, app_id=3, name="Без версии", bundle_id="b3")
+    conn.execute("UPDATE jobs SET status='done'")
+    other = make_account(conn, clock, "other@example", role="member", legacy=False)
+    seed_app(conn, cfg, clock, app_id=4, name="Чужое", bundle_id="b4", versions=("1.0",), acct=other)
+    conn.execute("UPDATE jobs SET status='done'")
+    assert "Проверить обновления всех" in web.client.get("/").text
+    for _ in range(2):                                     # двойной клик — по заданию на приложение
+        assert web.client.post("/apps/check", follow_redirects=False).status_code == 303
+    queued = conn.execute("SELECT account_id, app_id FROM jobs WHERE status='queued' ORDER BY app_id").fetchall()
+    assert [tuple(r) for r in queued] == [(1, 1), (1, 2)]
+    assert {a.app_id: a.status for a in store.list_apps(conn, 1)} == {1: "queued", 2: "queued", 3: "queued"}

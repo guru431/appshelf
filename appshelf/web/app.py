@@ -34,6 +34,7 @@ NEW_VERSION_DAYS = 7  # метка «новая версия» в каталог
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
 SHELF_BUSY = "Полка занята скачиванием — повторите через минуту"
+STATE_LINKS = (("recent", "новые за неделю"), ("errors", "ошибки"), ("active", "в очереди"))  # значения filter_shelf
 
 
 def version_key(v: str) -> tuple:
@@ -223,10 +224,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         since = datetime.fromisoformat(now()) - timedelta(days=NEW_VERSION_DAYS)
         fresh = {x.app_id for x in apps if (x.previous is not None or x.app_id in updated)
                  and datetime.fromisoformat(x.current["downloaded_at"]) >= since}
+        # метки над списком — те же условия, что у фильтров filter_shelf; только ненулевые
+        counts = {"recent": len(fresh),
+                  "errors": sum(x.status in ("error", "nolicense") or x.check_result == "error" for x in apps),
+                  "active": sum(x.status in ("queued", "downloading") for x in apps)}
+        state_links = [(mode, label, counts[mode]) for mode, label in STATE_LINKS if counts[mode]]
+        checkable = any(x.current is not None and x.status in ("ok", "error") for x in apps)
         apps, filters = filter_shelf(apps, request, fresh)
         return w.page(request, "catalog.html", "catalog", status_code, apps=apps, banners=banners, nightly=nightly,
                       busy=busy, statuses=statuses, fresh=fresh, waiting=waiting, status_url=f"/api/status?account={a.id}", **filters,
-                      public_url=lambda d, f: cfg.shelf_url(a, d, f))
+                      public_url=lambda d, f: cfg.shelf_url(a, d, f), state_links=state_links, checkable=checkable)
 
     @app.get("/", response_class=HTMLResponse)
     def catalog(request: Request, explicit: str = Query("", alias="os")):
@@ -375,6 +382,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if not store.has_app(c, aid, app_id):
                 return not_found()
             store.retry(c, aid, app_id, now())
+        return done(request)
+
+    @app.post("/apps/check")
+    def check_all(request: Request):
+        """«Проверить обновления всех» активной полки: повторное нажатие заданий не плодит."""
+        with w.conn() as c:
+            store.check_updates(c, request.state.acct.id, now())
         return done(request)
 
     @app.post("/apps/{app_id}/check")

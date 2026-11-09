@@ -2,6 +2,10 @@
 {% block main %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% include 'shelf_filter.html' %}
+{% if state_links or checkable %}<div class="sortbar">
+  {%- for value, label, n in state_links %}<a href="/?os=apple&amp;filter={{ value }}"{% if filter_mode == value %} class="on"{% endif %}>{{ label }} · {{ n }}</a>{% endfor %}
+  {%- if checkable %}<form method="post" action="{{ post_url('/apps/check') }}"><button class="sm secondary">Проверить обновления всех</button></form>{% endif %}
+</div>{% endif %}
 {% if not apps and not total %}<p class="empty">Каталог пуст. Опубликуйте приложение на странице <a href="/history">«История»</a>.</p>{% endif %}
 {% for a in apps %}
 <div class="card app">

@@ -569,13 +569,25 @@ def check_update(c, aid: int, app_id: int, now: str) -> bool:
     """«Проверить обновление» приложения с рабочей current: задание publish, если такого нет в очереди или в работе,
     приложение — queued. False — нет рабочей версии или приложение уже в очереди или скачивается."""
     with tx(c):
-        if c.execute("SELECT 1 FROM apps WHERE account_id=? AND app_id=? AND status IN ('ok', 'error')",
-                     (aid, app_id)).fetchone() is None or current_version(c, aid, app_id) is None:
-            return False
-        if _active(c, aid, "publish", app_id):
-            return False
-        c.execute("UPDATE apps SET status='queued' WHERE account_id=? AND app_id=?", (aid, app_id))
-        _enqueue(c, aid, "publish", app_id, now)
+        return _check_update(c, aid, app_id, now)
+
+
+def check_updates(c, aid: int, now: str) -> int:
+    """«Проверить обновления всех»: check_update каждого приложения полки одной транзакцией; повторное нажатие
+    заданий не плодит (_active). Число поставленных."""
+    with tx(c):
+        ids = [r["app_id"] for r in c.execute("SELECT app_id FROM apps WHERE account_id=?", (aid,))]
+        return sum(_check_update(c, aid, app_id, now) for app_id in ids)
+
+
+def _check_update(c, aid: int, app_id: int, now: str) -> bool:
+    if c.execute("SELECT 1 FROM apps WHERE account_id=? AND app_id=? AND status IN ('ok', 'error')",
+                 (aid, app_id)).fetchone() is None or current_version(c, aid, app_id) is None:
+        return False
+    if _active(c, aid, "publish", app_id):
+        return False
+    c.execute("UPDATE apps SET status='queued' WHERE account_id=? AND app_id=?", (aid, app_id))
+    _enqueue(c, aid, "publish", app_id, now)
     return True
 
 
