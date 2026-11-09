@@ -93,7 +93,9 @@ def test_stale_confirmation_cannot_remove_replacement_file(web, conn, saved_vers
     snapshot = snapshot_from(web.client.get(remove_url(s)))
     # A manual import can reuse a removed SQLite id for another historical APK.
     conn.execute(f"UPDATE {s.table} SET sha256=? WHERE id=?", ("b" * 64, s.old["id"]))
-    assert web.client.post(remove_url(s), data={"snapshot": snapshot}).status_code == 404
+    # Apple asks again with the current snapshot (409); Android still answers 404.
+    assert web.client.post(remove_url(s), data={"snapshot": snapshot}).status_code == (
+        409 if s.platform == "apple" else 404)
     assert (s.root / s.old["dir"] / "payload").is_file()
 
 

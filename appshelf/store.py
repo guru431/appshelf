@@ -601,6 +601,17 @@ def list_apps(c, aid: int) -> list[AppView]:
     return sorted(out, key=lambda v: (v.name.casefold(), v.app_id))
 
 
+def updated_ids(c, aid: int) -> set[int]:
+    """Приложения, чья current — не первая версия с публикации: до её записи успешно завершилось задание скачивания
+    (publish или ночное update) этой публикации. По previous нельзя — её удаляют вручную («Удалить <версию>»)."""
+    return {r["app_id"] for r in c.execute(
+        """SELECT v.app_id FROM versions v JOIN apps a ON a.account_id = v.account_id AND a.app_id = v.app_id
+           WHERE v.account_id = ? AND v.role = 'current' AND EXISTS (
+               SELECT 1 FROM jobs j WHERE j.account_id = v.account_id AND j.app_id = v.app_id
+               AND j.kind IN ('publish', 'update') AND j.status = 'done'
+               AND j.created_at >= a.published_at AND j.finished_at < v.downloaded_at)""", (aid,))}
+
+
 def apps_to_check(c, aid: int) -> list[sqlite3.Row]:
     return c.execute("SELECT * FROM apps WHERE account_id=? AND status IN ('ok', 'error') ORDER BY app_id",
                      (aid,)).fetchall()

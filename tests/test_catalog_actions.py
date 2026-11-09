@@ -1,0 +1,92 @@
+"""Каталог и «История» Apple: занятая полка, действия со старой вкладки, метки и фильтры состояния."""
+import re
+
+from appshelf import ipatool, jobs, store
+from helpers import make_account, seed_app, sign_in
+
+
+def test_unpublish_while_shelf_busy_says_so(web, conn, cfg, clock, monkeypatch):
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
+    with ipatool.hold(cfg.download_lock):                  # чьё-то скачивание IPA или APK
+        r = web.client.post("/apps/123/unpublish")
+    assert r.status_code == 503 and "Полка занята скачиванием" in r.text
+    assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
+
+
+def test_history_keeps_removed_mark_after_first_download(web, conn, clock):
+    store.add_known(conn, 1, 11, "Банк", "license")        # нашла проверка справочника
+    store.add_known(conn, 1, 12, "App Store 12", "manual")  # по ссылке, лицензия не подтверждена
+    store.upsert_purchases(conn, 1, [{"id": 13, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
+    for app_id in (11, 12):                                # первое скачивание подставило имя и bundle id
+        store.fill_names(conn, 1, app_id, f"Приложение {app_id}", f"ru.app{app_id}")
+    rows = {m.group(1): m.group(2) for m in re.finditer(
+        r"<b>([^<]+)</b><div class=\"meta\">(.*?)</div></div>", web.client.get("/history").text, re.S)}
+    assert "удалено из App Store" in rows["Приложение 11"] and "ru.app11" in rows["Приложение 11"]
+    assert "по ссылке, не подтверждено" in rows["Приложение 12"]
+    assert "tag" not in rows["VK"]
+
+
+def test_action_from_stale_tab_shows_its_shelf(web, conn, cfg, clock):
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
+    other = make_account(conn, clock, "other@example", role="member", legacy=False)
+    sign_in(web.client, cfg, conn, clock, other.user_id)
+    web.client.get(f"/acct/{other.id}", follow_redirects=False)   # другая вкладка переключила полку
+    r = web.client.post("/apps/7/publish", params={"account": 1})  # форма вкладки «Истории» полки №1
+    assert r.status_code == 200 and r.context["acct"].id == 1 and "VK" in r.text
+    assert web.client.get("/").context["acct"].id == 1
+
+
+def test_stale_version_confirmation_asks_again(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, versions=("1.0", "2.0"), make_dirs=True)
+    old = conn.execute("SELECT * FROM versions WHERE role='previous'").fetchone()
+    url = f"/apps/123/versions/{old['id']}/remove"
+    snapshot = re.search(r'name="snapshot" value="([a-f0-9]{64})"', web.client.get(url).text).group(1)
+    conn.execute("UPDATE versions SET pinned=1 WHERE id=?", (old["id"],))   # закрепили в другой вкладке
+    r = web.client.post(url, data={"snapshot": snapshot})
+    assert r.status_code == 409 and "Версия изменилась" in r.text and "Закрепление будет снято" in r.text
+    fresh = re.search(r'name="snapshot" value="([a-f0-9]{64})"', r.text).group(1)
+    assert fresh != snapshot and store.old_version(conn, 1, 123, old["id"])
+    assert web.client.post(url, data={"snapshot": fresh}, follow_redirects=False).status_code == 303
+    gone = web.client.post(url, data={"snapshot": fresh})                   # уже удалена: страница, не голый текст
+    assert gone.status_code == 404 and gone.headers["content-type"].startswith("text/html")
+    assert "Версия не найдена" in gone.text and 'href="/"' in gone.text
+    assert web.client.get(url).status_code == 404 and "Версия не найдена" in web.client.get(url).text
+
+
+def updated_app(conn, cfg, clock):
+    """Приложение скачано впервые (задание publish завершено), через час — обновление: previous и current."""
+    seed_app(conn, cfg, clock, versions=("1.0",), make_dirs=True)
+    finish_publish(conn, clock)
+    clock.advance(3600)
+    root = cfg.shelf_root(store_acct(conn))
+    (root / "123-1.1").mkdir()
+    store.add_version(conn, 1, root, 123, store.NewVersion("1.1", "1", "901", "13.0", "iphone", 1, "123-1.1"),
+                      clock.iso())
+
+
+def finish_publish(conn, clock):
+    """Задание publish выполнено обработчиком: в тот же миг, что и запись версии."""
+    conn.execute("UPDATE jobs SET status='done', finished_at=? WHERE kind='publish'", (clock.iso(),))
+
+
+def store_acct(conn):
+    from appshelf import people
+    return people.get_account(conn, 1)
+
+
+def test_new_version_mark_survives_removal_of_previous(web, conn, cfg, clock):
+    updated_app(conn, cfg, clock)
+    assert "новая версия ·" in web.client.get("/").text
+    old = conn.execute("SELECT * FROM versions WHERE role='previous'").fetchone()
+    assert store.remove_version(conn, 1, cfg.shelf_root(store_acct(conn)), 123, old["id"], store.version_snapshot(old))
+    text = web.client.get("/").text
+    assert "новая версия ·" in text and "123-1.0" not in text
+    assert "СберБанк" in web.client.get("/", params={"os": "apple", "filter": "recent"}).text
+
+
+def test_first_download_is_not_new_version(web, conn, cfg, clock):
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    finish_publish(conn, clock)
+    clock.advance(60)
+    assert "новая версия" not in web.client.get("/").text

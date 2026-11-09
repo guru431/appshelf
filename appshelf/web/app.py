@@ -20,7 +20,7 @@ from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, android, google_signin, pwa, signin
-from .common import THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind
+from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind
 from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
@@ -33,6 +33,7 @@ NO_APPLE_ID = "409: Нет Apple ID — добавьте его на стран�
 NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
+SHELF_BUSY = "Полка занята скачиванием — повторите через минуту"
 
 
 def version_key(v: str) -> tuple:
@@ -153,6 +154,13 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def not_found():
         return PlainTextResponse("not found", status_code=404)
 
+    def done(request: Request, path: str = "/"):
+        """Действие выполнено на полке из ?account= — она и становится активной: иначе ответ показал бы полку из
+        cookie, которую могла переключить другая вкладка, и действие выглядело бы несработавшим."""
+        resp = back(path)
+        w.set_cookie(resp, ACCT_COOKIE, str(request.state.acct.id), webauth.COOKIE_AGE)
+        return resp
+
     @app.get("/healthz")
     def healthz():
         with w.conn() as c:
@@ -201,6 +209,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             nightly = (store.get_state(c, "nightly_last"), result_for(store.get_state(c, "nightly_result"), a.email))
             busy = store.has_active_jobs(c, a.id)
             waiting = {x.app_id: store.waiting_reason(c, a.id, x.app_id) for x in apps if x.status == "queued"}
+            updated = store.updated_ids(c, a.id)
         banners = [error] if error else []
         try:
             free = jobs.free_space(env)
@@ -212,8 +221,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
         statuses = json.dumps({str(x.app_id): x.status for x in apps})
         since = datetime.fromisoformat(now()) - timedelta(days=NEW_VERSION_DAYS)
-        fresh = {x.app_id for x in apps
-                 if x.previous is not None and datetime.fromisoformat(x.current["downloaded_at"]) >= since}
+        fresh = {x.app_id for x in apps if (x.previous is not None or x.app_id in updated)
+                 and datetime.fromisoformat(x.current["downloaded_at"]) >= since}
         apps, filters = filter_shelf(apps, request, fresh)
         return w.page(request, "catalog.html", "catalog", status_code, apps=apps, banners=banners, nightly=nightly,
                       busy=busy, statuses=statuses, fresh=fresh, waiting=waiting, status_url=f"/api/status?account={a.id}", **filters,
@@ -330,7 +339,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def blocked_check(request: Request):
         with w.conn() as c:
             store.enqueue_once(c, request.state.acct.id, "check_removed", None, now())
-        return back("/blocked")
+        return done(request, "/blocked")
 
     @app.post("/blocked/add", response_class=HTMLResponse)
     def add_by_link(request: Request, ref: str = Form("")):
@@ -340,7 +349,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                                 add_error="Не похоже на ссылку App Store или ID — пример: apps.apple.com/ru/app/…/id492224193")
         with w.conn() as c:
             store.add_manual(c, request.state.acct.id, app_id, now())
-        return back("/")
+        return done(request)
 
     @app.post("/history/refresh")
     def refresh(request: Request):
@@ -348,7 +357,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             store.enqueue_once(c, aid, "refresh_history", None, now())
             store.enqueue_once(c, aid, "check_removed", None, now())  # удалённые из App Store — по справочнику
-        return back("/history")
+        return done(request, "/history")
 
     @app.post("/apps/{app_id}/publish")
     def publish(request: Request, app_id: int):
@@ -357,7 +366,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if not store.has_purchase(c, aid, app_id):  # чужое или несуществующее — как нет
                 return not_found()
             store.publish(c, aid, app_id, now())
-        return back("/")
+        return done(request)
 
     @app.post("/apps/{app_id}/retry")
     def retry(request: Request, app_id: int):
@@ -366,7 +375,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if not store.has_app(c, aid, app_id):
                 return not_found()
             store.retry(c, aid, app_id, now())
-        return back("/")
+        return done(request)
 
     @app.post("/apps/{app_id}/check")
     def check_update(request: Request, app_id: int):
@@ -375,7 +384,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             if not store.has_app(c, aid, app_id):  # чужое или не опубликованное — как нет
                 return not_found()
             store.check_update(c, aid, app_id, now())
-        return back("/")
+        return done(request)
 
     @app.post("/apps/{app_id}/unpublish", response_class=HTMLResponse)
     def unpublish(request: Request, app_id: int):
@@ -387,9 +396,12 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                 jobs.unpublish(cfg, c, a, app_id)
             except jobs.ArchiveUnavailable:
                 return catalog_page(request, 503, UNPUBLISH_ARCHIVE_DOWN)
-        return back("/")
+            except jobs.AccountBusy:  # общий замок скачивания держит чужая загрузка IPA или APK
+                return catalog_page(request, 503, SHELF_BUSY)
+        return done(request)
 
-    def change_version(request: Request, app_id: int, version_id: int, fn, *, archive_error=PIN_ARCHIVE_DOWN):
+    def change_version(request: Request, app_id: int, version_id: int, fn, *, archive_error=PIN_ARCHIVE_DOWN,
+                       missing=not_found):
         """Изменение версии может удалить файл: архив недоступен — 503 и ничего не тронуто."""
         a = request.state.acct
         try:
@@ -399,10 +411,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             try:
                 if not fn(cfg, c, a, app_id, version_id):
-                    return not_found()
+                    return missing()
             except jobs.AccountBusy:
-                return catalog_page(request, 503, "Полка занята скачиванием — повторите через минуту")
-        return back("/")
+                return catalog_page(request, 503, SHELF_BUSY)
+        return done(request)
 
     @app.post("/apps/{app_id}/versions/{version_id}/pin", response_class=HTMLResponse)
     def pin(request: Request, app_id: int, version_id: int):
@@ -412,19 +424,27 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def unpin(request: Request, app_id: int, version_id: int):
         return change_version(request, app_id, version_id, jobs.unpin_version)
 
-    @app.get("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
-    def remove_version_page(request: Request, app_id: int, version_id: int):
+    def remove_page(request: Request, app_id: int, version_id: int, changed: bool = False):
+        """Подтверждение удаления старой версии. changed — подтверждали другой снимок (версию закрепили или заменили
+        в другой вкладке): 409 и вопрос заново, с текущим снимком. Версии нет — страница 404 с путём назад."""
         with w.conn() as c:
             row = store.old_version(c, request.state.acct.id, app_id, version_id)
         if row is None:
-            return not_found()
+            return w.page(request, "confirm.html", "catalog", 404, refused=True, cancel="/",
+                          question="Версия не найдена: её уже удалили, или она стала текущей.")
         pinned = " Закрепление будет снято." if row["pinned"] else ""
-        return w.page(request, "confirm.html", "catalog",
+        return w.page(request, "confirm.html", "catalog", 409 if changed else 200,
                       question=f"Удалить версию {row['version']} приложения «{row['app_name']}»? "
                                f"Файл IPA и ссылка установки этой версии удалятся.{pinned}",
+                      error="Версия изменилась, пока страница была открыта, — проверьте и подтвердите снова."
+                      if changed else "",
                       action=f"/apps/{app_id}/versions/{version_id}/remove", button="Удалить версию",
                       cancel="/",
                       hidden={"snapshot": store.version_snapshot(row)})
+
+    @app.get("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
+    def remove_version_page(request: Request, app_id: int, version_id: int):
+        return remove_page(request, app_id, version_id)
 
     @app.post("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
     def remove_version(request: Request, app_id: int, version_id: int, snapshot: str = Form("")):
@@ -432,7 +452,8 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             return PlainTextResponse("Подтвердите удаление на странице версии", status_code=400)
         return change_version(request, app_id, version_id,
                               lambda cfg, c, acct, aid, vid: jobs.remove_version(cfg, c, acct, aid, vid, snapshot),
-                              archive_error="Архив недоступен — удалить версию сейчас нельзя")
+                              archive_error="Архив недоступен — удалить версию сейчас нельзя",
+                              missing=lambda: remove_page(request, app_id, version_id, changed=True))
 
     @app.get("/api/status")
     def api_status(request: Request):
