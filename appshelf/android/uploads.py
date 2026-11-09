@@ -263,7 +263,9 @@ class Uploads:
                             or row["package"] and not db.get_app(c, row["shelf_id"], row["package"])):
                         raise UploadError(404, "Полка или приложение больше не существует")
                     job_id = db.enqueue(c, row["shelf_id"], "upload", now, package=row["package"],
-                                        payload={"path": str(dest), "name": row["name"]})
+                                        payload={"path": str(dest), "name": row["name"],
+                                                 # подпись задания без названия: строка докачки уйдёт по сроку
+                                                 "filename": row["filename"]})
                     c.execute("UPDATE android_uploads SET job_id=?,updated_at=? WHERE id=?", (job_id, now, row["id"]))
             finally:
                 temp.unlink(missing_ok=True)

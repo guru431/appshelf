@@ -40,6 +40,8 @@ def test_parts_out_of_order_retry_restart_and_finish_once(web, conn, cfg, clock,
     completed = web.client.post(endpoint + "/finish").json()
     assert web.client.post(endpoint + "/finish").json()["job_id"] == completed["job_id"]
     assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 1
+    # имя файла — в самом задании: строка докачки уйдёт по сроку, а подпись ошибки останется
+    assert json.loads(conn.execute("SELECT payload FROM android_jobs").fetchone()[0])["filename"] == "example.apk"
     web.app.state.worker.recover()
     assert conn.execute("SELECT status FROM android_jobs").fetchone()[0] == "queued"
     work(web, conn)
