@@ -742,10 +742,47 @@ def test_link_to_app_not_in_purchases_is_not_retried(ctx, cfg, conn, clock):
     worker(ctx, cfg).tick()
     app = store.list_apps(conn, 1)[0]
     assert (app.status, app.last_error) == ("nolicense", jobs.NOT_PURCHASED)
-    assert store.retry(conn, 1, 987654321, clock.iso()) is False
     assert store.no_license_ids(conn, 1) == {987654321}
     jobs.unpublish(cfg, conn, acct, 987654321)                       # заглушка уходит и из «Истории»
     assert store.list_purchases(conn, 1) == []
+
+
+def no_license_app(ctx, cfg, conn, clock, app_id=7):
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    store.add_manual(conn, 1, app_id, clock.iso())                   # добавили по ссылке до покупки
+    ctx.tool.errors["download"] = LicenseNotFound("license_not_found", "no license")
+    worker(ctx, cfg).tick()
+    assert store.list_apps(conn, 1)[0].status == "nolicense"
+
+
+def queued_publish(conn, app_id=7) -> int:
+    return conn.execute("SELECT COUNT(*) FROM jobs WHERE kind='publish' AND app_id=? AND status='queued'",
+                        (app_id,)).fetchone()[0]
+
+
+def test_purchase_in_history_requeues_no_license_app(ctx, cfg, conn, clock, tmp_path):
+    no_license_app(ctx, cfg, conn, clock)
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "ru.example.app", "name": "Пример"}], clock.iso())
+    app = store.list_apps(conn, 1)[0]
+    assert (app.status, app.last_error, queued_publish(conn)) == ("queued", "", 1)
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "ru.example.app", "name": "Пример"}], clock.iso())
+    assert queued_publish(conn) == 1                                 # следующая ночь второго задания не ставит
+    ctx.tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    worker(ctx, cfg).tick()
+    assert store.list_apps(conn, 1)[0].status == "ok"
+
+
+def test_confirmed_license_requeues_no_license_app(ctx, cfg, conn, clock):
+    no_license_app(ctx, cfg, conn, clock)
+    store.confirm_license(conn, 1, 7, clock.iso())                   # проверка справочника нашла лицензию
+    assert (store.list_apps(conn, 1)[0].status, queued_publish(conn)) == ("queued", 1)
+
+
+def test_retry_after_no_license(ctx, cfg, conn, clock):
+    no_license_app(ctx, cfg, conn, clock)
+    assert store.retry(conn, 1, 7, clock.iso()) is True              # купили, а историю ещё не обновляли
+    assert (store.list_apps(conn, 1)[0].status, queued_publish(conn)) == ("queued", 1)
 
 
 def test_unpublish_keeps_confirmed_history_rows(ctx, cfg, conn, clock, monkeypatch):
@@ -885,3 +922,65 @@ def test_download_after_move_goes_to_new_shelf(ctx, cfg, conn, clock, tmp_path):
     jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "web")
     moved = people.get_account(conn, petr.id)
     assert (cfg.shelf_root(moved) / "7-1.2.3").is_dir() and not cfg.shelf_root(petr).exists()
+
+
+def test_fetch_of_unpublished_app_does_not_download(ctx, cfg, conn, clock, tmp_path):
+    acct = published(conn, clock, app_id=7)
+    ctx.tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    store.take_job(conn)
+    jobs.unpublish(cfg, conn, acct, 7)                                 # сняли, пока скачивание ждало замок
+    with pytest.raises(store.AppGone):
+        jobs.fetch_version(ctx.env, conn, acct, 7, cfg.tmp_dir / "web")
+    assert ctx.tool.calls == [] and not cfg.shelf_root(acct).exists()
+
+
+def broken_move(cfg, conn, petr, monkeypatch):
+    """rotate-token упал после переименования каталога (база занята на set_shelf): shelf — прежний, shelf_next — новый."""
+    def locked(*a):
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as m:
+        m.setattr(people, "set_shelf", locked)
+        with pytest.raises(sqlite3.OperationalError):
+            jobs.move_shelf(cfg, conn, petr)
+    stuck = people.get_account(conn, petr.id)
+    assert stuck.shelf == petr.shelf and stuck.shelf_next and (cfg.archive / stuck.shelf_next).is_dir()
+    return stuck.shelf_next
+
+
+def test_download_during_interrupted_move_lands_in_new_shelf(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    petr = published(conn, clock, app_id=7, acct=member(conn, clock))
+    shelf_with_version(cfg, petr.shelf, app_id=8)
+    new = broken_move(cfg, conn, petr, monkeypatch)
+    ctx.tools.setdefault(petr.id, FakeTool()).ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    assert jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "web") == "updated"
+    jobs.move_shelves(cfg, conn)
+    moved = people.get_account(conn, petr.id)
+    assert (moved.shelf, moved.shelf_next) == (new, "") and not (cfg.archive / petr.shelf).exists()
+    cur = store.current_version(conn, petr.id, 7)
+    manifest = (cfg.archive / new / cur["dir"] / "manifest.plist").read_bytes()
+    assert f"/d/{new}/{cur['dir']}/app.ipa".encode() in manifest
+    assert f"/d/{new}/8-1.0/".encode() in (cfg.archive / new / "8-1.0" / "manifest.plist").read_bytes()
+
+
+def test_unpublish_during_interrupted_move_removes_moved_files(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    seed_app(conn, cfg, clock, app_id=7, versions=("1.0",), make_dirs=True, acct=petr)
+    new = broken_move(cfg, conn, petr, monkeypatch)
+    jobs.unpublish(cfg, conn, petr, 7)
+    assert not store.has_app(conn, petr.id, 7) and not (cfg.archive / new / "7-1.0").exists()
+    assert people.get_account(conn, petr.id).shelf == new
+
+
+def test_move_merges_versions_left_in_old_shelf(ctx, cfg, conn, clock):
+    """Прежний код, пока перенос был прерван, клал новые версии в старый каталог: доделка переносит их в новый."""
+    petr = member(conn, clock)
+    new = "ab" * 16
+    shelf_with_version(cfg, petr.shelf)
+    people.set_shelf_next(conn, petr.id, new)
+    os.replace(cfg.archive / petr.shelf, cfg.archive / new)
+    shelf_with_version(cfg, petr.shelf, app_id=9)                      # версия, скачанная в окне
+    jobs.move_shelves(cfg, conn)
+    assert sorted(p.name for p in (cfg.archive / new).iterdir()) == ["7-1.0", "9-1.0"]
+    assert not (cfg.archive / petr.shelf).exists()
+    assert f"/d/{new}/9-1.0/".encode() in (cfg.archive / new / "9-1.0" / "manifest.plist").read_bytes()

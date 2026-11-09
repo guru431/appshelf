@@ -6,10 +6,11 @@ Apple ID без входа пропускаются: о входе пишет п
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 
-from . import people, removed, store
-from .android import fetch as android_fetch
+from . import notify, people, removed, store
+from .android import db as android_db, fetch as android_fetch
 from .ipatool import SessionExpired
 from .jobs import (ACCOUNT_GONE, Env, LowSpace, app_failed, describe, fetch_version, low_space, mark_expired,
                    move_shelves, nightly_lock, refresh_history)
@@ -20,6 +21,18 @@ GONE = "остановлена: Apple ID удалён"
 NO_LOGIN = "пропущена: нет входа ни в один Apple ID"
 NOT_IN_RUN = "пропущена: не было входа в этот Apple ID"
 SEP = " | "
+DIGEST_SUBJECT = "appshelf: что обновилось на полках"
+DIGEST_DAYS = 7       # письмо участнику — не чаще раза в 7 дней (по датам UTC: время конца проверки плавает)
+DIGEST_BACK_DAYS = 14  # прошлое письмо давно (ночи не было, писать было нечего) — новые версии не старше этого
+# новые версии полки: текущая скачана позже since и есть предыдущая — как метка «новая версия» в каталоге
+APPLE_NEW = """SELECT a.name, v.version FROM versions v JOIN apps a ON a.account_id = v.account_id
+                   AND a.app_id = v.app_id WHERE v.account_id = ? AND v.role = 'current' AND v.downloaded_at > ?
+                   AND EXISTS (SELECT 1 FROM versions p WHERE p.account_id = v.account_id AND p.app_id = v.app_id
+                       AND p.role = 'previous')"""
+ANDROID_NEW = """SELECT a.name, v.version_name AS version FROM android_versions v JOIN android_apps a
+                     ON a.shelf_id = v.shelf_id AND a.package = v.package WHERE v.shelf_id = ? AND v.role = 'current'
+                     AND v.downloaded_at > ? AND EXISTS (SELECT 1 FROM android_versions p
+                         WHERE p.shelf_id = v.shelf_id AND p.package = v.package AND p.role = 'previous')"""
 
 
 def run(env: Env, c) -> str:
@@ -44,6 +57,10 @@ def _run(env: Env, c) -> str:
         apple = SEP.join(f"{a.email}: {_run_account(env, c, a, work, full=a.id % 7 == weekday)}" for a in accounts)
     # Android-полкам вход в Apple ID не нужен — их проверяем и без него (spec 2026-10-28 §9)
     android = android_fetch.check_all(env, c, work / "android")
+    try:
+        digests(env, c)
+    except Exception:  # письма не должны оставить проверку без отметки для Zabbix
+        traceback.print_exc()
     return _finish(env, c, apple + (SEP + android if android else ""))
 
 
@@ -131,6 +148,55 @@ def result_for(result: str, email: str) -> str:
             return part[len(prefix):]
     apple = SEP.join(apple_parts)
     return apple if "@" not in apple else NOT_IN_RUN
+
+
+def digests(env: Env, c) -> int:
+    """Раз в неделю участнику — новые версии на его полках со времени прошлого письма (первое — за 7 дней): полки
+    его Apple ID, его Android-полка, владельцу — ещё публичная. Отключено в «Настройках» или писать нечего — письма
+    нет. Владельцу — на MAIL_TO, как остальные письма; участнику — на адрес его Google-аккаунта, иначе Apple ID
+    (адреса — только из базы). Шлёт только ночная проверка, под своим замком, — письмо одно; не ушло — повторим
+    следующей ночью. → сколько писем отправлено."""
+    now = datetime.fromisoformat(env.now())
+    due = (now - timedelta(days=DIGEST_DAYS)).date().isoformat()
+    sent = 0
+    c.execute("DELETE FROM state WHERE (key LIKE ? OR key LIKE ?) AND CAST(substr(key, instr(key, ':') + 1) "
+              "AS INTEGER) NOT IN (SELECT id FROM users)", (notify.DIGEST_OFF + "%", notify.DIGEST_SENT + "%"))
+    for user in people.list_users(c):
+        key = notify.DIGEST_SENT + str(user.id)
+        last = store.get_state(c, key)
+        if not notify.digest_enabled(c, user.id) or last[:10] > due:
+            continue
+        since = max(last, (now - timedelta(days=DIGEST_BACK_DAYS if last else DIGEST_DAYS)).isoformat(timespec="seconds"))
+        shelves = [(f"Apple ID {a.email}", APPLE_NEW, a.id) for a in people.accounts_of(c, user.id)]
+        mine = android_db.shelf_for_user(c, user.id)
+        if mine is not None:
+            shelves.append(("Android", ANDROID_NEW, mine.id))
+        public = android_db.public_shelf(c) if user.role == people.OWNER else None
+        if public is not None:
+            shelves.append(("Публичная Android-полка", ANDROID_NEW, public.id))
+        parts = []
+        for title, query, shelf_id in shelves:
+            rows = sorted(c.execute(query, (shelf_id, since)).fetchall(), key=lambda r: r["name"].casefold())
+            if rows:
+                parts.append(title + ":\n" + "".join(f"  {r['name']} {r['version']}\n" for r in rows))
+        to = env.cfg.mail_to if user.role == people.OWNER and env.cfg.mail_to else _address(c, user.id)
+        if not parts or not to:
+            continue
+        body = (f"Новые версии на ваших полках с {since[:10]}:\n\n" + "\n".join(parts) +
+                f"\nОткрыть полки: {env.cfg.public_base}/\nОтключить эти письма: {env.cfg.public_base}/settings\n")
+        try:
+            env.send(DIGEST_SUBJECT, body, to)
+        except Exception:  # сбой почты не останавливает остальные письма
+            traceback.print_exc()
+            continue
+        store.set_state(c, key, now.isoformat(timespec="seconds"))
+        sent += 1
+    return sent
+
+
+def _address(c, uid: int) -> str:
+    mail = [g.email for g in people.google_of(c, uid)] + [a.email for a in people.accounts_of(c, uid)]
+    return next((m for m in mail if "@" in m), "")
 
 
 def _finish(env: Env, c, result: str) -> str:

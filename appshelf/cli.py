@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import replace
@@ -111,6 +112,10 @@ def rotate_token(cfg, c, args, acct) -> int:
         return 1
     except jobs.AccountBusy:
         print("идёт скачивание или задание этой полки — повторите позже", file=sys.stderr)
+        return 1
+    except (OSError, sqlite3.Error, KeyboardInterrupt) as e:  # каталог мог уже переехать, а ссылки — ещё нет
+        print(f"перенос не завершён ({type(e).__name__}: {e}) — повторите ту же команду: она доделает перенос "
+              f"с тем же новым токеном", file=sys.stderr)
         return 1
     print("готово: каталог полки переименован, ссылки " + ("на файлы" if shelf else "установки") + " — новые")
     return 0

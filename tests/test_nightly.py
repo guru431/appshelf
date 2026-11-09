@@ -1,6 +1,8 @@
 import socket
+from dataclasses import replace
 
-from appshelf import jobs, nightly, people, store
+from appshelf import jobs, nightly, notify, people, store
+from appshelf.android import db as android_db
 from appshelf.config import GB
 from appshelf.ipatool import SessionExpired
 from helpers import FakeTool, assert_shelf_gone, make_account, owner, seed_app, set_session
@@ -70,7 +72,7 @@ def test_expired_apple_id_does_not_stop_others(ctx, cfg, conn, clock, tmp_path):
                       "petr@example: обновлено 1, без изменений 0, ошибок 0; новые версии: СберБанк Онлайн")
     assert people.get_account(conn, 1).session == "expired"
     assert store.current_version(conn, petr.id, 7)["version"] == "1.1"
-    assert ctx.sent == ["appshelf: нужен вход в Apple ID"]
+    assert ctx.sent == ["appshelf: нужен вход в Apple ID", nightly.DIGEST_SUBJECT]   # Петру — о новой версии
 
 
 def test_low_space_skips_download(ctx, cfg, conn, clock):
@@ -110,6 +112,70 @@ def test_result_for_shows_only_own_apple_id():
     assert nightly.result_for(nightly.NO_LOGIN + nightly.SEP + android, "petr@example") == nightly.NO_LOGIN
     v1 = "обновлено 0, без изменений 3, ошибок 0"                                # итог до перехода — без адресов
     assert nightly.result_for(v1, "owner@example") == v1
+
+
+def android_update(conn, clock, shelf_id: int, package: str, name: str) -> None:
+    """На Android-полке — карточка с предыдущей 1.0 и текущей 2.0, скачанной сейчас."""
+    conn.execute("INSERT INTO android_apps (shelf_id, package, name, source, status, published_at) "
+                 "VALUES (?, ?, ?, 'rustore', 'ok', ?)", (shelf_id, package, name, clock.iso()))
+    for code, role in ((1, "previous"), (2, "current")):
+        conn.execute("INSERT INTO android_versions (shelf_id, package, version_name, version_code, min_sdk, target_sdk, "
+                     "signer, source, size, sha256, dir, downloaded_at, role) "
+                     "VALUES (?, ?, ?, ?, 21, 34, 's', 'rustore', 1, 'x', ?, ?, ?)",
+                     (shelf_id, package, f"{code}.0", code, f"{package}-{code}", clock.iso(), role))
+
+
+def digest_env(ctx):
+    mails = []
+    return replace(ctx.env, send=lambda subject, body, to: mails.append((subject, body, to))), mails
+
+
+def test_weekly_digest_lists_updates_of_own_shelves(ctx, cfg, conn, clock):
+    ready(conn, cfg, clock, versions=("1.0", "1.1"))                     # у владельца обновился СберБанк
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
+    seed_app(conn, cfg, clock, app_id=7, name="ВТБ", versions=("2.0", "2.1"), acct=petr)
+    seed_app(conn, cfg, clock, app_id=8, name="Первое", versions=("1.0",), acct=petr)  # новое на полке — не обновление
+    people.create_google(conn, petr.user_id, "sub-petr", "petr@mail.example", "Пётр", clock.iso())
+    android_update(conn, clock, android_db.ensure_shelf(conn, petr.user_id, clock.iso()).id, "ru.petr", "Петино")
+    android_update(conn, clock, android_db.ensure_public_shelf(conn, clock.iso()).id, "ru.pub", "Общее")
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 2
+    (_, mine, to_owner), (subject, his, to_petr) = mails
+    assert (subject, to_owner, to_petr) == (nightly.DIGEST_SUBJECT, cfg.mail_to, "petr@mail.example")
+    assert "СберБанк Онлайн 1.1" in mine and "Публичная Android-полка:\n  Общее 2.0" in mine and "ВТБ" not in mine
+    assert "Apple ID petr@example:\n  ВТБ 2.1" in his and "Android:\n  Петино 2.0" in his
+    assert not any(x in his for x in ("Первое", "Общее", "СберБанк")) and "https://apps.example/settings" in his
+
+
+def test_digest_at_most_weekly_and_never_empty(ctx, cfg, conn, clock):
+    acct = ready(conn, cfg, clock, versions=("1.0", "1.1"))
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 1
+    clock.advance(86400)
+    store.add_version(conn, 1, cfg.shelf_root(acct), 123, store.NewVersion(
+        version="1.2", build="1", external_version_id="902", min_ios="13.0", device_family="iphone", size=1,
+        dir="123-1.2"), clock.iso())
+    assert nightly.digests(env, conn) == 0                              # не чаще раза в 7 дней
+    clock.advance(6 * 86400)
+    assert nightly.digests(env, conn) == 1 and "СберБанк Онлайн 1.2" in mails[-1][1]
+    clock.advance(7 * 86400)
+    assert nightly.digests(env, conn) == 0 and len(mails) == 2          # нового нет — письма нет
+
+
+def test_digest_turned_off_and_failed_mail_retried(ctx, cfg, conn, clock):
+    ready(conn, cfg, clock, versions=("1.0", "1.1"))
+    notify.set_digest(conn, 1, False)
+    notify.set_digest(conn, 99, False)                                  # участника уже нет
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 0 and not notify.digest_enabled(conn, 1)
+    assert notify.digest_enabled(conn, 99)                              # метка удалённого — прочь
+    notify.set_digest(conn, 1, True)
+
+    def mail_down(*a):
+        raise OSError("sendmail")
+
+    assert nightly.digests(replace(ctx.env, send=mail_down), conn) == 0
+    assert nightly.digests(env, conn) == 1                              # не ушло — повторили
 
 
 def remove_on(cfg, conn, acct, call: str):

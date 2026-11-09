@@ -396,6 +396,7 @@ def upsert_purchases(c, aid: int, items: list[dict], now: str) -> int:
                       (aid, app_id, str(it.get("bundleId", "")), str(it.get("name", "")),
                        str(it.get("purchaseDate", "")), now, str(it.get("version", ""))))
             clear_no_license(c, aid, app_id)
+            _licensed(c, aid, app_id, now)
             n += 1
     return n
 
@@ -514,10 +515,20 @@ def set_downloaded(c, aid: int, app_id: int, version: str, now: str) -> None:
     clear_no_license(c, aid, app_id)
 
 
-def confirm_license(c, aid: int, app_id: int) -> None:
+def confirm_license(c, aid: int, app_id: int, now: str) -> None:
     """Добавленное по ссылке подтвердила проверка справочника: Apple отдаёт его версии этому Apple ID."""
-    c.execute("UPDATE purchases SET source='license' WHERE account_id=? AND app_id=? AND source='manual'",
-              (aid, app_id))
+    with tx(c):
+        c.execute("UPDATE purchases SET source='license' WHERE account_id=? AND app_id=? AND source='manual'",
+                  (aid, app_id))
+        _licensed(c, aid, app_id, now)
+
+
+def _licensed(c, aid: int, app_id: int, now: str) -> None:
+    """В транзакции вызывающего: лицензия подтверждена — приложение «нет в покупках» (nolicense) снова в очередь
+    публикации, иначе оно так и висело бы без кнопки, а ночь его пропускает."""
+    if c.execute("UPDATE apps SET status='queued', last_error='' WHERE account_id=? AND app_id=? "
+                 "AND status='nolicense'", (aid, app_id)).rowcount and not _active(c, aid, "publish", app_id):
+        _enqueue(c, aid, "publish", app_id, now)
 
 
 def clear_no_license(c, aid: int, app_id: int) -> None:
@@ -555,8 +566,9 @@ def fill_names(c, aid: int, app_id: int, name: str, bundle_id: str) -> None:
 
 
 def retry(c, aid: int, app_id: int, now: str) -> bool:
+    """«Повторить» — после ошибки и после «нет в покупках» (купили позже, а историю ещё не обновляли)."""
     with tx(c):
-        if c.execute("SELECT 1 FROM apps WHERE account_id=? AND app_id=? AND status='error'",
+        if c.execute("SELECT 1 FROM apps WHERE account_id=? AND app_id=? AND status IN ('error', 'nolicense')",
                      (aid, app_id)).fetchone() is None:
             return False
         c.execute("UPDATE apps SET status='queued', last_error='' WHERE account_id=? AND app_id=?", (aid, app_id))
