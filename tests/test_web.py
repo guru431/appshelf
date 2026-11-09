@@ -381,7 +381,7 @@ def test_catalog_states_of_failed_downloads(web, conn, cfg, clock):
     store.set_app_status(conn, 1, 2, "nolicense", "этого приложения нет в покупках Apple ID — проверьте ссылку или ID")
     text = web.client.get("/").text
     assert "не удалось обновить: ipatool: timeout" in text and "нет в покупках Apple ID" in text
-    assert "/apps/1/retry" not in text and "/apps/2/retry" not in text
+    assert "/apps/1/retry" not in text and "/apps/2/retry" in text      # купили позже — можно повторить
 
 
 def test_catalog_marks_versions_downloaded_this_week(web, conn, cfg, clock):

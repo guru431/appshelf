@@ -742,10 +742,47 @@ def test_link_to_app_not_in_purchases_is_not_retried(ctx, cfg, conn, clock):
     worker(ctx, cfg).tick()
     app = store.list_apps(conn, 1)[0]
     assert (app.status, app.last_error) == ("nolicense", jobs.NOT_PURCHASED)
-    assert store.retry(conn, 1, 987654321, clock.iso()) is False
     assert store.no_license_ids(conn, 1) == {987654321}
     jobs.unpublish(cfg, conn, acct, 987654321)                       # заглушка уходит и из «Истории»
     assert store.list_purchases(conn, 1) == []
+
+
+def no_license_app(ctx, cfg, conn, clock, app_id=7):
+    owner(conn, clock)
+    set_session(conn, 1, "ok")
+    store.add_manual(conn, 1, app_id, clock.iso())                   # добавили по ссылке до покупки
+    ctx.tool.errors["download"] = LicenseNotFound("license_not_found", "no license")
+    worker(ctx, cfg).tick()
+    assert store.list_apps(conn, 1)[0].status == "nolicense"
+
+
+def queued_publish(conn, app_id=7) -> int:
+    return conn.execute("SELECT COUNT(*) FROM jobs WHERE kind='publish' AND app_id=? AND status='queued'",
+                        (app_id,)).fetchone()[0]
+
+
+def test_purchase_in_history_requeues_no_license_app(ctx, cfg, conn, clock, tmp_path):
+    no_license_app(ctx, cfg, conn, clock)
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "ru.example.app", "name": "Пример"}], clock.iso())
+    app = store.list_apps(conn, 1)[0]
+    assert (app.status, app.last_error, queued_publish(conn)) == ("queued", "", 1)
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "ru.example.app", "name": "Пример"}], clock.iso())
+    assert queued_publish(conn) == 1                                 # следующая ночь второго задания не ставит
+    ctx.tool.ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    worker(ctx, cfg).tick()
+    assert store.list_apps(conn, 1)[0].status == "ok"
+
+
+def test_confirmed_license_requeues_no_license_app(ctx, cfg, conn, clock):
+    no_license_app(ctx, cfg, conn, clock)
+    store.confirm_license(conn, 1, 7, clock.iso())                   # проверка справочника нашла лицензию
+    assert (store.list_apps(conn, 1)[0].status, queued_publish(conn)) == ("queued", 1)
+
+
+def test_retry_after_no_license(ctx, cfg, conn, clock):
+    no_license_app(ctx, cfg, conn, clock)
+    assert store.retry(conn, 1, 7, clock.iso()) is True              # купили, а историю ещё не обновляли
+    assert (store.list_apps(conn, 1)[0].status, queued_publish(conn)) == ("queued", 1)
 
 
 def test_unpublish_keeps_confirmed_history_rows(ctx, cfg, conn, clock, monkeypatch):

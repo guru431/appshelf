@@ -115,7 +115,7 @@ def check(env, c, acct, catalog: list[dict] | None = None, full: bool = False,
             store.add_known(c, acct.id, app["id"], app["name"], "license")
             added += 1
         else:
-            store.confirm_license(c, acct.id, app["id"])
+            store.confirm_license(c, acct.id, app["id"], env.now())
         store.clear_no_license(c, acct.id, app["id"])
         report()  # до версии: лицензия уже записана, а за версией может истечь вход
         _fill_version(env, c, acct, app["id"], latest)

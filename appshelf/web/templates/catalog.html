@@ -32,6 +32,7 @@
     {% elif a.status == 'error' %}<div class="err">ошибка: {{ a.last_error }}</div>
     <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>
     {% elif a.status == 'nolicense' %}<div class="err">{{ a.last_error }}</div>
+    <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/retry') }}" class="install"><button class="sm tint">Повторить</button></form>
     {% elif a.current and a.check_result %}{% set t = a.checked_at %}<div class="meta">проверено {{ t[8:10] }}.{{ t[5:7] }} {{ t[11:16] }} UTC —
       {%- if a.check_result == 'error' %} не удалось: {{ a.last_error }}{% elif a.check_result == 'updated' %} скачана новая версия{% else %} новее нет{% endif %}</div>
     {% elif a.last_error %}<div class="meta">не удалось обновить: {{ a.last_error }}</div>
