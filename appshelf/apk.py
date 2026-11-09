@@ -141,8 +141,18 @@ def _verify_process(args: list[str]):
         raise ApkError("не удалось проверить подпись APK — рабочая версия сохранена") from None
 
 
-def _verified_signer(output: str) -> str:
+def _verified_signer(output: str, sdk: int | None = None) -> str:
+    """Подписант из вывода `apksigner verify --print-certs`. При ротации v3.1 apksigner печатает подписанта на каждый
+    диапазон платформ («Signer (minSdkVersion=33, maxSdkVersion=…)»): берём действующего на sdk, без sdk — на самой
+    старой платформе, то есть прежний ключ, которым APK встаёт поверх уже установленного."""
     signers = re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})$", output, re.MULTILINE)
+    ranges = sorted((int(low), int(high), digest) for low, high, digest in re.findall(
+        r"^Signer \(minSdkVersion=(\d+), maxSdkVersion=(\d+)\) certificate SHA-256 digest: ([0-9a-fA-F]{64})$",
+        output, re.MULTILINE))
+    if ranges:
+        lows = [low for low, _, _ in ranges]
+        unique = not signers and len(set(lows)) == len(lows)  # по одному подписанту на диапазон
+        signers = [d for low, high, d in ranges if unique and (sdk is None or low <= sdk <= high)][:1]
     if len(signers) != 1:
         raise ApkError("APK не содержит ровно одного проверенного подписанта")
     return signers[0].lower()
@@ -185,7 +195,7 @@ def verified_rotation(path: Path, old_signer: str, new_signer: str) -> int:
         for sdk in (28, 33):
             checked = _verify_process(["verify", "--print-certs", "--min-sdk-version", str(sdk),
                                        "--max-sdk-version", str(sdk), str(path.resolve())])
-            if checked.returncode == 0 and _verified_signer(checked.stdout) == new_signer:
+            if checked.returncode == 0 and _verified_signer(checked.stdout, sdk) == new_signer:
                 return sdk
     except ApkError:
         pass
@@ -331,8 +341,17 @@ def _value(strings: list[str], raw: int, dtype: int, value: int):
 
 
 def _strings(chunk: bytes) -> list[str]:
+    """Пул строк целиком. Смещения разных строк могут указывать на одну длинную строку: без предела пул в
+    несколько МБ раздувается в гигабайты строк. В честном пуле строки не перекрываются — символов не больше байт."""
     (count,) = struct.unpack_from("<I", chunk, 8)
-    return [_string(chunk, i) for i in range(count)]
+    out, total = [], 0
+    for i in range(count):
+        s = _string(chunk, i)
+        total += len(s)
+        if total > len(chunk):
+            raise ValueError("строки пула длиннее самого пула")
+        out.append(s)
+    return out
 
 
 def _string(chunk: bytes, i: int) -> str:

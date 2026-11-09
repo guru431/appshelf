@@ -28,6 +28,7 @@ from .net import FetchError, Http, SourceError
 MAX_JAR = 32 << 20
 MAX_INDEX = 192 << 20
 TTL = 6 * 3600
+RETRY = 15 * 60  # после неудачного обновления каталога
 MAX_AGE = 14 * 86400
 # Official repository key: https://f-droid.org/docs/Release_Channels_and_Signing_Keys/
 REPO_SIGNER = "43238d512c1e5eb2d6569f4a3afbf5523418b82e0a3ed1552770abb9a9c9ccab"
@@ -104,65 +105,72 @@ class Catalog:
         self._until = 0.0
         self._timestamp = 0
         self.stale = False
+        self._error: Exception | None = None  # последняя неудача обновления, до _retry_at не повторяется
+        self._retry_at = 0.0
         self._lock = threading.Lock()
 
     def apps(self, wait=lambda: None, *, allow_stale=False) -> dict[str, App]:
+        """Каталог; устарел — обновляется. Неудача обновления помнится RETRY секунд: при устойчивом сбое (отстающее
+        зеркало, не та подпись) каждое приложение и каждый поиск иначе заново качали бы index-v2 и запускали JVM.
+        Сеть недоступна, а allow_stale и прежний каталог есть — прежний, с пометкой stale."""
         with self._lock:
             if self._apps is None and self.cache and self.cache.exists():
                 self._load_cache()
             if self._apps is None or self.clock() >= self._until:
-                wait()
-                http = copy(self.http)
-                if isinstance(http, Http):
-                    http.timeout = min(http.timeout, 10.0)
-                try:
-                    status, _, raw = http.request("GET", self.repo + "entry.jar", max_bytes=MAX_JAR)
-                    if status != 200:
-                        raise FetchError(f"каталог F-Droid ответил {status}")
-                except FetchError:
-                    if not allow_stale or self._apps is None:
-                        raise
-                    self.stale = True
-                    return self._apps
-                verify(raw, self.signer)
-                entry = _index_data(raw)
-                timestamp = index_timestamp(raw)
-                if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
-                        or timestamp > (self.wall_clock() + 86400) * 1000:
-                    raise SourceError("устаревший каталог F-Droid или откат его версии")
-                if "index" in entry:
-                    meta = entry["index"]
-                    if meta.get("name") != "/index-v2.json" or not SHA256_RE.fullmatch(str(meta.get("sha256", ""))) \
-                            or not isinstance(meta.get("size"), int) or not 0 < meta["size"] <= MAX_INDEX:
-                        raise SourceError("неизвестный формат entry F-Droid")
-                    try:
-                        status, headers, body = http.request("GET", self.repo + "index-v2.json",
-                            headers={"Accept-Encoding": "gzip"}, max_bytes=MAX_INDEX)
-                        if status != 200:
-                            raise FetchError(f"каталог F-Droid ответил {status}")
-                    except FetchError:
-                        if not allow_stale or self._apps is None:
-                            raise
-                        self.stale = True
-                        return self._apps
-                    if headers.get("content-encoding", "").lower() == "gzip":
-                        try:
-                            with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
-                                body = stream.read(MAX_INDEX + 1)
-                        except (OSError, EOFError):
-                            raise SourceError("сжатый каталог F-Droid повреждён") from None
-                    if len(body) != meta["size"] or hashlib.sha256(body).hexdigest() != meta["sha256"]:
-                        raise SourceError("каталог F-Droid не совпал с SHA-256 подписанного entry")
-                    apps = parse_v2(body)
+                if self._error is not None and self.clock() < self._retry_at:
+                    error = self._error
                 else:
-                    apps = parse(raw)
-                try:
-                    self._save_cache(apps, timestamp)
-                except (OSError, IpatoolError, ValueError, KeyError):
-                    raise SourceError("не удалось сохранить локальный кэш F-Droid; прежнее поколение сохранено") from None
-                self._apps, self._timestamp = apps, timestamp
-                self._until, self.stale = self.clock() + TTL, False
+                    try:
+                        self._refresh(wait)
+                        self._error = None
+                        return self._apps
+                    except (FetchError, SourceError) as e:
+                        error, self._error, self._retry_at = e, e, self.clock() + RETRY
+                if not isinstance(error, FetchError) or not allow_stale or self._apps is None:
+                    raise error.with_traceback(None)
+                self.stale = True
             return self._apps
+
+    def _refresh(self, wait) -> None:
+        wait()
+        http = copy(self.http)
+        if isinstance(http, Http):
+            http.timeout = min(http.timeout, 10.0)
+        status, _, raw = http.request("GET", self.repo + "entry.jar", max_bytes=MAX_JAR)
+        if status != 200:
+            raise FetchError(f"каталог F-Droid ответил {status}")
+        verify(raw, self.signer)
+        entry = _index_data(raw)
+        timestamp = index_timestamp(raw)
+        if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
+                or timestamp > (self.wall_clock() + 86400) * 1000:
+            raise SourceError("устаревший каталог F-Droid или откат его версии")
+        if "index" in entry:
+            meta = entry["index"]
+            if meta.get("name") != "/index-v2.json" or not SHA256_RE.fullmatch(str(meta.get("sha256", ""))) \
+                    or not isinstance(meta.get("size"), int) or not 0 < meta["size"] <= MAX_INDEX:
+                raise SourceError("неизвестный формат entry F-Droid")
+            status, headers, body = http.request("GET", self.repo + "index-v2.json",
+                headers={"Accept-Encoding": "gzip"}, max_bytes=MAX_INDEX)
+            if status != 200:
+                raise FetchError(f"каталог F-Droid ответил {status}")
+            if headers.get("content-encoding", "").lower() == "gzip":
+                try:
+                    with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                        body = stream.read(MAX_INDEX + 1)
+                except (OSError, EOFError):
+                    raise SourceError("сжатый каталог F-Droid повреждён") from None
+            if len(body) != meta["size"] or hashlib.sha256(body).hexdigest() != meta["sha256"]:
+                raise SourceError("каталог F-Droid не совпал с SHA-256 подписанного entry")
+            apps = parse_v2(body)
+        else:
+            apps = parse(raw)
+        try:
+            self._save_cache(apps, timestamp)
+        except (OSError, IpatoolError, ValueError, KeyError):
+            raise SourceError("не удалось сохранить локальный кэш F-Droid; прежнее поколение сохранено") from None
+        self._apps, self._timestamp = apps, timestamp
+        self._until, self.stale = self.clock() + TTL, False
 
     def _load_cache(self):
         try:

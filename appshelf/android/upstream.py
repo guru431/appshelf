@@ -147,7 +147,11 @@ def repositories(http: Http, package: str, *, metadata_links=(), description: st
                 for url in _urls(line):
                     add(_repo(url))
         if meta.website:
-            websites.append(meta.website)
+            try:
+                check_url(meta.website)  # http:// или адрес во внутренней сети — сайта нет, а не ошибка поиска
+                websites.append(meta.website)
+            except FetchError:
+                pass
     if found:
         return tuple(found)
 

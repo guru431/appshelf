@@ -1,5 +1,7 @@
 from pathlib import Path
 import hashlib
+import io
+import zipfile
 
 import pytest
 
@@ -19,8 +21,10 @@ def source(http):
     builds = []
     for url, body in http.files.items():
         code = int(url.rsplit("_", 1)[1].split(".")[0])
+        with zipfile.ZipFile(io.BytesIO(body)) as z:  # nativecode каталога — каталоги lib/<abi>/ самого APK
+            abis = sorted({n.split("/")[1] for n in z.namelist() if n.startswith("lib/")})
         builds.append({"versionCode": code, "versionName": "3.7.2", "apkName": url.rsplit("/", 1)[1],
-                       "hashType": "sha256", "hash": hashlib.sha256(body).hexdigest()})
+                       "hashType": "sha256", "hash": hashlib.sha256(body).hexdigest(), "nativecode": abis})
     http.raw[fdroid.REPO + "entry.jar"] = (200, {}, catalog(builds, package=VLC))
     return sources.Sources(http, sleep=lambda s: None)
 
@@ -52,8 +56,8 @@ def test_fdroid_picks_universal_or_arm64(tmp_path):
         13070208: ("x86_64",), 13070207: ("x86",), 13070206: ("arm64-v8a",), 13070205: ("armeabi-v7a",)}))
     got = source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert apk.read_apk(tmp_path / "out" / "a.apk").abis == ("arm64-v8a",)
-    assert [c[1] for c in http.calls if c[0] == "download"] == [fdroid.REPO + f"{VLC}_{c}.apk"
-                                                              for c in (13070208, 13070207, 13070206)]
+    # сборка выбрана по nativecode проверенного каталога: x86_64 и x86 не скачиваются
+    assert [c[1] for c in http.calls if c[0] == "download"] == [fdroid.REPO + f"{VLC}_13070206.apk"]
     assert (got.expected_signer, got.etag) == ("", "fd:13070208")
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["a.apk"]          # кандидаты не остались
     universal = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {13070208: ()}))
@@ -68,6 +72,7 @@ def test_fdroid_armeabi_when_no_arm64(tmp_path):
     source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert apk.read_apk(tmp_path / "out" / "a.apk").abis == ("armeabi-v7a",)
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["a.apk"]
+    assert [c[1] for c in http.calls if c[0] == "download"] == [fdroid.REPO + f"{VLC}_13070207.apk"]
 
 
 def test_fdroid_no_arm_build_error(tmp_path):
@@ -76,6 +81,20 @@ def test_fdroid_no_arm_build_error(tmp_path):
         13070208: ("x86_64",), 13070207: ("x86",), 13070206: ("x86",), 13070205: ("x86_64",)}))
     with pytest.raises(net.SourceError, match="в F-Droid нет сборки для ARM"):
         source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
+    assert list((tmp_path / "out").iterdir()) == []
+    assert not [c for c in http.calls if c[0] == "download"]
+
+
+def test_fdroid_build_outside_signed_catalog_or_with_wrong_hash(tmp_path):
+    (tmp_path / "out").mkdir()
+    http = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {13070100: ("arm64-v8a",)}))
+    with pytest.raises(net.SourceError, match="нет в проверенном каталоге"):
+        source(http).fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
+    http = FakeHttp(raw={fdroid.API + VLC: api()}, files=repo(tmp_path, {13070206: ("arm64-v8a",)}))
+    src = source(http)
+    http.files[fdroid.REPO + f"{VLC}_13070206.apk"] = b"changed"
+    with pytest.raises(net.SourceError, match="SHA-256"):
+        src.fetch("fdroid", VLC, tmp_path / "out" / "a.apk")
     assert list((tmp_path / "out").iterdir()) == []
 
 

@@ -197,6 +197,24 @@ def test_huge_v1_signature_file_refused_unread(tmp_path, monkeypatch):
     assert "META-INF/A.RSA" not in names
 
 
+def test_string_pool_bomb_refused(tmp_path):
+    """Все смещения пула — на одну длинную строку: N×L символов из пула в N×4 + 2L байт роняли appshelf-web."""
+    import struct
+    import zipfile
+    count, length = 200, 100_000
+    data = struct.pack("<HH", 0x8000 | length >> 16, length & 0xFFFF) + "я".encode("utf-16-le") * length
+    start = 28 + 4 * count
+    pool = struct.pack("<HHIIIIII", 0x0001, 28, start + len(data), count, 0, 0, start, 0) + b"\0" * 4 * count + data
+    manifest = struct.pack("<HHI", 0x0003, 8, 8 + len(pool)) + pool
+    with pytest.raises(ValueError, match="длиннее"):
+        apk._manifest(manifest)
+    path = tmp_path / "bomb.apk"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("AndroidManifest.xml", manifest)
+    with pytest.raises(apk.ApkError, match="не разбирается"):
+        apk.read_apk(path)
+
+
 def test_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):
     """Картинка-бомба (мало байт, много пикселей) не распаковывается: размер — из заголовка, до load()."""
     monkeypatch.setattr(apk, "ICON_PIXELS", 100 * 100)

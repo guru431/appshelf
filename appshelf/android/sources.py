@@ -4,7 +4,6 @@ Google-аккаунтом, android/play.py), AppGallery, F-Droid, APKPure; св�
 from __future__ import annotations
 
 import io
-import hashlib
 import time
 import threading
 import urllib.parse
@@ -304,48 +303,19 @@ class Sources:
         return Got(app.name, build.signer, None, f"{source}:{build.code}")
 
     def _fetch_fdroid(self, package: str, dest: Path) -> Got:
-        """Сборки рекомендуемой версии по очереди, пока не найдётся универсальная или arm64-v8a; нет ни одной —
-        первая armeabi-v7a; нет и её — отказ. Скачанные мимо — удаляются."""
+        """Сборка рекомендуемой версии по ABI из проверенного каталога: универсальная или arm64-v8a, иначе armeabi;
+        нет ни одной — отказ. Качается только выбранная: у VLC иначе сначала шли x86_64 и x86 — около 80 МБ."""
         self._wait()
         pkg = fdroid.info(self.http, package)
-        fallback = None
-        signer = ""
-        parts = []
-        try:
-            for code in fdroid.candidates(pkg):
-                part = dest.with_name(f"{dest.name}.{code}")
-                parts.append(part)
-                self._wait()
-                self.http.download(fdroid.apk_url(package, code), part)
-                abis = apk.read_apk(part).abis
-                app = self.fdroid_catalog.apps(self._wait).get(package)
-                trusted = next((b for b in app.builds if b.code == code), None) if app else None
-                if trusted is None:
-                    part.unlink(missing_ok=True)
-                    raise SourceError("сборки APK нет в проверенном каталоге F-Droid")
-                with part.open("rb") as stream:
-                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
-                if digest != trusted.sha256:
-                    part.unlink(missing_ok=True)
-                    raise SourceError("APK из F-Droid не совпал с SHA-256 в каталоге")
-                if not abis or "arm64-v8a" in abis:
-                    signer = trusted.signer
-                    part.replace(dest)
-                    break
-                if "armeabi-v7a" in abis and fallback is None:
-                    fallback = part
-                    signer = trusted.signer
-                else:
-                    part.unlink()
-            else:
-                if fallback is None:
-                    raise SourceError("в F-Droid нет сборки для ARM")
-                fallback.replace(dest)
-                fallback = None
-        finally:
-            for part in parts:
-                part.unlink(missing_ok=True)
-        return Got("", signer, None, _fdroid_mark(pkg))
+        app = self.fdroid_catalog.apps(self._wait).get(package)
+        trusted = [b for code in fdroid.candidates(pkg) for b in (app.builds if app else ()) if b.code == code]
+        if not trusted:
+            raise SourceError("сборки APK нет в проверенном каталоге F-Droid")
+        build = min(trusted, key=lambda b: b.arm_rank)  # при равенстве — раньше в порядке кандидатов
+        if build.arm_rank == 3:
+            raise SourceError("в F-Droid нет сборки для ARM")
+        self.fdroid_catalog.download(build, dest, self._wait)  # SHA-256 из каталога; не совпал — файла нет
+        return Got("", build.signer, None, _fdroid_mark(pkg))
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""

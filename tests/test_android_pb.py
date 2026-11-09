@@ -24,6 +24,13 @@ def test_pb_roundtrip_nested_and_varint():
     assert pb.decode(raw) == {1: [7], 2: [9], 4: [1]}       # fixed64, fixed32; группа пропущена
 
 
+def test_pb_group_depth_limited():
+    nested = key(1, 3) * pb.MAX_GROUP_DEPTH + key(1, 4) * pb.MAX_GROUP_DEPTH + key(2, 0) + b"\x01"
+    assert pb.decode(nested) == {2: [1]}
+    with pytest.raises(pb.PbError, match="вложенность"):
+        pb.decode(key(1, 3) * 10_000)
+
+
 @pytest.mark.parametrize("raw", [
     b"\x08\x96",                         # varint не закончен
     key(2, 2) + pb.varint(5) + b"ab",    # длина за концом

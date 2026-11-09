@@ -52,6 +52,8 @@ def test_apkpure_missing_and_broken():
         apkpure.info(FakeHttp(raw={apkpure.info_url(K9): (200, {}, b"\xff\xff\xff")}), K9)
     with pytest.raises(net.FetchError, match="403"):
         apkpure.info(FakeHttp(raw={apkpure.info_url(K9): (403, {}, b"")}), K9)
+    with pytest.raises(net.SourceError, match="неизвестном формате"):  # группы в группах: был RecursionError
+        apkpure.info(FakeHttp(raw={apkpure.info_url(K9): (200, {}, b"\x0b" * 10_000)}), K9)
 
 
 def reply(package: str, body: bytes, url: str, icon: str, description: str = "") -> bytes:

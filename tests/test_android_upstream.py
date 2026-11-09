@@ -64,6 +64,13 @@ def test_app_missing_or_without_author_links_is_not_guessed():
     assert upstream.repositories(FakeHttp(raw={PLAY: page(metadata("No links", website=""))}), PACKAGE) == ()
 
 
+def test_plain_http_author_website_is_skipped():
+    http = FakeHttp(raw={PLAY: page(metadata(website="http://example.org")),
+                         "http://example.org": net.FetchError("нужна ссылка https://…")})  # как ответил бы net.Http
+    assert upstream.repositories(http, PACKAGE) == ()
+    assert len(http.calls) == 1
+
+
 def test_store_metadata_does_not_accept_another_package():
     with pytest.raises(net.SourceError, match="описание"):
         upstream.repositories(FakeHttp(raw={PLAY: page(metadata().replace(PACKAGE, "other.package"))}), PACKAGE)
