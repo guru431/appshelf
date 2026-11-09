@@ -286,12 +286,36 @@ def check_app(env, c, shelf: db.Shelf, app, work: Path, force: bool = False, *, 
             result, note = "same", SPLIT_UPDATE
     db.set_status(c, shelf.id, pkg, "ok", note)
     db.set_checked(c, shelf.id, pkg, env.now(), result, split_mark if note == SPLIT_UPDATE else latest.etag or None)
+    if result == "pending":
+        _pending_mail(env, c, shelf, pkg)
     return result
+
+
+def _pending_mail(env, c, shelf: db.Shelf, package: str) -> None:
+    """Проверка нашла версию с другим ключом: на публичной полке и полке владельца — письмо владельцу, одно до
+    решения (db.pending_mail_key). Полки участников решают сами участники — им письма нет."""
+    user = people.get_user(c, shelf.user_id) if shelf.user_id is not None else None
+    if shelf.user_id is not None and (user is None or user.role != people.OWNER):
+        return
+    app = db.get_app(c, shelf.id, package)
+    p = c.execute("SELECT version_name, version_code, rotation_min_sdk FROM android_versions WHERE shelf_id=? "
+                  "AND package=? AND role='pending'", (shelf.id, package)).fetchone()
+    if app is None or p is None:
+        return
+    where, page = (("публичной Android-полке", "/android/public") if shelf.user_id is None
+                   else ("вашей Android-полке", "/android"))
+    chain = ("Разработчик подтвердил смену ключа подписанной цепочкой." if p["rotation_min_sdk"]
+             else "Цепочка смены ключа не подтверждена: установка может потребовать удаления приложения с данными.")
+    notify.once(c, db.pending_mail_key(shelf.id, package), f"appshelf: другая подпись у {app['name']}",
+                f"На {where} у «{app['name']}» ({package}) новая версия {p['version_name']} ({p['version_code']}) "
+                f"подписана другим ключом. {chain}\nПока решения нет, доступна прежняя версия.\n"
+                f"Сравнить и решить: {env.cfg.public_base}{page}\n", env.send, env.cfg.mail_to, env.now())
 
 
 def check_all(env, c, work: Path) -> str:
     """Ночная проверка всех Android-полок (spec §9): "" — проверять нечего; ошибка одного приложения не
-    останавливает остальные. pending считается обновлением. Google Play не принял токен аккаунта — подключение
+    останавливает остальные. pending считается обновлением; в итоге — сколько версий на всех полках ждут решения по
+    подписи (если есть). Google Play не принял токен аккаунта — подключение
     истекло: его приложения этой ночью пропускаются и в итог не идут, остальные аккаунты и источники — дальше."""
     apps = db.apps_to_check(c)
     if not apps:
@@ -320,7 +344,9 @@ def check_all(env, c, work: Path) -> str:
                 jobs.low_space(env, c, e)
             errors += 1
             app_failed(c, shelf.id, app["package"], e, env.now())
-    return f"Android: обновлено {updated}, без изменений {same}, ошибок {errors}"
+    waiting = c.execute("SELECT COUNT(*) FROM android_versions WHERE role='pending'").fetchone()[0]
+    return (f"Android: обновлено {updated}, без изменений {same}, ошибок {errors}"
+            + (f", ждут решения по подписи: {waiting}" if waiting else ""))
 
 
 def app_failed(c, shelf_id: int, package: str, e: Exception, now: str) -> None:

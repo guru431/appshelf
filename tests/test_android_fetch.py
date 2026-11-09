@@ -91,6 +91,38 @@ def test_pending_and_rejected_versions_are_not_downloaded_again(ctx, cfg, conn, 
     assert check() == ("pending", [("fetch", "rustore", PKG)])        # следующая версия — снова решение
 
 
+def test_owner_gets_one_mail_per_pending_decision(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    ctx.sources.got[PKG] = Got("Пример", cert_sha(b"CERT-B"), None)
+
+    def offer(code):
+        ctx.sources.apks[PKG] = make_apk(tmp_path / f"{code}.apk", version_code=code, cert=b"CERT-B")
+        ctx.sources._latest[PKG] = Latest(code, "", True)
+        return fetch.check_all(ctx.env, conn, tmp_path / "work")
+
+    assert offer(6) == "Android: обновлено 1, без изменений 0, ошибок 0, ждут решения по подписи: 1"
+    assert ctx.sent == ["appshelf: другая подпись у Пример"]
+    offer(7)                                                          # другая версия, решения всё ещё нет
+    assert len(ctx.sent) == 1
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert db.reject_pending(conn, fetch.shelf_root(cfg, shelf), shelf.id, PKG, pending["id"])
+    offer(8)
+    assert len(ctx.sent) == 2
+
+
+def test_member_shelf_pending_does_not_mail_owner(ctx, conn, clock, tmp_path):
+    from helpers import make_account
+    member = make_account(conn, clock, email="member@example", role="member", legacy=False)
+    shelf = shelf_of(conn, clock, member.user_id)
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "a.apk", version_code=5)
+    db.put_app(conn, shelf.id, PKG, "Пример", "rustore", PKG, clock.iso())
+    assert run(ctx, conn, shelf, "add", clock, package=PKG, source="rustore", ref=PKG, name="")["status"] == "done"
+    ctx.sources.apks[PKG] = make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")
+    ctx.sources._latest[PKG] = Latest(6, "", True)
+    assert fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "w") == "pending"
+    assert ctx.sent == []
+
+
 def test_rejection_stored_in_old_format_is_still_honoured(ctx, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
     alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")

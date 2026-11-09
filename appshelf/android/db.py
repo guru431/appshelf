@@ -137,6 +137,7 @@ def delete_shelf(c, shelf_id: int) -> None:
         c.execute(f"DELETE FROM {table} WHERE shelf_id=?", (shelf_id,))
     c.execute("DELETE FROM android_shelves WHERE id=?", (shelf_id,))
     c.execute("DELETE FROM state WHERE key LIKE ?", (f"android_rejected:{shelf_id}:%",))
+    c.execute("DELETE FROM state WHERE key LIKE ?", (pending_mail_key(shelf_id, "%"),))
 
 
 # --- приложения --------------------------------------------------------------
@@ -235,7 +236,8 @@ def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
                                             (shelf_id, package))]
         c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=?", (shelf_id, package))
         c.execute("DELETE FROM android_apps WHERE shelf_id=? AND package=?", (shelf_id, package))
-        c.execute("DELETE FROM state WHERE key=?", (_rejected_key(shelf_id, package),))
+        c.execute("DELETE FROM state WHERE key IN (?, ?)",
+                  (_rejected_key(shelf_id, package), pending_mail_key(shelf_id, package)))
         c.execute("UPDATE android_jobs SET status='cancelled', error='снято с полки' "
                   "WHERE shelf_id=? AND package=? AND status='queued'", (shelf_id, package))
     remove_dirs(root, dirs)
@@ -322,6 +324,7 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
             if PENDING_DIR_RE.search(name):
                 name = version_dir(c, shelf_id, root, package, p["version_code"])
             c.execute("UPDATE android_versions SET role=?, dir=? WHERE id=?", (role, name, p["id"]))
+            c.execute("DELETE FROM state WHERE key=?", (pending_mail_key(shelf_id, package),))
             if name != p["dir"] and (root / p["dir"]).is_dir():
                 (root / p["dir"]).replace(root / name)
                 renamed = (root / name, root / p["dir"])
@@ -335,6 +338,11 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
 
 def _rejected_key(shelf_id: int, package: str) -> str:
     return f"android_rejected:{shelf_id}:{package}"
+
+
+def pending_mail_key(shelf_id: int, package: str) -> str:
+    """Метка «письмо о версии с другим ключом отправлено»: снимается решением (принять, отклонить) и снятием с полки."""
+    return f"android_pending:{shelf_id}:{package}"
 
 
 def _rejected(c, shelf_id: int, package: str) -> dict:
@@ -369,6 +377,7 @@ def reject_pending(c, root: Path, shelf_id: int, package: str, version_id: int) 
                   (_rejected_key(shelf_id, package),
                    json.dumps({"sha256": sorted(hashes), "codes": [list(x) for x in sorted(codes)]})))
         c.execute("DELETE FROM android_versions WHERE id=?", (version_id,))
+        c.execute("DELETE FROM state WHERE key=?", (pending_mail_key(shelf_id, package),))
     remove_dirs(root, [row["dir"]])
     return True
 
