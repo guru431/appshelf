@@ -70,6 +70,36 @@ def test_higher_pending_does_not_block_current_updates(ctx, cfg, conn, clock, tm
     assert versions(conn, shelf) == {"current": 6, "previous": 5, "pending": 1000}
 
 
+def test_pending_version_is_not_at_predictable_path_until_accepted(ctx, cfg, conn, clock, tmp_path):
+    """Каталог полки Apache отдаёт по /d/: версия с другим ключом до решения владельца лежит под случайным именем."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    alien = make_apk(tmp_path / "alien.apk", version_code=6, cert=b"CERT-B")
+    run(ctx, conn, shelf, "upload", clock, path=str(alien), name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    assert pending["dir"].startswith(f"{PKG}-6-p") and len(pending["dir"]) == len(f"{PKG}-6-p") + 32
+    assert db.ANDROID_DIR_RE.match(pending["dir"])
+    assert not (root / f"{PKG}-6").exists() and (root / pending["dir"] / fetch.apk_name(PKG, "1.0")).is_file()
+    assert db.accept_pending(conn, root, shelf.id, PKG)
+    current = db.current_version(conn, shelf.id, PKG)
+    assert current["dir"] == f"{PKG}-6" and (root / f"{PKG}-6" / fetch.apk_name(PKG, "1.0")).is_file()
+    assert not (root / pending["dir"]).exists()
+
+
+def test_failed_accept_puts_pending_directory_back(ctx, cfg, conn, clock, tmp_path):
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    run(ctx, conn, shelf, "upload", clock, path=str(make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")),
+        name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    conn.execute("CREATE TRIGGER fail_accept AFTER UPDATE OF dir ON android_versions "
+                 "BEGIN SELECT RAISE(ABORT, 'accept failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="accept failed"):
+        db.accept_pending(conn, root, shelf.id, PKG)
+    assert (root / pending["dir"]).is_dir() and not (root / f"{PKG}-6").exists()
+    assert db.list_apps(conn, shelf.id)[0].pending["dir"] == pending["dir"]
+
+
 def test_major_version_code_transition_is_stored_and_compared_in_full(ctx, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "old.apk", version_code=5))
     ctx.sources.apks[PKG] = make_apk(tmp_path / "new.apk", version_code=1, version_code_major=1)
@@ -474,9 +504,11 @@ def test_newer_same_signer_keeps_pending_as_historical_option(ctx, cfg, conn, cl
         ctx.sources._latest[PKG] = Latest(code, "", True)
         run(ctx, conn, shelf, "check", clock, package=PKG)
     assert versions(conn, shelf) == {"current": 3, "previous": 1, "pending": 2}
-    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-2", f"{PKG}-3"]
+    dirs = on_shelf(cfg, shelf)
+    assert dirs[0] == f"{PKG}-1" and dirs[1].startswith(f"{PKG}-2-p") and dirs[2] == f"{PKG}-3"
     assert db.accept_pending(conn, cfg.archive / shelf.shelf, shelf.id, PKG)
     assert versions(conn, shelf) == {"current": 3, "previous": 1, "kept": 2}
+    assert on_shelf(cfg, shelf) == [f"{PKG}-1", f"{PKG}-2", f"{PKG}-3"]
 
 
 def test_upload_new_card_and_new_version(ctx, cfg, conn, clock, tmp_path):

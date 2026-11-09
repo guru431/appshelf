@@ -16,7 +16,10 @@ from pathlib import Path
 
 from ..store import AppGone, rmtree_logged, tx, version_snapshot
 
-ANDROID_DIR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+-\d+(-\d+)?$")
+# <пакет>-<versionCode>[-N]; версия, ждущая решения по подписи, — <пакет>-<versionCode>-p<случайное>: каталог полки
+# Apache отдаёт по /d/, а имя без секрета угадывается по versionCode из источника (переименование — accept_pending)
+ANDROID_DIR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+-\d+(-\d+|-p[0-9a-f]{32})?$")
+PENDING_DIR_RE = re.compile(r"-p[0-9a-f]{32}$")
 PLAY_OK = "SELECT id FROM google_accounts WHERE play = 'ok'"
 # Google-аккаунт задания Play: из payload add, иначе — карточки Play («Повторить», проверка); у аккаунта нет
 # подключения — задание ждёт (spec §9). Аккаунта нет вовсе — задание идёт и падает ошибкой «удалён»
@@ -240,8 +243,11 @@ def remove_app(c, root: Path, shelf_id: int, package: str) -> None:
 
 # --- версии ------------------------------------------------------------------
 
-def version_dir(c, shelf_id: int, root: Path, package: str, version_code: int) -> str:
-    """<пакет>-<versionCode>; занято строкой этой полки или каталогом на диске — -2, -3…"""
+def version_dir(c, shelf_id: int, root: Path, package: str, version_code: int, *, pending: bool = False) -> str:
+    """<пакет>-<versionCode>; занято строкой этой полки или каталогом на диске — -2, -3…
+    pending — версия ждёт решения по подписи: имя со случайной частью, до решения по ссылке её не скачать."""
+    if pending:
+        return f"{package}-{version_code}-p{secrets.token_hex(16)}"
     base = name = f"{package}-{version_code}"
     n = 1
     while (c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND dir=?", (shelf_id, name)).fetchone()
@@ -296,19 +302,33 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
 
 
 def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
-    """Принять pending: новая — current с ротацией, старая — kept; последняя версия и её ключ не понижаются."""
-    with tx(c):
-        p = c.execute("SELECT id, signer, version_code FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
-                      (shelf_id, package)).fetchone()
-        if p is None:
-            return False
-        current = current_version(c, shelf_id, package)
-        role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
-        old = []
-        if role == "current":
-            old = _rotate(c, shelf_id, package)
-            c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
-        c.execute("UPDATE android_versions SET role=? WHERE id=?", (role, p["id"]))
+    """Принять pending: новая — current с ротацией, старая — kept; последняя версия и её ключ не понижаются.
+    Каталог со случайным именем получает обычное <пакет>-<versionCode>: принятая версия скачивается по ссылкам полки.
+    Переименование — последним шагом транзакции; не записалась строка — каталог возвращается на место."""
+    renamed = None
+    try:
+        with tx(c):
+            p = c.execute("SELECT id, signer, version_code, dir FROM android_versions WHERE shelf_id=? AND package=? "
+                          "AND role='pending'", (shelf_id, package)).fetchone()
+            if p is None:
+                return False
+            current = current_version(c, shelf_id, package)
+            role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
+            old = []
+            if role == "current":
+                old = _rotate(c, shelf_id, package)
+                c.execute("UPDATE android_apps SET signer=? WHERE shelf_id=? AND package=?", (p["signer"], shelf_id, package))
+            name = p["dir"]
+            if PENDING_DIR_RE.search(name):
+                name = version_dir(c, shelf_id, root, package, p["version_code"])
+            c.execute("UPDATE android_versions SET role=?, dir=? WHERE id=?", (role, name, p["id"]))
+            if name != p["dir"] and (root / p["dir"]).is_dir():
+                (root / p["dir"]).replace(root / name)
+                renamed = (root / name, root / p["dir"])
+    except BaseException:
+        if renamed is not None:
+            renamed[0].replace(renamed[1])
+        raise
     remove_dirs(root, old)
     return True
 

@@ -112,7 +112,9 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     root = shelf_root(cfg, shelf)
     root.mkdir(exist_ok=True)
     root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
-    name = db.version_dir(c, shelf.id, root, info.package, info.version_code)
+    # другой ключ — версия ляжет pending (db.add_version): каталог со случайным именем, до решения не скачать
+    pending = app is not None and bool(app["signer"]) and app["signer"] != info.signer
+    name = db.version_dir(c, shelf.id, root, info.package, info.version_code, pending=pending)
     final, partial = root / name, root / f".{name}.partial"
     shutil.rmtree(partial, ignore_errors=True)
     try:
