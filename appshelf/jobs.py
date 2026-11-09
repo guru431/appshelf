@@ -187,7 +187,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
         fresh = people.get_account(c, acct.id)  # каталог полки мог переехать, пока ждали замок (move_shelf)
         if fresh is None:  # Apple ID удалили, пока ждали замок: каталог полки в архиве заново не создаём
             raise store.AccountGone(acct.id)
-        acct = fresh
+        acct = _finish_move(cfg, c, fresh)
         free = free_space(env)
         if free < FREE_MIN:
             raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно 4 ГБ")
@@ -263,7 +263,7 @@ def shelf_change(cfg: Config, c, acct):
     try:
         with hold(cfg.download_lock, REMOVE_LOCK_WAIT):
             _archive(cfg)
-            yield people.get_account(c, acct.id)
+            yield _finish_move(cfg, c, people.get_account(c, acct.id))
     except IpatoolError as e:
         raise AccountBusy(acct.email) from e
 
@@ -579,16 +579,40 @@ def move_shelf(cfg: Config, c, acct) -> None:
                     return
                 if not cur.shelf_next:
                     people.set_shelf_next(c, acct.id, people.new_shelf_token())
-            acct = people.get_account(c, acct.id)
-            old, new = cfg.shelf_token(acct), acct.shelf_next
-            src, dst = cfg.archive / old, cfg.archive / new
-            if src.is_dir() and not dst.exists():
-                os.replace(src, dst)
-            for m in dst.glob("*/manifest.plist"):
-                _relink(m, f"{cfg.public_base}/d/{old}/", f"{cfg.public_base}/d/{new}/")
-            people.set_shelf(c, acct.id, new)
+            _move_files(cfg, c, people.get_account(c, acct.id))
     except IpatoolError as e:  # не дождались замка скачивания или Apple ID
         raise AccountBusy(acct.email) from e
+
+
+def _move_files(cfg: Config, c, acct) -> people.Account:
+    """Перенос каталога полки на acct.shelf_next — под замком скачивания вызывающего. Оба каталога есть (перенос
+    прервался, а прежний код успел положить версию в старый) — версии, которых нет в новом, переезжают туда.
+    → строка Apple ID после переноса."""
+    old, new = cfg.shelf_token(acct), acct.shelf_next
+    src, dst = cfg.archive / old, cfg.archive / new
+    if src.is_dir() and not dst.exists():
+        os.replace(src, dst)
+    elif src.is_dir():
+        for d in src.iterdir():
+            if store.DIR_RE.match(d.name) and not (dst / d.name).exists():
+                os.replace(d, dst / d.name)
+        with suppress(OSError):  # остались чужие файлы — их покажет appshelf check
+            src.rmdir()
+    for m in dst.glob("*/manifest.plist"):
+        _relink(m, f"{cfg.public_base}/d/{old}/", f"{cfg.public_base}/d/{new}/")
+    people.set_shelf(c, acct.id, new)
+    return people.get_account(c, acct.id)
+
+
+def _finish_move(cfg: Config, c, acct):
+    """Под замком скачивания: перенос полки прервался (shelf_next) — доделать, прежде чем писать в её каталог или
+    удалять из него, иначе файлы лягут в прежний каталог, а строки — к новому. Сбой шары — ArchiveUnavailable."""
+    if acct is None or not acct.shelf_next:
+        return acct
+    try:
+        return _move_files(cfg, c, acct)
+    except OSError as e:
+        raise ArchiveUnavailable(f"перенос каталога полки не завершён: {e}") from e
 
 
 def _relink(manifest: Path, old: str, new: str) -> None:

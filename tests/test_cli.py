@@ -65,6 +65,27 @@ def test_rotate_token_moves_shelf(monkeypatch, tmp_path, capsys):
     assert not (tmp_path / "data" / "pub" / old).exists() and "готово" in capsys.readouterr().out
 
 
+def test_rotate_token_failure_tells_to_repeat(monkeypatch, tmp_path, capsys):
+    env(monkeypatch, tmp_path)
+    c = store.connect(tmp_path / "data" / "appshelf.db")
+    uid = people.create_user(c, "Пётр", people.MEMBER, None, "2026-10-08T00:00:00+00:00")
+    aid = people.create_account(c, uid, "petr@example", {}, "", "2026-10-08T00:00:00+00:00")
+    old = people.get_account(c, aid).shelf
+    (tmp_path / "data" / "pub" / old / "7-1.0").mkdir(parents=True)
+    (tmp_path / "data" / "pub" / old / "7-1.0" / "manifest.plist").write_bytes(b"/d/" + old.encode() + b"/")
+    def share_fails(*a):
+        raise OSError("share")
+
+    with monkeypatch.context() as m:
+        m.setattr(jobs, "_relink", share_fails)
+        assert cli.main(["rotate-token", "--email", "petr@example"]) == 1
+    assert "повторите ту же команду" in capsys.readouterr().err
+    pending = people.get_account(c, aid).shelf_next
+    assert cli.main(["rotate-token", "--email", "petr@example"]) == 0
+    assert (people.get_account(c, aid).shelf, people.get_account(c, aid).shelf_next) == (pending, "")
+    c.close()
+
+
 def test_refuses_to_run_as_root(monkeypatch, tmp_path):
     env(monkeypatch, tmp_path)
     monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)

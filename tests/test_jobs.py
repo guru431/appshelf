@@ -885,3 +885,55 @@ def test_download_after_move_goes_to_new_shelf(ctx, cfg, conn, clock, tmp_path):
     jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "web")
     moved = people.get_account(conn, petr.id)
     assert (cfg.shelf_root(moved) / "7-1.2.3").is_dir() and not cfg.shelf_root(petr).exists()
+
+
+def broken_move(cfg, conn, petr, monkeypatch):
+    """rotate-token упал после переименования каталога (база занята на set_shelf): shelf — прежний, shelf_next — новый."""
+    def locked(*a):
+        raise sqlite3.OperationalError("database is locked")
+
+    with monkeypatch.context() as m:
+        m.setattr(people, "set_shelf", locked)
+        with pytest.raises(sqlite3.OperationalError):
+            jobs.move_shelf(cfg, conn, petr)
+    stuck = people.get_account(conn, petr.id)
+    assert stuck.shelf == petr.shelf and stuck.shelf_next and (cfg.archive / stuck.shelf_next).is_dir()
+    return stuck.shelf_next
+
+
+def test_download_during_interrupted_move_lands_in_new_shelf(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    petr = published(conn, clock, app_id=7, acct=member(conn, clock))
+    shelf_with_version(cfg, petr.shelf, app_id=8)
+    new = broken_move(cfg, conn, petr, monkeypatch)
+    ctx.tools.setdefault(petr.id, FakeTool()).ipas[7] = make_ipa(tmp_path / "p.ipa", item_id=7)
+    assert jobs.fetch_version(ctx.env, conn, petr, 7, cfg.tmp_dir / "web") == "updated"
+    jobs.move_shelves(cfg, conn)
+    moved = people.get_account(conn, petr.id)
+    assert (moved.shelf, moved.shelf_next) == (new, "") and not (cfg.archive / petr.shelf).exists()
+    cur = store.current_version(conn, petr.id, 7)
+    manifest = (cfg.archive / new / cur["dir"] / "manifest.plist").read_bytes()
+    assert f"/d/{new}/{cur['dir']}/app.ipa".encode() in manifest
+    assert f"/d/{new}/8-1.0/".encode() in (cfg.archive / new / "8-1.0" / "manifest.plist").read_bytes()
+
+
+def test_unpublish_during_interrupted_move_removes_moved_files(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    seed_app(conn, cfg, clock, app_id=7, versions=("1.0",), make_dirs=True, acct=petr)
+    new = broken_move(cfg, conn, petr, monkeypatch)
+    jobs.unpublish(cfg, conn, petr, 7)
+    assert not store.has_app(conn, petr.id, 7) and not (cfg.archive / new / "7-1.0").exists()
+    assert people.get_account(conn, petr.id).shelf == new
+
+
+def test_move_merges_versions_left_in_old_shelf(ctx, cfg, conn, clock):
+    """Прежний код, пока перенос был прерван, клал новые версии в старый каталог: доделка переносит их в новый."""
+    petr = member(conn, clock)
+    new = "ab" * 16
+    shelf_with_version(cfg, petr.shelf)
+    people.set_shelf_next(conn, petr.id, new)
+    os.replace(cfg.archive / petr.shelf, cfg.archive / new)
+    shelf_with_version(cfg, petr.shelf, app_id=9)                      # версия, скачанная в окне
+    jobs.move_shelves(cfg, conn)
+    assert sorted(p.name for p in (cfg.archive / new).iterdir()) == ["7-1.0", "9-1.0"]
+    assert not (cfg.archive / petr.shelf).exists()
+    assert f"/d/{new}/9-1.0/".encode() in (cfg.archive / new / "9-1.0" / "manifest.plist").read_bytes()
