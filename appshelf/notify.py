@@ -1,4 +1,5 @@
-"""Письма владельцу: одно на эпизод (метка в state или в accounts), через локальный sendmail (exim4)."""
+"""Письма владельцу: одно на эпизод (метка в state или в accounts), через локальный sendmail (exim4). Участникам —
+только еженедельное письмо об обновлениях на их полках (отключается в «Настройках»)."""
 from __future__ import annotations
 
 import socket
@@ -52,3 +53,21 @@ def send_quietly(send, subject: str, body: str, to: str) -> None:
 
 def reset(c, key: str) -> None:
     store.set_state(c, key, "")
+
+
+# --- еженедельное письмо участнику: что обновилось на его полках (nightly.digests) ---
+
+DIGEST_OFF = "digest_off:"    # + id участника: письмо отключено
+DIGEST_SENT = "digest_sent:"  # + id участника: когда ушло последнее
+
+
+def digest_enabled(c, uid: int) -> bool:
+    """По умолчанию включено; участник отключает в «Настройках»."""
+    return not store.get_state(c, DIGEST_OFF + str(uid))
+
+
+def set_digest(c, uid: int, on: bool) -> None:
+    if on:
+        c.execute("DELETE FROM state WHERE key=?", (DIGEST_OFF + str(uid),))
+    else:
+        store.set_state(c, DIGEST_OFF + str(uid), "1")

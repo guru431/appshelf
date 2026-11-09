@@ -384,6 +384,16 @@ def test_catalog_states_of_failed_downloads(web, conn, cfg, clock):
     assert "/apps/1/retry" not in text and "/apps/2/retry" in text      # купили позже — можно повторить
 
 
+def test_settings_turns_weekly_digest_off_and_on(web, conn):
+    from appshelf import notify
+    assert 'name="on" value="0"' in web.client.get("/settings").text      # по умолчанию включено
+    assert web.client.post("/settings/digest", data={"user": "1", "on": "0"}).status_code == 200
+    assert not notify.digest_enabled(conn, 1) and 'name="on" value="1"' in web.client.get("/settings").text
+    assert web.client.post("/settings/digest", data={"user": "99", "on": "1"}).status_code == 404  # не вошёл здесь
+    web.client.post("/settings/digest", data={"user": "1", "on": "1"})
+    assert notify.digest_enabled(conn, 1)
+
+
 def test_catalog_marks_versions_downloaded_this_week(web, conn, cfg, clock):
     seed_app(conn, cfg, clock, app_id=1, name="Новое", versions=("1.0", "1.1"))
     seed_app(conn, cfg, clock, app_id=2, name="Первая", bundle_id="b2", versions=("1.0",))

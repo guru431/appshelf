@@ -165,7 +165,18 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request):
-        return w.page(request, "settings.html", "settings")
+        with w.conn() as c:
+            digest = {u.id: notify.digest_enabled(c, u.id) for u in request.state.users}
+        return w.page(request, "settings.html", "settings", digest=digest)
+
+    @app.post("/settings/digest")
+    def settings_digest(request: Request, user: int = Form(0), on: int = Form(0)):
+        """Еженедельное письмо об обновлениях — вкл/выкл для одного из вошедших в этом браузере."""
+        if user not in {u.id for u in request.state.users}:
+            return not_found()
+        with w.conn() as c:
+            notify.set_digest(c, user, bool(on))
+        return back("/settings")
 
     @app.get("/pwa/device-profile.js")
     def device_profile_script():

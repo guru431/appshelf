@@ -122,14 +122,15 @@ def test_nightly_expired_play_account_isolated(owner_play, ctx, conn, clock, tmp
     result = nightly.run(ctx.env, conn)
     assert result.endswith("Android: обновлено 2, без изменений 0, ошибок 0"), result
     assert people.get_google(conn, g.id).play == "expired" and people.get_google(conn, second.id).play == "ok"
-    assert ctx.sent == [fetch.PLAY_EXPIRED_SUBJECT]                     # одно письмо, хотя приложений два
+    # одно письмо, хотя приложений два, и еженедельное — о новых версиях
+    assert ctx.sent == [fetch.PLAY_EXPIRED_SUBJECT, nightly.DIGEST_SUBJECT]
     assert [c for c in fake.calls if c[0] == "details"][-1:] == [("details", "com.a.one")]  # второе — пропущено
     for package in ("com.a.one", "com.a.two"):                         # карточки не в ошибке: ждут подключения
         assert (db.get_app(conn, shelf.id, package)["status"], db.get_app(conn, shelf.id, package)["last_error"]) == \
             ("ok", "")
     assert (current(conn, shelf, "com.b.one"), current(conn, shelf, "ru.store")) == (2, 2)
     nightly.run(ctx.env, conn)
-    assert ctx.sent == [fetch.PLAY_EXPIRED_SUBJECT]                     # следующая ночь — без нового письма
+    assert ctx.sent == [fetch.PLAY_EXPIRED_SUBJECT, nightly.DIGEST_SUBJECT]  # следующая ночь — без новых писем
 
 
 def test_member_expired_no_mail(ctx, conn, clock, tmp_path):

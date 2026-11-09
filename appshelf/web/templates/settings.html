@@ -14,6 +14,15 @@
 {% if not theme %}<p class="meta" data-effective-theme></p>{% endif %}
 </nav>
 {% include 'device_profile.html' %}
+<h2>Письма</h2>
+<div class="card">
+<p class="hint">Раз в неделю — письмо о новых версиях на ваших полках; если обновлений не было, письма нет.</p>
+{% for u in users %}{% set on = digest.get(u.id, True) %}
+<form method="post" action="/settings/digest" class="bar"><input type="hidden" name="user" value="{{ u.id }}"><input type="hidden" name="on" value="{{ 0 if on else 1 }}">
+  <span>{% if users | length > 1 %}{{ u.name }}: {% endif %}{{ 'включено' if on else 'отключено' }}</span>
+  <button class="secondary">{{ 'Отключить' if on else 'Включить' }}</button></form>
+{% endfor %}
+</div>
 <h2>Выход</h2>
 <form method="post" action="{{ post_url('/logout') }}"><button class="secondary">Выйти из всех участников этого браузера</button></form>
 {% endblock %}
