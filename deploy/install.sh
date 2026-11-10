@@ -57,7 +57,7 @@ fi
 rm -rf "$OLD"
 install -d -o root -g root -m 0700 "$OLD"
 restore_previous() {
-  for p in "${PARTS[@]}"; do if [ -e "$OLD/$p" ]; then rm -rf "$R/$p"; mv "$OLD/$p" "$R/$p"; fi; done
+  for p in "${PARTS[@]}"; do if [ -e "$OLD/$p" ]; then rm -rf -- "${R:?}/${p:?}"; mv "$OLD/$p" "$R/$p"; fi; done
 }
 install_units() {
   for u in appshelf-web.service appshelf-nightly.service appshelf-nightly.timer appshelf-backup.service appshelf-backup.timer; do

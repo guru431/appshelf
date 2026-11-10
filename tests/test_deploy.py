@@ -44,6 +44,37 @@ def test_failed_swap_puts_previous_code_back():
     assert text.index("trap restore_previous ERR") < swap < text.index("trap - ERR")
 
 
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("empty", [None, "root", "part"])
+def test_restore_refuses_empty_delete_path_before_running_commands(tmp_path, empty):
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    restore = re.search(r"(?ms)^restore_previous\(\) \{\n.*?^\}", text).group()
+    previous = tmp_path / "previous"
+    (previous / "appshelf").mkdir(parents=True)
+    root, part = (tmp_path / "current").as_posix(), "appshelf"
+    log = tmp_path / "commands.log"
+    env = {**os.environ, "R": "" if empty == "root" else root, "OLD": previous.as_posix(),
+           "RESTORE_PART": "" if empty == "part" else part, "RESTORE_LOG": log.as_posix()}
+    # Mock destructive commands: even a broken guard cannot remove anything outside the fixture.
+    wrapper = restore + '''
+rm() { printf 'rm:%s\\n' "$@" >> "$RESTORE_LOG"; }
+mv() { printf 'mv:%s\\n' "$@" >> "$RESTORE_LOG"; }
+PARTS=("$RESTORE_PART")
+restore_previous
+'''
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", wrapper], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    if empty:
+        assert result.returncode != 0
+        assert not log.exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert log.read_text(encoding="utf-8").splitlines() == [
+            "rm:-rf", "rm:--", f"rm:{root}/{part}",
+            f"mv:{previous.as_posix()}/{part}", f"mv:{root}/{part}",
+        ]
+
+
 def test_install_refuses_while_nightly_check_runs():
     # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
