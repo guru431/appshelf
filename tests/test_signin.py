@@ -290,23 +290,22 @@ def test_wrong_password_closes_apple_id_for_an_hour(make_web, cfg, conn, acct, c
 def test_failed_logins_limited_for_everyone(make_web, cfg, conn, acct, clock):
     # общий лимит — отказы Apple: неизвестные адреса и плохие ссылки его не тратят, иначе аноним закрыл бы вход всем
     wb = make_web(cfg, conn)
-    # Один контекст сохраняет поток приложения между запросами вместо запуска нового для каждого из них.
-    with wb.client as client:
-        for i in range(10):
-            assert client.post("/login", data={"email": f"x{i}@example", "password": "pw"}).status_code == 403
-            assert client.get(f"/join/nope{i}").status_code == 400
-            assert client.get(f"/l/nope{i}").status_code == 400 and client.post(f"/l/nope{i}").status_code == 400
-        for n in (2, 3):                                      # по 5 — больше на Apple ID закрывает его лимит
-            other = make_account(conn, clock, email=f"a{n}@example", legacy=False, user_id=acct.user_id)
-            tool = wb.tools[other.id] = FakeTool()
-            for _ in range(5):
-                tool.errors["login"] = IpatoolError("invalid_credentials", "")
-                assert client.post("/login", data={"email": f"a{n}@example", "password": "bad"}).status_code == 400
-        r = client.post("/login", data={"email": "owner@example", "password": "pw"})
-        assert r.status_code == 429 and "подождите минуту" in r.text       # даже верный — до конца минуты
-        clock.advance(61)
-        assert client.post("/login", data={"email": "owner@example", "password": "pw"},
-                           follow_redirects=False).status_code == 303
+    client = wb.client
+    for i in range(10):
+        assert client.post("/login", data={"email": f"x{i}@example", "password": "pw"}).status_code == 403
+        assert client.get(f"/join/nope{i}").status_code == 400
+        assert client.get(f"/l/nope{i}").status_code == 400 and client.post(f"/l/nope{i}").status_code == 400
+    for n in (2, 3):                                      # по 5 — больше на Apple ID закрывает его лимит
+        other = make_account(conn, clock, email=f"a{n}@example", legacy=False, user_id=acct.user_id)
+        tool = wb.tools[other.id] = FakeTool()
+        for _ in range(5):
+            tool.errors["login"] = IpatoolError("invalid_credentials", "")
+            assert client.post("/login", data={"email": f"a{n}@example", "password": "bad"}).status_code == 400
+    r = client.post("/login", data={"email": "owner@example", "password": "pw"})
+    assert r.status_code == 429 and "подождите минуту" in r.text       # даже верный — до конца минуты
+    clock.advance(61)
+    assert client.post("/login", data={"email": "owner@example", "password": "pw"},
+                       follow_redirects=False).status_code == 303
 
 
 def test_busy_apple_id_text(make_web, cfg, conn, acct):

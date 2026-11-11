@@ -1,3 +1,6 @@
+import sqlite3
+from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +11,26 @@ from appshelf.config import GB, Config
 from appshelf.web.app import create_app
 from android_fakes import FakeSources
 from helpers import HOST, TOKEN, Clock, FakeTool, ShelfClient, owner, sign_in
+
+
+@pytest.fixture(autouse=True)
+def temporary_sqlite_sync(request, monkeypatch, tmp_path_factory):
+    """Keep real files/transactions, without flushing every WAL commit to disk.
+
+    Only disposable pytest databases use NORMAL; integration keeps production settings.
+    These tests check commit/rollback and reopen, not durability across a power loss.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+    root, connect = tmp_path_factory.getbasetemp(), sqlite3.connect
+
+    def temporary_connect(database, *args, **kwargs):
+        c = connect(database, *args, **kwargs)
+        if isinstance(database, (str, Path)) and Path(database).is_relative_to(root):
+            c.execute("PRAGMA synchronous=NORMAL")
+        return c
+
+    monkeypatch.setattr(sqlite3, "connect", temporary_connect)
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +126,7 @@ def ctx(cfg, clock):
 
 
 @pytest.fixture
-def make_web(clock):
+def make_web(clock, request):
     """Приложение с подменами. tools[id] — ipatool Apple ID (HOME — accounts/<id>); queue — ipatool первых входов
     новых Apple ID по порядку (пусто — свежий FakeTool), выданные — в new_tools (у каждого .home и .mac);
     sent — (тема, текст); sources — источники APK (FakeSources); kw — прочие параметры create_app."""
@@ -125,8 +148,13 @@ def make_web(clock):
                             send=lambda subject, body, to: wb.sent.append((subject, body)),
                             disk_free=lambda path: wb.free["bytes"], start_worker=False, sources=wb.sources, **kw)
         wb.client = ShelfClient(wb.app, base_url=f"https://{HOST}")
+        clients.callback(wb.client.close)
+        # Browser tests start the app's lifespan in their own HTTP server.
+        if not request.node.get_closest_marker("integration"):
+            clients.enter_context(wb.client)
         return wb
-    return make
+    with ExitStack() as clients:
+        yield make
 
 
 @pytest.fixture

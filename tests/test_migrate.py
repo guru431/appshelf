@@ -23,7 +23,7 @@ CREATE TABLE removed_checks (app_id INTEGER PRIMARY KEY, checked_at TEXT NOT NUL
 def v1(path):
     """База версии 1 с одним Apple ID: покупка, опубликованное приложение, версия, задание, состояние входа."""
     c = sqlite3.connect(path)
-    c.executescript(V1)
+    c.executescript("BEGIN;" + V1)
     c.execute("INSERT INTO purchases VALUES (123, 'ru.sberbank.onlineiphone', 'СберБанк', '2020-01-02', 't0', '12.15')")
     c.execute("INSERT INTO apps VALUES (123, 'СберБанк', 'ru.sberbank.onlineiphone', 't0', 'ok', '', '')")
     c.execute("INSERT INTO versions VALUES (5, 123, '12.15', '1', '900', '13.0', 'iphone', 10, '123-12.15', 't0', "
@@ -119,7 +119,7 @@ def test_v2_accounts_get_shelf_columns(tmp_path):
     shelf_columns = ",\n    shelf TEXT NOT NULL DEFAULT '',\n    shelf_next TEXT NOT NULL DEFAULT ''"
     assert shelf_columns in store.SCHEMA
     c = sqlite3.connect(db)
-    c.executescript(v3_schema().replace(shelf_columns, ""))
+    c.executescript("BEGIN;" + v3_schema().replace(shelf_columns, ""))
     c.execute("INSERT INTO users (id, name, role, created_at) VALUES (2, 'Пётр', 'member', 't0')")
     c.execute("INSERT INTO accounts (id, user_id, email, created_at) VALUES (2, 2, 'petr@example', 't0')")
     c.execute("PRAGMA user_version = 2")
@@ -137,7 +137,7 @@ def test_v3_gets_v4_columns_and_fills_them(tmp_path):
     истории — по строкам DAAP; у Apple ID без них — пусто."""
     db = tmp_path / "appshelf.db"
     c = sqlite3.connect(db)
-    c.executescript(v3_schema())
+    c.executescript("BEGIN;" + v3_schema())
     c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
     c.executemany("INSERT INTO accounts (id, user_id, email, created_at) VALUES (?, 1, ?, 't0')",
                   [(1, "owner@example"), (2, "second@example")])
@@ -165,7 +165,7 @@ def test_v3_gets_v4_columns_and_fills_them(tmp_path):
 def test_v5_upgrades_to_v6_with_pin_attempts(tmp_path):
     db = tmp_path / "appshelf.db"
     c = sqlite3.connect(db)
-    c.executescript(";".join(s for s in store.SCHEMA.split(";") if "pin_attempts" not in s))
+    c.executescript("BEGIN;" + ";".join(s for s in store.SCHEMA.split(";") if "pin_attempts" not in s))
     c.execute("INSERT INTO android_shelves (id, user_id, shelf, created_at) VALUES (1, 1, 'tok', 't0')")
     c.execute("INSERT INTO android_apps (shelf_id, package, name, source, status, published_at) "
               "VALUES (1, 'ru.x', 'Икс', 'rustore', 'ok', 't0')")
@@ -189,7 +189,7 @@ def test_v5_upgrades_to_v6_with_pin_attempts(tmp_path):
 def test_v6_upgrades_to_v7(tmp_path):
     db = tmp_path / "appshelf.db"
     c = sqlite3.connect(db)
-    c.executescript(";".join(s for s in store.SCHEMA.split(";") if "google_accounts" not in s))
+    c.executescript("BEGIN;" + ";".join(s for s in store.SCHEMA.split(";") if "google_accounts" not in s))
     c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
     c.execute("INSERT INTO accounts (id, user_id, email, created_at) VALUES (1, 1, 'owner@example', 't0')")
     c.execute("INSERT INTO pin_attempts (key, count, first_at) VALUES ('all', 3, 't0')")
@@ -222,7 +222,7 @@ def v7_schema() -> str:
 def test_v7_upgrades_to_current_schema(tmp_path):
     db = tmp_path / "appshelf.db"
     c = sqlite3.connect(db)
-    c.executescript(v7_schema())
+    c.executescript("BEGIN;" + v7_schema())
     c.execute("INSERT INTO users (id, name, role, created_at) VALUES (1, 'Иван', 'owner', 't0')")
     c.execute("INSERT INTO google_accounts (id, user_id, sub, email, created_at) VALUES (1, 1, 's', 'i@g', 't0')")
     c.execute("INSERT INTO android_shelves (id, user_id, shelf, created_at) VALUES (1, 1, 'tok', 't0')")
