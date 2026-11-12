@@ -186,6 +186,49 @@ def test_service_worker_upload_continues_without_open_page(upload_server, conn, 
 
 @pytest.mark.integration
 @pytest.mark.timeout(45)
+def test_tray_reports_finished_transfer_with_link_to_shelf(upload_server, conn, acct, tmp_path, local_chromium):
+    """Передача, продолженная из лотка, не исчезает молча: строка сообщает итог и ведёт на полку, фокус не теряется."""
+    server = upload_server
+    apk = make_apk(tmp_path / "tray.apk", files={"assets/padding": random.Random(45).randbytes(4 * 1024 * 1024)})
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser_context(browser, server).new_page()
+            page.set_default_timeout(5000)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(server.base + "/android/add#add-file")
+            form = page.locator("form[data-apk-upload]")
+            form.locator('input[type="file"]').set_input_files(apk)
+            form.get_by_role("button", name="Загрузить", exact=True).click()
+            page.wait_for_function("document.querySelector('form[data-apk-upload] progress').value > 0", timeout=10000)
+            page.get_by_role("button", name="Пауза", exact=True).click()
+            page.wait_for_function("document.querySelector('form[data-apk-upload] [data-upload-status]').textContent.includes('На паузе')")
+            page.reload()
+            region = page.get_by_role("region", name="Загрузки APK")
+            server.state.hold = False
+            region.get_by_role("button", name="Продолжить", exact=True).focus()
+            page.keyboard.press("Enter")
+            assert server.state.finished.wait(12)
+            link = region.get_by_role("link", name="Открыть полку", exact=True)
+            link.wait_for(timeout=10000)
+            assert "Файл передан на обработку" in region.get_by_role("status").inner_text()
+            assert region.get_by_role("button", name="Отменить", exact=True).is_hidden()
+            assert link.evaluate("a => a === document.activeElement")
+            assert link.get_attribute("href") == f"/android?person={acct.user_id}"
+            assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 1
+            page.keyboard.press("Enter")
+            page.wait_for_url(server.base + f"/android?person={acct.user_id}")
+            page.wait_for_function("document.querySelector('[aria-label=\"Загрузки APK\"]') === null || document.querySelector('[aria-label=\"Загрузки APK\"]').hidden")
+            assert not errors
+        finally:
+            server.state.hold = False
+            browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(45)
 def test_quota_fallback_reselects_file_without_reuploading_saved_parts(upload_server, conn, tmp_path, local_chromium):
     server = upload_server
     apk = make_apk(tmp_path / "quota.apk", files={"assets/padding": random.Random(44).randbytes(4 * 1024 * 1024)})
@@ -222,8 +265,8 @@ def test_quota_fallback_reselects_file_without_reuploading_saved_parts(upload_se
             page.locator("form[data-apk-upload]").get_by_role("button", name="Загрузить", exact=True).click()
             assert server.state.finished.wait(12)
             page.wait_for_function("document.querySelector('form[data-apk-upload] [data-upload-status]').textContent.includes('test finish response lost')")
-            page.reload()
-            page.wait_for_function("document.querySelector('[aria-label=\"Загрузки APK\"]') === null || document.querySelector('[aria-label=\"Загрузки APK\"]').hidden")
+            page.reload()   # лоток узнаёт у сервера, что сборка уже принята, и сообщает итог, а не исчезает молча
+            page.get_by_role("region", name="Загрузки APK").get_by_role("link", name="Открыть полку", exact=True).wait_for()
             assert all(server.state.accepted[int(index)] == 1 for index in accepted)
             assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 1
         finally:

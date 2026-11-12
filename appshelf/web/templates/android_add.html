@@ -45,7 +45,7 @@
   var form = document.getElementById('source-search'), input = form.elements.q;
   var stop = document.getElementById('stop-search'), progress = document.getElementById('search-progress');
   var summary = document.getElementById('search-summary'), statuses = document.getElementById('source-statuses');
-  var results = document.getElementById('search-results'), stream = null, timer = null;
+  var results = document.getElementById('search-results'), stream = null, timer = null, pending = null;
   var names = {{ sources | tojson }}, rows = {}, started = 0;
   function finish(text) {
     if (stream) stream.close();
@@ -58,15 +58,32 @@
     });
   }
   function render(data) {
-    // Сохранить выбор версии и галочку, когда пришли следующие результаты.
-    var existing = {}, fragment = document.createElement('template');
-    results.querySelectorAll('[data-result-key]').forEach(function (row) { existing[row.dataset.resultKey] = row; });
+    // Фокус в результатах (кнопка, открытый выбор версии) — порция ждёт, пока он не уйдёт: строки не едут под пальцем.
+    if (results.contains(document.activeElement)) { pending = data; return; }
+    pending = null;
+    var fragment = document.createElement('template'), list = results.querySelector('.source-results');
     fragment.innerHTML = data.html;
-    fragment.content.querySelectorAll('[data-result-key]').forEach(function (row) {
-      if (existing[row.dataset.resultKey]) row.replaceWith(existing[row.dataset.resultKey]);
+    var fresh = fragment.content.querySelector('.source-results');
+    if (!list || !fresh) { results.replaceChildren(fragment.content); return; }
+    // Показанные строки остаются в документе (выбор версии и галочка целы): новые вставляются, исчезнувшие удаляются.
+    var existing = {};
+    list.querySelectorAll('[data-result-key]').forEach(function (row) { existing[row.dataset.resultKey] = row; });
+    var order = Array.prototype.map.call(fresh.querySelectorAll('[data-result-key]'), function (row) {
+      var shown = existing[row.dataset.resultKey]; delete existing[row.dataset.resultKey];
+      return shown || row;
     });
-    results.replaceChildren(fragment.content);
+    Object.values(existing).forEach(function (row) { row.remove(); });
+    order.forEach(function (row, i) { if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null); });
+    var before = [], after = [], seen = false;
+    Array.prototype.slice.call(fragment.content.childNodes).forEach(function (node) {
+      if (node === fresh) seen = true; else (seen ? after : before).push(node);
+    });
+    Array.prototype.slice.call(results.childNodes).forEach(function (node) { if (node !== list) node.remove(); });
+    list.before.apply(list, before); list.after.apply(list, after);
   }
+  results.addEventListener('focusout', function () {
+    setTimeout(function () { if (pending) render(pending); }, 0);   // фокус ушёл из результатов — показать отложенное
+  });
   function addRow(source) {
     var row = document.createElement('p'), title = document.createElement('b'), detail = document.createElement('span');
     title.textContent = (names[source] || source) + ': '; detail.textContent = 'ожидает'; row.className = 'meta';
@@ -76,7 +93,7 @@
   function start() {
     var query = input.value.trim(); if (!query) return;
     if (stream) stream.close(); clearInterval(timer);
-    progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {};
+    progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {}; pending = null;
     {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(addRow);
     started = Date.now(); form.querySelector('button').disabled = true;
     function tick() { summary.textContent = 'Поиск идёт · ' + Math.floor((Date.now() - started) / 1000) + ' с'; }
