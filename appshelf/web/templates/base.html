@@ -489,6 +489,11 @@ addEventListener('pointerdown', function (e) {   // меню закрывает�
     if (!d.contains(e.target)) d.open = false;
   });
 });
+var copied = document.createElement('div');   // объявление «Скопировано» для диктора: смену текста кнопки он не читает
+copied.setAttribute('role', 'status');
+copied.setAttribute('data-copy-status', '');
+copied.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap';
+document.body.append(copied);
 addEventListener('click', function (e) {   // «Скопировать ссылку»: адрес — в data-copy; буфер недоступен — показать адрес
   var b = e.target.closest && e.target.closest('[data-copy]');
   if (!b) return;
@@ -508,7 +513,11 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
     selection.addRange(range);
   }
   if (!navigator.clipboard) { show(); return; }
-  navigator.clipboard.writeText(link).then(function () { b.textContent = 'Скопировано'; }, show);
+  navigator.clipboard.writeText(link).then(function () {
+    b.textContent = 'Скопировано';
+    copied.textContent = '';   // тот же текст подряд диктор не повторил бы
+    setTimeout(function () { copied.textContent = 'Скопировано'; }, 100);
+  }, show);
 });
 </script>
 <script src="/pwa/apk-transfers.js?v=1" data-upload-user="{{ who.id if who else '' }}"></script>

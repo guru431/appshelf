@@ -976,6 +976,7 @@ def test_safari_banner_copies_address_or_selects_it(web, make_web, conn, cfg, cl
                     assert button.bounding_box()["height"] >= 44
                     button.click()
                     page.wait_for_function("document.querySelector('.banner [data-copy]').textContent === 'Скопировано'")
+                    page.wait_for_function("document.querySelector('[data-copy-status]').textContent === 'Скопировано'")
                     assert page.evaluate("navigator.clipboard.readText()") == "https://apps.example" + path
                     page.context.close()
             page = open_page(anon.client, "/login", clipboard=False)
