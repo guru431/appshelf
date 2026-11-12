@@ -161,7 +161,9 @@ APKS/XAPK не поддерживаются. Выбранное вложение
 выполнение кода от appshelf (картинка из IPA, ipatool) стало бы root при ближайшей выкладке или сборке.
 Группа кода (`APPSHELF_CODE_GROUP` в `.env`) получает только чтение, appshelf в неё не входит. Службы видят
 `/usr` и `/etc` только для чтения (`ProtectSystem=full`), кроме `/etc/appshelf/accounts` и `/etc/appshelf/google`,
-у `appshelf-web` — ещё `/etc/appshelf/fourpda`; `appshelf-backup` не пишет в `/etc` вовсе.
+у `appshelf-web` — ещё `/etc/appshelf/fourpda`; `appshelf-backup` не пишет в `/etc` вовсе. Память ограничена
+(`MemoryMax`: `appshelf-web` — 4 ГиБ вместе с окном входа 4PDA, ночная проверка — 3 ГиБ; расчёт — в юнитах): испорченный
+APK не отнимет память у всего сервера. На сервере меньше 6–8 ГБ памяти пределы стоит уменьшить.
 `/var/lib/appshelf` и `status/` — `0711`: Apache и мониторинг проходят, не читая список.
 `/etc/appshelf` — `root:appshelf 0711`, Apache не читает `appshelf.env`. **www-data не входит в группу
 `appshelf`**: к сокету Apache пускает группа `www-data` на `/run/appshelf` (`ExecStartPost` в юните),

@@ -163,6 +163,9 @@ otherwise any code execution as appshelf (an image from an IPA, ipatool) would b
 build. The code group (`APPSHELF_CODE_GROUP` in `.env`) gets read access only, and appshelf is not in it. The
 services see `/usr` and `/etc` read-only (`ProtectSystem=full`), except `/etc/appshelf/accounts` and
 `/etc/appshelf/google`, plus `/etc/appshelf/fourpda` for `appshelf-web`; `appshelf-backup` writes nothing in `/etc`.
+Memory is capped (`MemoryMax`: `appshelf-web` — 4 GiB including the 4PDA sign-in window, the nightly check — 3 GiB;
+the reasoning is in the units), so a malformed APK cannot take the whole server's memory. On a server with less than
+6–8 GB of RAM, lower the limits.
 `/var/lib/appshelf` and `status/` are `0711`: Apache and monitoring pass through without
 listing. `/etc/appshelf` is `root:appshelf 0711`, so Apache cannot read `appshelf.env`. **Do not add
 www-data to the `appshelf` group**: Apache reaches the socket through the `www-data` group on `/run/appshelf`

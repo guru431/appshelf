@@ -446,6 +446,14 @@ def test_vhost_sets_headers_the_code_relies_on():
     assert 'Header always set Strict-Transport-Security "max-age=' in vhost
 
 
+def test_units_cap_memory():
+    # испорченный APK в пределах 1 ГиБ раздувал процесс до ~9 ГиБ: без предела — нехватка памяти всего сервера
+    for unit, limit in (("appshelf-web.service", "4G"), ("appshelf-nightly.service", "3G")):
+        lines = (DEPLOY / unit).read_text(encoding="utf-8").splitlines()
+        service = lines[lines.index("[Service]"):]
+        assert f"MemoryMax={limit}" in service, unit
+
+
 def test_units_allow_google_dir():
     # мастер-токены Google Play — /etc/appshelf/google/<id>/ (spec 2026-10-28 §6.4); ProtectSystem=full закрыл бы /etc
     for unit in ("appshelf-web.service", "appshelf-nightly.service"):

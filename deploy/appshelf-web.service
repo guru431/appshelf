@@ -20,6 +20,11 @@ RuntimeDirectoryMode=0750
 ExecStartPost=+/bin/sh -c 'until [ -S /run/appshelf/web.sock ]; do sleep 0.1; done; chgrp www-data /run/appshelf'
 # пароль шага входа живёт в памяти — дамп памяти не должен лечь на диск
 LimitCORE=0
+# Предел на всю cgroup: uvicorn, ipatool, Java (apksigner, проверка каталога F-Droid с -Xmx384m), окно входа 4PDA
+# (Xvfb + Chromium, до 3 окон). Худшее законное совпадение ~3 ГиБ: Python ~0,2 + разбор каталога F-Droid на пределе
+# 192 МиБ ~1,1 + JVM ~0,5 + Chromium ~1. Сборка APK из частей и запись на шару — страничный кэш, его ядро вытесняет
+# до OOM. Без предела испорченный APK в 1 ГиБ раздувал процесс до ~9 ГиБ — нехватка памяти всего сервера.
+MemoryMax=4G
 # Данные и токен магазина — только владельцу; публичные файлы /d/ jobs.py открывает явно (0644/0755)
 UMask=0077
 # /usr, /boot, /etc — только чтение, кроме HOME ipatool и токенов Google Play; код, .venv и bin/ — root (deploy/install.sh).
