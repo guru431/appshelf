@@ -21,3 +21,9 @@ build/
 .superpowers/
 # Планы реализации — локально: в публичный github не уезжают (.github-push-deny)
 docs/superpowers/plans/
+
+# Private project journals and archives stay local.
+[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]*.[mM][dD]
+[Ii][Dd][Ee][Aa][Ss]*.[mM][dD]
+[Ff][Ii][Nn][Dd][Ii][Nn][Gg][Ss]*.[pP][dD][fF]
+[Ii][Dd][Ee][Aa][Ss]*.[pP][dD][fF]
