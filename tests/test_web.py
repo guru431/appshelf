@@ -126,6 +126,29 @@ def test_ios_card_matches_android_card(web, conn, cfg, clock):
         assert link in menu and "<button>" not in menu   # в «⋯» — только вторичные и опасная кнопки
 
 
+IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+
+
+@pytest.mark.parametrize("ua, banner", [
+    (IOS + " CriOS/130.0.6723.90 Mobile/15E148 Safari/604.1", True),          # Chrome для iOS
+    (IOS + " FxiOS/132.0 Mobile/15E148 Safari/605.1.15", True),               # Firefox
+    (IOS + " EdgiOS/130.0.2849.80 Version/18.0 Mobile/15E148 Safari/604.1", True),
+    (IOS + " Version/18.0 YaBrowser/24.10.5.400.10 SA/3 Mobile/15E148 Safari/604.1", True),
+    (IOS + " Version/18.0 Mobile/15E148 Safari/604.1", False),                # Safari
+    ("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile Safari/537.36", False),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Safari/537.36", False),
+])
+def test_ios_other_browser_banner_on_catalog_and_login(web, ua, banner):
+    """Из Chrome и других браузеров iOS «Установить» (itms-services) ничего не делает — просим открыть в Safari."""
+    text = "Установка работает только в Safari"
+    catalog = web.client.get("/?os=apple", headers={"User-Agent": ua}).text
+    login = TestClient(web.app, base_url=f"https://{HOST}", headers={"user-agent": ua}).get("/login?next=/").text
+    assert (text in catalog, text in login) == (banner, banner)
+    if banner:
+        assert 'data-copy="https://apps.example/?os=apple">Скопировать адрес' in catalog
+        assert 'data-copy="https://apps.example/login?next=/">Скопировать адрес' in login
+
+
 def test_banners_for_expired_session_and_low_space(web, conn):
     set_session(conn, 1, "expired")
     web.free["bytes"] = 2 * GB

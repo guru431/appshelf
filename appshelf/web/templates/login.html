@@ -3,6 +3,10 @@
 <div class="auth">
   {% if add %}<h2>appshelf — добавить Apple ID</h2>
   {% else %}<div class="brand"><img src="/pwa/icon-180.png" alt=""><h1>appshelf</h1></div>{% endif %}
+  {# по ссылке-приглашению адрес входа без неё не поможет — о Safari говорит баннер приглашения #}
+  {% if ios_other and not add and not invited %}<div class="banner"><p>Установка работает только в Safari — откройте
+    эту страницу в Safari.</p>
+    <button type="button" class="secondary" data-copy="{{ cfg.public_base ~ here }}">Скопировать адрес</button></div>{% endif %}
   {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID
     {%- if cfg.google_enabled %} или через Google{% endif %}.
     {% if device == 'apple' %}Откройте эту ссылку в Safari: во встроенном браузере Telegram или WhatsApp установка

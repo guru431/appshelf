@@ -25,6 +25,8 @@ TEMPLATES.env.filters["gb"] = lambda size: f"{size / GB:.1f}"  # размер п
 # размер IPA/APK в МБ на карточке: маленький APK — «< 1», а не «0»
 TEMPLATES.env.filters["mb"] = lambda size: "< 1" if size < 1048576 else str(int(size / 1048576 + .5))
 THEMES = ("light", "dark")
+# браузеры iOS, из которых itms-services не запускает установку: Chrome, Firefox, Edge, Opera, Яндекс
+IOS_OTHER_BROWSERS = ("CriOS", "FxiOS", "EdgiOS", "OPiOS", "YaBrowser")
 ACCT_COOKIE = "appshelf_acct"      # активная полка: id Apple ID одного из вошедших
 WHO_COOKIE = "appshelf_who"        # активный участник Android-раздела: id одного из вошедших
 LOGIN_COOKIE = "appshelf_login"    # незавершённый вход (шаг кода 2FA): id в памяти LoginFlow
@@ -132,11 +134,12 @@ class WebCtx:
             section = "android"
         elif nav in ("catalog", "history", "blocked"):
             section = "apple"
+        ua = request.headers.get("user-agent", "")
+        device = ("android" if "Android" in ua else
+                  "apple" if any(x in ua for x in ("iPhone", "iPad", "iPod")) else "desktop")
         ctx.update(cfg=self.cfg, nav=nav, here=here, theme=theme if theme in THEMES else "",
                    section=section, post_url=lambda path: mutation_url(path, ctx["acct"], ctx["who"], ctx["users"]),
-                   device=("android" if "Android" in request.headers.get("user-agent", "") else
-                           "apple" if any(x in request.headers.get("user-agent", "")
-                                          for x in ("iPhone", "iPad", "iPod")) else "desktop"))
+                   device=device, ios_other=device == "apple" and any(x in ua for x in IOS_OTHER_BROWSERS))
         response = TEMPLATES.TemplateResponse(request, name, ctx, status_code=status_code)
         if nav.startswith("a_"):
             response.set_cookie("appshelf_os", "android", max_age=10 * 365 * 86400,

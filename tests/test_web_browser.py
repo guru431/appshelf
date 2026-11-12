@@ -923,3 +923,59 @@ def test_settings_subpages_shelf_menu_theme_icon_and_dates(web, make_web, conn, 
             assert not errors
         finally:
             browser.close()
+
+
+CHROME_IOS = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+              "CriOS/130.0.6723.90 Mobile/15E148 Safari/604.1")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [320, 390])
+def test_safari_banner_copies_address_or_selects_it(web, make_web, conn, cfg, clock, width, local_chromium):
+    """Chrome для iOS: баннер «только в Safari» на каталоге и входе читаем в обеих темах, кнопка — не меньше 44 px,
+    адрес копируется; без Clipboard API адрес показывается выделенным, без alert()."""
+    seed_app(conn, cfg, clock, versions=("1.0",))
+    anon = make_web(cfg, conn)
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        errors = []
+
+        def open_page(client, path, clipboard=True):
+            context = browser.new_context(viewport={"width": width, "height": 844}, user_agent=CHROME_IOS)
+            if clipboard:
+                context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://apps.example")
+            else:
+                context.add_init_script("Object.defineProperty(Navigator.prototype, 'clipboard', {get: () => undefined})")
+            page = context.new_page()
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("dialog", lambda dialog: errors.append("dialog: " + dialog.message))
+            page.route("https://apps.example/**", _route_to(client))
+            page.goto("https://apps.example" + path)
+            return page
+
+        try:
+            for client, path in ((web.client, "/?os=apple"), (anon.client, "/login")):
+                client.headers["user-agent"] = CHROME_IOS
+                for theme in ("light", "dark"):
+                    client.get(f"/theme?set={theme}")
+                    page = open_page(client, path)
+                    banner = page.locator(".banner", has_text="только в Safari")
+                    assert banner.is_visible()
+                    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (path, theme)
+                    ratio, text = banner.evaluate(MIN_TEXT_CONTRAST)
+                    assert ratio >= 4.5, (path, theme, text, ratio)
+                    button = banner.get_by_role("button", name="Скопировать адрес", exact=True)
+                    assert button.bounding_box()["height"] >= 44
+                    button.click()
+                    page.wait_for_function("document.querySelector('.banner [data-copy]').textContent === 'Скопировано'")
+                    assert page.evaluate("navigator.clipboard.readText()") == "https://apps.example" + path
+                    page.context.close()
+            page = open_page(anon.client, "/login", clipboard=False)
+            page.get_by_role("button", name="Скопировать адрес", exact=True).click()
+            assert page.locator(".banner code").inner_text() == "https://apps.example/login"
+            assert page.evaluate("getSelection().toString()") == "https://apps.example/login"
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            assert not errors
+        finally:
+            browser.close()

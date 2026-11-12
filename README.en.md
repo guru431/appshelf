@@ -23,7 +23,8 @@ The web UI is in Russian.
   appshelf checks which of them your Apple ID holds a license for.
 - iPhone catalog with an "Install" button (from a computer — a QR code next to it); the current and the previous
   version are kept, and one of them can be pinned to survive later updates. iOS does not install over an installed
-  app — offload it first (see "Updating an installed app").
+  app — offload it first (see "Updating an installed app"). Installing works only from Safari: opened in Chrome,
+  Firefox, Edge, Opera or Yandex Browser for iOS, the catalog and sign-in offer to copy the address.
 - Nightly check for new versions (versions downloaded this week are marked in the catalog: apps removed from the
   App Store get updates only from here) and "Проверить обновления всех" (check all for updates) above the catalog;
   mail — see "Mail", including a weekly digest of new versions for every person.

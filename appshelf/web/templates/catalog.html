@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "help_parts.html" import ios_steps, dialog, help_button, tip %}
 {% block main %}
+{% if ios_other %}<div class="banner"><p>Установка работает только в Safari — откройте эту страницу в Safari.</p>
+  <button type="button" class="secondary" data-copy="{{ cfg.public_base ~ here }}">Скопировать адрес</button></div>{% endif %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
 {% include 'shelf_filter.html' %}
 {% if state_links or checkable %}<div class="sortbar">
