@@ -13,6 +13,12 @@ from apk_factory import make_apk
 from test_web_android import work
 
 
+@pytest.fixture(autouse=True)
+def roomy_disk(monkeypatch):
+    # Uploads(cfg) сверяется с диском: в тестах — подставное место, а не свободное на машине
+    monkeypatch.setattr(jobs, "free_bytes", lambda path: 50 * jobs.GB)
+
+
 def payload(raw, **extra):
     return {"client_id": "a" * 32, "size": len(raw), "fingerprint": hashlib.sha256(raw).hexdigest(),
             "filename": "example.apk", **extra}
@@ -253,6 +259,47 @@ def test_idle_upload_reserves_only_received_parts(cfg, conn, clock, acct, monkey
     assert full.value.status == 507
     manager.cancel(conn, manager.get(conn, other["id"], member.user_id, theirs.id, clock.iso()))
     assert manager.part(conn, row, 1, raw[4:8], hashlib.sha256(raw[4:8]).hexdigest(), clock.iso())["parts"].keys() == {"0", "1"}
+
+
+def test_disk_space_checked_at_create_part_and_finish(cfg, conn, clock, acct):
+    # квоты учётные: на почти полном диске части и сборка (ещё одна копия) съедали место базы на том же диске
+    free = {"bytes": 0}
+    checked = []
+    manager = uploads.Uploads(cfg, lambda path: checked.append(path) or free["bytes"])
+    shelf = db.ensure_shelf(conn, acct.user_id, clock.iso())
+    raw = b"abcdef"
+    free["bytes"] = jobs.RESERVE + 2 * len(raw) - 1   # части и собранный файл
+    with pytest.raises(uploads.UploadError) as low:
+        manager.create(conn, acct.user_id, shelf.id, payload(raw), clock.iso())
+    assert low.value.status == 507
+    assert conn.execute("SELECT COUNT(*) FROM android_uploads").fetchone()[0] == 0
+    assert not manager.root.exists() or not list(manager.root.iterdir())
+    free["bytes"] += 1
+    item = manager.create(conn, acct.user_id, shelf.id, payload(raw), clock.iso())
+    row = manager.get(conn, item["id"], acct.user_id, shelf.id, clock.iso())
+    free["bytes"] -= 1
+    with pytest.raises(uploads.UploadError) as low:
+        manager.part(conn, row, 0, raw, hashlib.sha256(raw).hexdigest(), clock.iso())
+    assert low.value.status == 507 and "Полученные части сохранены" in low.value.message
+    assert not list(manager.folder(item["id"]).iterdir())
+    free["bytes"] += 1
+    manager.part(conn, row, 0, raw, hashlib.sha256(raw).hexdigest(), clock.iso())
+    free["bytes"] = jobs.RESERVE + len(raw) - 1      # части уже на диске: сборке нужна ещё одна копия
+    with pytest.raises(uploads.UploadError) as low:
+        manager.finish(conn, row, clock.iso())
+    assert low.value.status == 507
+    assert manager.view(manager.get(conn, row["id"], acct.user_id, shelf.id, clock.iso()))["parts"].keys() == {"0"}
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
+    free["bytes"] += 1
+    assert manager.finish(conn, row, clock.iso())["job_id"] is not None
+    assert set(checked) == {cfg.data_dir}
+
+
+def test_web_upload_create_reports_low_disk(web, conn):
+    web.free["bytes"] = 0
+    response = web.client.post("/android/uploads", json=payload(b"apk"))
+    assert response.status_code == 507 and "мало места" in response.json()["error"]
+    assert conn.execute("SELECT COUNT(*) FROM android_uploads").fetchone()[0] == 0
 
 
 def test_reserve_limit_per_member_and_server_wide_text(cfg, conn, clock, acct, monkeypatch):

@@ -33,6 +33,7 @@ SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой фай�
 NEW_VERSION_DAYS = 7
 ARCHIVE_DOWN = "Архив недоступен — изменить полку сейчас нельзя"
 TOO_BIG = "Файл больше 1 ГБ — такой не принимается"
+NO_ROOM = "На сервере сейчас мало места для этого файла — повторите позже"
 MAX_URL = 2000
 PIN_FORMAT = "PIN — 6 цифр, только цифры 0–9"
 PIN_BUSY = "Идёт скачивание — попробуйте через минуту: PIN не изменён"
@@ -463,6 +464,9 @@ def _register_scope(app, w, scope: Scope):
         """Загрузка — потоком во временный файл (tmp/web, локально); (путь, None) или (None, (код, текст))."""
         if file is None:
             return None, (400, "Выберите файл APK")
+        # спул Starlette уже на диске данных, копия займёт столько же: запас — как у скачиваний
+        if w.env.disk_free(cfg.data_dir) - min(file.size or net.MAX_APK, net.MAX_APK) < jobs.RESERVE:
+            return None, (507, NO_ROOM)
         dest = cfg.tmp_dir / "web" / f"up-{secrets.token_hex(8)}.apk"
         dest.parent.mkdir(parents=True, exist_ok=True)
         n = 0

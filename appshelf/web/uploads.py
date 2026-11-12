@@ -14,7 +14,7 @@ from .admin import owner_only
 
 
 def register(app, w, scope, shelf_of, ensure):
-    manager, prefix = Uploads(w.cfg), scope.prefix + "/uploads"
+    manager, prefix = Uploads(w.cfg, w.env.disk_free), scope.prefix + "/uploads"
     deps = [Depends(owner_only)] if scope.public else []
 
     def run(request, operation, upload_id=None, *args):

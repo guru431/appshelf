@@ -45,6 +45,39 @@ def test_failed_swap_puts_previous_code_back():
 
 
 @pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("env_lines, mounted, refused", [
+    (["APPSHELF_PUB=/mnt/share"], "/mnt/share", "APPSHELF_PUB"),
+    (["APPSHELF_PUB=/mnt/share"], "", "APPSHELF_PUB"),               # шара не смонтирована — видно по fstab
+    (["APPSHELF_PUB='/mnt/share/'"], "", "APPSHELF_PUB"),
+    (["APPSHELF_PUB=/mnt/share/appshelf"], "", None),
+    (["APPSHELF_BACKUP_DIR=/mnt/backup"], "/mnt/backup", "APPSHELF_BACKUP_DIR"),
+    (['APPSHELF_BACKUP_DIR="/mnt/backup"'], "", "APPSHELF_BACKUP_DIR"),
+    (["APPSHELF_PUB=/mnt/share/appshelf", "APPSHELF_BACKUP_DIR=/mnt/backup/appshelf"], "", None),
+    ([], "", None),
+])
+def test_install_refuses_mount_point_as_archive_or_backup_dir(tmp_path, env_lines, mounted, refused):
+    # пустая точка монтирования — тоже каталог: при отвалившейся шаре IPA или снимки базы легли бы на локальный диск,
+    # а проверка одним mountpoint пропускала неверную настройку, пока шара не смонтирована
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    check = text[text.index("# пустая точка монтирования"):text.index("if id -nG appshelf")]
+    env_file = tmp_path / "appshelf.env"
+    env_file.write_text("\n".join(["APPSHELF_OWNER=owner@example.test", *env_lines, ""]), encoding="utf-8")
+    wrapper = '''
+mountpoint() { [ "$1" = -q ] && [ -n "$MOCK_MOUNTED" ] && [ "${2%/}" = "$MOCK_MOUNTED" ]; }
+findmnt() { [ "$*" = "-rn --fstab -o TARGET" ] && printf '/\\n/boot\\n/mnt/share\\n/mnt/backup\\n'; }
+''' + check + "echo REACHED\n"
+    env = {**os.environ, "ENV_FILE": env_file.as_posix(), "MOCK_MOUNTED": mounted}
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", wrapper], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    if refused:
+        assert result.returncode == 1 and f"ОШИБКА: {refused}=" in result.stderr
+        assert "REACHED" not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert "REACHED" in result.stdout
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
 @pytest.mark.parametrize("empty", [None, "root", "part"])
 def test_restore_refuses_empty_delete_path_before_running_commands(tmp_path, empty):
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
@@ -78,9 +111,100 @@ restore_previous
 def test_install_refuses_while_nightly_check_runs():
     # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    check = text.index("systemctl is-active --quiet appshelf-nightly.service")
-    assert check < text.index('pip" install') < text.index('mv "$NEW/$p" "$R/$p"')
-    assert "exit 1" in text[check:text.index("fi", check)]
+    check = text.index("systemctl show -P ActiveState appshelf-nightly.service")
+    assert check < text.index('pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"')
+    assert check < text.index('mv "$NEW/$p" "$R/$p"')
+    assert "exit 1" in text[check:text.index("esac", check)]
+
+
+def run_nightly_guard(tmp_path, state, timer):
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    guard = text[text.index("# ночная проверка (до 4 ч)"):text.index('chown -R root:"$GROUP" "$NEW"')]
+    log = tmp_path / "systemctl.log"
+    wrapper = '''
+systemctl() {
+  printf '%s\\n' "$*" >> "$MOCK_LOG"
+  case "$1" in
+    is-active)  # как настоящий: «да» только для active и reloading
+      if [ "${!#}" = appshelf-nightly.timer ]; then [ "$MOCK_TIMER" = active ]
+      else [ "$MOCK_STATE" = active ] || [ "$MOCK_STATE" = reloading ]; fi ;;
+    show) printf '%s\\n' "$MOCK_STATE" ;;
+  esac
+}
+''' + guard + "echo REACHED\n"
+    env = {**os.environ, "MOCK_LOG": log.as_posix(), "MOCK_STATE": state, "MOCK_TIMER": timer}
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", wrapper], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    return result, log.read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("state", ["activating", "active", "deactivating", "reloading"])
+def test_install_sees_oneshot_nightly_check_and_restarts_its_timer(tmp_path, state):
+    # Type=oneshot всё время работы — «activating», а is-active отвечает «да» только на active: отказ не срабатывал
+    result, calls = run_nightly_guard(tmp_path, state, "active")
+    assert result.returncode == 1 and "идёт ночная проверка" in result.stderr
+    assert "REACHED" not in result.stdout
+    assert calls == ["is-active --quiet appshelf-nightly.timer", "stop appshelf-nightly.timer",
+                     "show -P ActiveState appshelf-nightly.service", "start appshelf-nightly.timer"]
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("timer", ["active", "inactive"])
+def test_install_holds_nightly_timer_until_exit(tmp_path, timer):
+    # таймер 04:30 мог запустить проверку между проверкой состояния и подменой кода
+    result, calls = run_nightly_guard(tmp_path, "inactive", timer)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED" in result.stdout
+    if timer == "active":
+        assert calls[1:] == ["stop appshelf-nightly.timer", "show -P ActiveState appshelf-nightly.service",
+                             "start appshelf-nightly.timer"]
+    else:  # выключенный владельцем таймер выкладка не включает
+        assert calls[1:] == ["show -P ActiveState appshelf-nightly.service"]
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("pending", [True, False])
+def test_failed_deploy_reinstalls_package_from_live_code(tmp_path, pending):
+    # пакет в site-packages ставился до подмены, а откат возвращал только $R: CLI (login-link, check) работал
+    # отвергнутой версией и мог перевести базу на её схему
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    functions = "\n".join(re.search(rf"(?ms)^{name}\(\) \{{.*?^\}}", text).group()
+                          for name in ("reinstall_package", "on_exit"))
+    live = tmp_path / "code"
+    (live / "appshelf").mkdir(parents=True)
+    (live / "appshelf" / "store.py").write_text("SCHEMA_VERSION = 11\n", encoding="utf-8")
+    (live / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    pip = live / ".venv" / "bin" / "pip"
+    pip.parent.mkdir(parents=True)
+    log = tmp_path / "pip.log"
+    # подставной pip, как настоящий, мусорит в исходном каталоге
+    pip.write_text('#!/bin/bash\nsrc="${!#}"\nprintf "%s\\n" "$*" >> "$PIP_LOG"\n'
+                   'cat "$src/appshelf/store.py" >> "$PIP_LOG"\nmkdir "$src/build" "$src/appshelf.egg-info"\n',
+                   encoding="utf-8", newline="\n")
+    pip.chmod(0o755)
+    env = {**os.environ, "R": live.as_posix(), "PIP_LOG": log.as_posix(), "TMPDIR": tmp_path.as_posix()}
+    script = f"{functions}\nnightly_timer=0\npackage_pending={int(pending)}\ntrap on_exit EXIT\nexit 1\n"
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    assert result.returncode == 1, result.stderr
+    assert sorted(p.name for p in live.iterdir()) == [".venv", "appshelf", "pyproject.toml"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["code"] + (["pip.log"] if pending else [])
+    if pending:
+        args, store = log.read_text(encoding="utf-8").splitlines()
+        assert args.split()[:-1] == ["install", "--quiet", "--root-user-action=ignore", "--no-deps", "--force-reinstall"]
+        assert store == "SCHEMA_VERSION = 11"
+
+
+def test_package_flag_covers_every_failed_exit():
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    armed = text.index("\npackage_pending=1\n")
+    assert text.index("trap on_exit EXIT") < armed < text.index('pip" install --quiet --root-user-action=ignore "${NEW}')
+    success = text.index("if restart_and_check; then\n")
+    assert text.index("  package_pending=0\n", success) < text.index("  exit 0\n", success)
+    # ручной откат: прежний пакет — из $OLD, пока прежний код ещё там (build/ остаётся в $OLD, не в $R)
+    hint = text.index("Автооткат невозможен")
+    assert text.index("--force-reinstall $OLD", hint) < text.index("mv $OLD/\\$p $R/", hint)
 
 
 def install_rollback_check():
@@ -320,6 +444,14 @@ def test_vhost_sets_headers_the_code_relies_on():
     assert 'Header setifempty Referrer-Policy "same-origin"' in vhost and "no-referrer\"" not in vhost
     assert 'Header always set X-Content-Type-Options "nosniff"' in vhost
     assert 'Header always set Strict-Transport-Security "max-age=' in vhost
+
+
+def test_units_cap_memory():
+    # испорченный APK в пределах 1 ГиБ раздувал процесс до ~9 ГиБ: без предела — нехватка памяти всего сервера
+    for unit, limit in (("appshelf-web.service", "4G"), ("appshelf-nightly.service", "3G")):
+        lines = (DEPLOY / unit).read_text(encoding="utf-8").splitlines()
+        service = lines[lines.index("[Service]"):]
+        assert f"MemoryMax={limit}" in service, unit
 
 
 def test_units_allow_google_dir():

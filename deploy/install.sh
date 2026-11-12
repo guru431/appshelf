@@ -17,12 +17,16 @@ if ! grep -qE "^APPSHELF_OWNER=.+" "$ENV_FILE"; then
   echo "ОШИБКА: в $ENV_FILE нет APPSHELF_OWNER=<Apple ID владельца>" >&2
   exit 1
 fi
-# пустая точка монтирования — тоже каталог: при несмонтированной шаре IPA легли бы на локальный диск
-PUB="$(sed -n 's/^APPSHELF_PUB=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
-if [ -n "$PUB" ] && mountpoint -q "$PUB"; then
-  echo "ОШИБКА: APPSHELF_PUB=$PUB — сама точка монтирования; нужен подкаталог внутри шары (README, «Что и где»)" >&2
-  exit 1
-fi
+# пустая точка монтирования — тоже каталог: при несмонтированной шаре IPA и снимки базы легли бы на локальный диск.
+# Сверка и с fstab: пока шара не смонтирована, mountpoint неверную настройку не видит.
+FSTAB="$(findmnt -rn --fstab -o TARGET || true)"
+for var in APPSHELF_PUB APPSHELF_BACKUP_DIR; do
+  dir="$(sed -n "s/^$var=//p" "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
+  if [ -n "$dir" ] && { mountpoint -q "$dir" || grep -qxF -- "${dir%/}" <<< "$FSTAB"; }; then
+    echo "ОШИБКА: $var=$dir — сама точка монтирования; нужен подкаталог внутри шары (README, «Что и где»)" >&2
+    exit 1
+  fi
+done
 if id -nG appshelf | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "ОШИБКА: appshelf входит в группу кода $GROUP — APPSHELF_CODE_GROUP в .env должна быть другой" >&2
   exit 1
@@ -31,12 +35,42 @@ if sudo -u www-data test -r "$ENV_FILE"; then
   echo "ОШИБКА: www-data читает $ENV_FILE (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
   exit 1
 fi
-# ночная проверка (до 4 ч) держит прежний код в памяти и догружает модули лениво: после pip и подмены — смесь версий
-if systemctl is-active --quiet appshelf-nightly.service; then
-  echo "ОШИБКА: идёт ночная проверка — выложить после неё или прервать (прерванное доделает следующая ночь):" >&2
-  echo "  sudo systemctl stop appshelf-nightly.service" >&2
-  exit 1
+# ночная проверка (до 4 ч) держит прежний код в памяти и догружает модули лениво: после pip и подмены — смесь версий.
+# Таймер стоит до конца установки, чтобы 04:30 не наступило между проверкой и подменой; пропуск догонит Persistent=true.
+nightly_timer=0
+if systemctl is-active --quiet appshelf-nightly.timer; then
+  nightly_timer=1
+  systemctl stop appshelf-nightly.timer
 fi
+# CLI appshelf (login-link, check, backup) работает пакетом из site-packages, службы — кодом из $R. Пакет ставится до
+# подмены кода; не удалась выкладка — при выходе он снова ставится из $R (после отката там прежний код).
+package_pending=0
+reinstall_package() {  # из копии: в исходном каталоге pip оставляет build/ и appshelf.egg-info
+  local src rc
+  src="$(mktemp -d)" || return 1
+  cp -r "$R/pyproject.toml" "$R/appshelf" "$src/" &&
+    "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$src"
+  rc=$?
+  rm -rf "$src"
+  return "$rc"
+}
+on_exit() {
+  if [ "$package_pending" = 1 ] && [ -e "$R/pyproject.toml" ]; then
+    reinstall_package || echo "ВНИМАНИЕ: пакет appshelf в .venv (CLI) не совпадает с кодом $R — поставить его заново" >&2
+  fi
+  if [ "$nightly_timer" = 1 ]; then
+    systemctl start appshelf-nightly.timer || echo "ВНИМАНИЕ: не запустился appshelf-nightly.timer" >&2
+  fi
+}
+trap on_exit EXIT
+# Type=oneshot: всё время работы служба в «activating», а is-active видит только active
+case "$(systemctl show -P ActiveState appshelf-nightly.service)" in
+  active|activating|deactivating|reloading)
+    echo "ОШИБКА: идёт ночная проверка — выложить после неё или прервать (прерванное доделает следующая ночь):" >&2
+    echo "  sudo systemctl stop appshelf-nightly.service" >&2
+    exit 1
+    ;;
+esac
 
 chown -R root:"$GROUP" "$NEW"
 chmod -R u=rwX,go=rX "$NEW"
@@ -51,6 +85,7 @@ if ! command -v apksigner >/dev/null || ! command -v javac >/dev/null; then
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apksigner default-jdk-headless
 fi
+package_pending=1
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
@@ -116,6 +151,7 @@ restart_and_check() {
   return 1
 }
 if restart_and_check; then
+  package_pending=0
   rm -rf "$OLD"
   echo "OK: appshelf-web отвечает на /run/appshelf/web.sock"
   exit 0
@@ -145,5 +181,6 @@ then
   exit 1
 fi
 echo "Автооткат невозможен (нет прежнего кода или база новее его). Прежний код — $OLD:" >&2
+echo "  $R/.venv/bin/pip install --no-deps --force-reinstall $OLD" >&2
 echo "  for p in ${PARTS[*]}; do rm -rf $R/\$p; mv $OLD/\$p $R/; done; systemctl restart appshelf-web" >&2
 exit 1

@@ -163,6 +163,9 @@ otherwise any code execution as appshelf (an image from an IPA, ipatool) would b
 build. The code group (`APPSHELF_CODE_GROUP` in `.env`) gets read access only, and appshelf is not in it. The
 services see `/usr` and `/etc` read-only (`ProtectSystem=full`), except `/etc/appshelf/accounts` and
 `/etc/appshelf/google`, plus `/etc/appshelf/fourpda` for `appshelf-web`; `appshelf-backup` writes nothing in `/etc`.
+Memory is capped (`MemoryMax`: `appshelf-web` — 4 GiB including the 4PDA sign-in window, the nightly check — 3 GiB;
+the reasoning is in the units), so a malformed APK cannot take the whole server's memory. On a server with less than
+6–8 GB of RAM, lower the limits.
 `/var/lib/appshelf` and `status/` are `0711`: Apache and monitoring pass through without
 listing. `/etc/appshelf` is `root:appshelf 0711`, so Apache cannot read `appshelf.env`. **Do not add
 www-data to the `appshelf` group**: Apache reaches the socket through the `www-data` group on `/run/appshelf`
@@ -178,9 +181,13 @@ token in the link close it to the internet.
 What ships is the committed `HEAD` (`git archive`): with uncommitted changes in the code `deploy.sh` refuses. While
 the nightly check runs (`appshelf-nightly.service`, up to 4 h) the deploy refuses too: that process keeps the old
 code in memory and imports modules lazily; wait for it or stop it (`sudo systemctl stop appshelf-nightly.service`,
-the next night finishes what was interrupted). The new code replaces the old one as a whole and only after `pip`
+the next night finishes what was interrupted). During the install `appshelf-nightly.timer` is stopped (a missed run
+catches up afterwards), so the check cannot start halfway through the code swap. The new code replaces the old one as a whole and only after `pip`
 succeeds. If `/healthz` does not answer 200 within 10 s, `install.sh` restores the previous code (`.previous`) by
-itself when the database is readable by it, otherwise it prints the manual steps. To roll back, deploy the previous
+itself when the database is readable by it, otherwise it prints the manual steps. The `appshelf` package in `.venv`
+(the `.venv/bin/appshelf` CLI runs it; the services run the code in the directory) is installed before the swap; after
+any failed deploy `install.sh` reinstalls it from the code left in the directory, and the manual steps start with it —
+otherwise the CLI would run the rejected version and could move the database to its schema. To roll back, deploy the previous
 commit (across a database schema change — only if that migration declared the schema readable by the older code, see
 `SCHEMA_VERSION` in `store.py`). If
 `bin/ipatool` or `bin/ipatool-auth` was not built from the deployed `ipatool/`, `deploy.sh` reminds you to rebuild;
@@ -386,7 +393,8 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   are supported; after a drop only the undelivered chunk is repeated. Received chunks are kept for 7 days after the
   last one; an upload without a single chunk expires after an hour, and one silent for an hour keeps only what it
   received in reserve. Space reserve: up to 1 GB and at most two unfinished uploads per person, 2 GB per server;
-  with no room to continue the browser waits. The "Незавершённые загрузки" (Unfinished uploads) block on "Add"
+  besides, 3 GB must remain on the data disk after the chunks and the assembly, as for downloads. With no room to
+  continue the browser waits. The no-JS fallback form takes one file per person at a time, with the same space check. The "Незавершённые загрузки" (Unfinished uploads) block on "Add"
   cancels abandoned ones (the owner sees and cancels everyone's). To continue after the page is closed the browser
   keeps a copy of the file until completion or cancellation; if it has no room, choose the same APK again — the
   server's chunks are kept. The service worker sends in the background while the browser allows it. If Android puts
@@ -656,7 +664,9 @@ once per episode.
 
 - `/healthz` — 200 without sign-in.
 - `status/nightly.stamp` — written at the end of every nightly check, with errors too (those are in the night's
-  result and in mail): a trigger "not updated for more than 26 h" means the check did not run at all.
+  result and in mail): a trigger "not updated for more than 30 h" means the check did not run at all. The threshold
+  is a day plus the service's `TimeoutStartSec=4h` and a margin: the check writes the stamp at the end, so with a
+  lower threshold a long run would raise a false alarm.
 - `status/backup.stamp` — after a successful nightly database snapshot (when `APPSHELF_BACKUP_DIR` is set): a
   trigger on age over 26 h means no snapshot was taken; there is no other signal of an `appshelf-backup` failure.
 
@@ -666,7 +676,10 @@ once per episode.
 
 Nightly database snapshot — `appshelf-backup.timer` (05:30, after the nightly check): `appshelf backup --daily` puts
 `appshelf-<date>.db` into `APPSHELF_BACKUP_DIR` and keeps the last 14. The directory should not be on the server's
-disk (for example, on the share next to the archive) and is created once in advance as `appshelf`; without an
+disk (for example, on the share next to the archive) and is created once in advance as `appshelf` — as a
+subdirectory inside the share, not the mount point itself (with the share gone, snapshots would land on the local
+disk; `install.sh` refuses that, for `APPSHELF_PUB` too, checking fstab as well — so a wrong setting does not pass
+while the share is unmounted); without an
 `APPSHELF_BACKUP_DIR` line in `appshelf.env`, `install.sh` does not enable the timer. The snapshot is made locally,
 passes `PRAGMA quick_check` (a damaged one never rotates older ones away) and lands in the directory as a finished
 file; a successful nightly one writes `status/backup.stamp` (see "Monitoring"). A snapshot directory inside the
@@ -723,7 +736,10 @@ Local integration suites without external network (browser, JDK and apksigner, A
 commands in [CLAUDE.md](CLAUDE.md) (Russian), section "Команды".
 
 GitHub Actions runs the fast suite on Linux too (`.github/workflows/tests.yml`): flock, process groups and file
-modes behave as on the server, which Windows cannot check. Editing and updating the ipatool-cpp patches:
+modes behave as on the server, which Windows cannot check. A separate job there, in a `debian:trixie` container, runs
+the offline APK signature and F-Droid catalog checks (`test_apk_verification.py`, `test_fdroid_verification.py`) with
+apksigner and the JDK from apt, as on the server: it notices a change in apksigner's output before the live shelf does.
+Editing and updating the ipatool-cpp patches:
 [ipatool/README.md](ipatool/README.md) (Russian).
 
 ## License

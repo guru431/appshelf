@@ -12,7 +12,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .. import store
+from .. import jobs, store
 from ..config import GB
 from . import db, net
 
@@ -22,6 +22,8 @@ USER_RESERVED = GB  # один участник не занимает всё м�
 TTL = timedelta(days=7)
 EMPTY_TTL = timedelta(hours=1)  # без единой части загрузка брошена; затихшая на этот срок держит только полученное
 LOCK = threading.RLock()  # One web process; also shared with user deletion and recovery.
+NO_ROOM = "На сервере сейчас мало места для этого файла. Отправка продолжится позже"
+NO_ROOM_PART = "На сервере сейчас нет места, чтобы продолжить загрузку. Полученные части сохранены; отправка продолжится позже"
 HEX = re.compile(r"[a-f0-9]{32}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 
@@ -33,9 +35,15 @@ class UploadError(Exception):
 
 
 class Uploads:
-    def __init__(self, cfg):
+    def __init__(self, cfg, disk_free=None):
         self.cfg = cfg
         self.root = cfg.data_dir / "uploads"
+        self.disk_free = disk_free or jobs.free_bytes
+
+    def room(self, need: int, message: str) -> None:
+        """Квоты — учётные, а на том же диске база: после записи остаётся запас, как у скачиваний (jobs.RESERVE)."""
+        if self.disk_free(self.cfg.data_dir) - need < jobs.RESERVE:
+            raise UploadError(507, message)
 
     def folder(self, upload_id: str) -> Path:
         if not HEX.fullmatch(upload_id):
@@ -181,6 +189,7 @@ class Uploads:
             if sum(self.reserved(item, moment) for item in rows) + size > MAX_RESERVED:
                 raise UploadError(429, "Место для загрузок на сервере сейчас занято другими передачами. Повторите "
                                        "позже; владелец может отменить брошенные загрузки на странице «Добавить»")
+            self.room(2 * size, NO_ROOM)  # части и собранный из них файл
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             upload_id = secrets.token_hex(16)
             folder = self.folder(upload_id)
@@ -216,8 +225,8 @@ class Uploads:
                 # затихшая держала только полученное: продолжить — снова занять весь размер, если место есть
                 others = c.execute("SELECT * FROM android_uploads WHERE id<>?", (row["id"],)).fetchall()
                 if sum(self.reserved(item, moment) for item in others) + row["size"] > MAX_RESERVED:
-                    raise UploadError(507, "На сервере сейчас нет места, чтобы продолжить загрузку. Полученные "
-                                           "части сохранены; отправка продолжится позже")
+                    raise UploadError(507, NO_ROOM_PART)
+            self.room(row["size"] - self.received(row) + row["size"], NO_ROOM_PART)  # оставшиеся части и сборка
             folder = self.folder(row["id"])
             temp, dest = folder / f"{index}.tmp", folder / f"{index}.part"
             try:
@@ -241,6 +250,7 @@ class Uploads:
             parts, count = json.loads(row["parts"]), math.ceil(row["size"] / CHUNK_SIZE)
             if len(parts) != count:
                 raise UploadError(409, "Не все части файла получены. Продолжите загрузку")
+            self.room(row["size"], NO_ROOM_PART)
             folder = self.folder(row["id"])
             temp, dest = folder / "assembled.tmp", folder / "complete.apk"
             try:

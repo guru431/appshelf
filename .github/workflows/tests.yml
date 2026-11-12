@@ -12,3 +12,17 @@ jobs:
           python-version: "3.13"   # как на сервере (Debian 13)
       - run: pip install -e ".[test]"
       - run: pytest -q
+  # Офлайн-проверки подписи APK и каталога F-Droid настоящими apksigner и JDK из apt того же выпуска Debian, что на
+  # сервере (deploy/install.sh): разбор вывода apksigner («Signer #N», «Signer (minSdkVersion=…)») зависит от его версии.
+  # apt + тесты — пара минут, параллельно быстрому набору.
+  verifiers:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            apksigner default-jdk-headless python3 python3-venv ca-certificates git
+      - uses: actions/checkout@v5
+      - run: python3 -m venv /opt/venv && /opt/venv/bin/pip install -q -e ".[test]"
+      - run: /opt/venv/bin/pytest -q -m integration tests/test_apk_verification.py tests/test_fdroid_verification.py
