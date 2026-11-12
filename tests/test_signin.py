@@ -77,6 +77,25 @@ def test_repeated_code_submit_gets_first_login(make_web, cfg, conn, acct, clock)
     assert "Срок шага истёк" in wb.client.post("/login/code", data={"code": "123456"}).text
 
 
+def test_code_step_with_other_code_does_not_join_finished_login(make_web, cfg, conn, acct):
+    # знающий пароль попал в окно шага 1 и получил тот же flow_id: без верного кода чужой вход ему не достаётся
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "S3cret-pw"})
+    before = dict(wb.client.cookies)
+    assert wb.client.post("/login/code", data={"code": "123 456"}, follow_redirects=False).status_code == 303
+    other = TestClient(wb.app, base_url=BASE)
+    for name, value in before.items():
+        other.cookies.set(name, value, domain=HOST)
+    r = other.post("/login/code", data={"code": "000000"}, follow_redirects=False)
+    assert r.status_code == 400 and "Срок шага истёк" in r.text and "appshelf_auth=" not in cookies(r)
+    limiter = wb.app.state.w.limiter
+    assert len(limiter._fails) == 1 and limiter._emails["owner@example"] and len(tool.calls) == 2
+    r = other.post("/login/code", data={"code": "123456"}, follow_redirects=False)   # тот же код, без пробела
+    assert r.status_code == 303 and "appshelf_auth=" in cookies(r)
+
+
 def test_repeated_code_submit_shares_refusal(make_web, cfg, conn, acct):
     wb = make_web(cfg, conn)
     tool = wb.tools.setdefault(1, FakeTool())
