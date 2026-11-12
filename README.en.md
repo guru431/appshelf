@@ -667,7 +667,10 @@ once per episode.
 
 Nightly database snapshot — `appshelf-backup.timer` (05:30, after the nightly check): `appshelf backup --daily` puts
 `appshelf-<date>.db` into `APPSHELF_BACKUP_DIR` and keeps the last 14. The directory should not be on the server's
-disk (for example, on the share next to the archive) and is created once in advance as `appshelf`; without an
+disk (for example, on the share next to the archive) and is created once in advance as `appshelf` — as a
+subdirectory inside the share, not the mount point itself (with the share gone, snapshots would land on the local
+disk; `install.sh` refuses that, for `APPSHELF_PUB` too, checking fstab as well — so a wrong setting does not pass
+while the share is unmounted); without an
 `APPSHELF_BACKUP_DIR` line in `appshelf.env`, `install.sh` does not enable the timer. The snapshot is made locally,
 passes `PRAGMA quick_check` (a damaged one never rotates older ones away) and lands in the directory as a finished
 file; a successful nightly one writes `status/backup.stamp` (see "Monitoring"). A snapshot directory inside the

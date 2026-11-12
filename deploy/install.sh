@@ -17,12 +17,16 @@ if ! grep -qE "^APPSHELF_OWNER=.+" "$ENV_FILE"; then
   echo "ОШИБКА: в $ENV_FILE нет APPSHELF_OWNER=<Apple ID владельца>" >&2
   exit 1
 fi
-# пустая точка монтирования — тоже каталог: при несмонтированной шаре IPA легли бы на локальный диск
-PUB="$(sed -n 's/^APPSHELF_PUB=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
-if [ -n "$PUB" ] && mountpoint -q "$PUB"; then
-  echo "ОШИБКА: APPSHELF_PUB=$PUB — сама точка монтирования; нужен подкаталог внутри шары (README, «Что и где»)" >&2
-  exit 1
-fi
+# пустая точка монтирования — тоже каталог: при несмонтированной шаре IPA и снимки базы легли бы на локальный диск.
+# Сверка и с fstab: пока шара не смонтирована, mountpoint неверную настройку не видит.
+FSTAB="$(findmnt -rn --fstab -o TARGET || true)"
+for var in APPSHELF_PUB APPSHELF_BACKUP_DIR; do
+  dir="$(sed -n "s/^$var=//p" "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
+  if [ -n "$dir" ] && { mountpoint -q "$dir" || grep -qxF -- "${dir%/}" <<< "$FSTAB"; }; then
+    echo "ОШИБКА: $var=$dir — сама точка монтирования; нужен подкаталог внутри шары (README, «Что и где»)" >&2
+    exit 1
+  fi
+done
 if id -nG appshelf | tr ' ' '\n' | grep -qx "$GROUP"; then
   echo "ОШИБКА: appshelf входит в группу кода $GROUP — APPSHELF_CODE_GROUP в .env должна быть другой" >&2
   exit 1

@@ -45,6 +45,39 @@ def test_failed_swap_puts_previous_code_back():
 
 
 @pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("env_lines, mounted, refused", [
+    (["APPSHELF_PUB=/mnt/share"], "/mnt/share", "APPSHELF_PUB"),
+    (["APPSHELF_PUB=/mnt/share"], "", "APPSHELF_PUB"),               # шара не смонтирована — видно по fstab
+    (["APPSHELF_PUB='/mnt/share/'"], "", "APPSHELF_PUB"),
+    (["APPSHELF_PUB=/mnt/share/appshelf"], "", None),
+    (["APPSHELF_BACKUP_DIR=/mnt/backup"], "/mnt/backup", "APPSHELF_BACKUP_DIR"),
+    (['APPSHELF_BACKUP_DIR="/mnt/backup"'], "", "APPSHELF_BACKUP_DIR"),
+    (["APPSHELF_PUB=/mnt/share/appshelf", "APPSHELF_BACKUP_DIR=/mnt/backup/appshelf"], "", None),
+    ([], "", None),
+])
+def test_install_refuses_mount_point_as_archive_or_backup_dir(tmp_path, env_lines, mounted, refused):
+    # пустая точка монтирования — тоже каталог: при отвалившейся шаре IPA или снимки базы легли бы на локальный диск,
+    # а проверка одним mountpoint пропускала неверную настройку, пока шара не смонтирована
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    check = text[text.index("# пустая точка монтирования"):text.index("if id -nG appshelf")]
+    env_file = tmp_path / "appshelf.env"
+    env_file.write_text("\n".join(["APPSHELF_OWNER=owner@example.test", *env_lines, ""]), encoding="utf-8")
+    wrapper = '''
+mountpoint() { [ "$1" = -q ] && [ -n "$MOCK_MOUNTED" ] && [ "${2%/}" = "$MOCK_MOUNTED" ]; }
+findmnt() { [ "$*" = "-rn --fstab -o TARGET" ] && printf '/\\n/boot\\n/mnt/share\\n/mnt/backup\\n'; }
+''' + check + "echo REACHED\n"
+    env = {**os.environ, "ENV_FILE": env_file.as_posix(), "MOCK_MOUNTED": mounted}
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", wrapper], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    if refused:
+        assert result.returncode == 1 and f"ОШИБКА: {refused}=" in result.stderr
+        assert "REACHED" not in result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert "REACHED" in result.stdout
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
 @pytest.mark.parametrize("empty", [None, "root", "part"])
 def test_restore_refuses_empty_delete_path_before_running_commands(tmp_path, empty):
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
