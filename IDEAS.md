@@ -2,12 +2,6 @@
 Идеи и feature-запросы (не баги — те в [FINDINGS.md](FINDINGS.md)), только `proposed`. Ревизия: MonthlyStratReview 1-го числа. Stale >90 дней → alert.
 Новые записи сверху. Реализованные — удаляются (след в `git log`), отклонённые — переносятся в [IDEAS-archive.md](IDEAS-archive.md).
 
-## 2026-11-12 · CI: офлайн-проверки подписи APK и каталога F-Droid с apksigner того же выпуска Debian, что на сервере [P3]
-**Context:** адверсариальный аудит 2026-11-12, линза «тесты и документация», `.github/workflows/tests.yml:14`, `appshelf/apk.py:144-151` (`_verified_signer`), `deploy/install.sh:50-52`.
-**What:** `test_apk_verification.py` и `test_fdroid_verification.py` работают без сети, но запускаются только вручную на Windows с apksigner из SDK, а сервер берёт apksigner из apt Debian 13, и разбор его вывода (`Signer #N` / `Signer (minSdkVersion=…)`) зависит от версии. Смену формата сейчас заметит только отказ публикации на живой полке.
-**Proposal:** отдельный job в tests.yml в контейнере того же выпуска Debian (не ubuntu-latest — там другой apksigner): `apt-get install -y --no-install-recommends apksigner default-jdk-headless`, затем `pytest -q -m integration tests/test_apk_verification.py tests/test_fdroid_verification.py`; если прогон долгий — по расписанию, а не на каждый push.
-**Status:** proposed
-
 ## 2026-11-12 · «Опубликовать» в «Покупках» и «Удалённых» — оставаться на списке с поиском и фильтром [P3]
 **Context:** адверсариальный аудит 2026-11-12, линза «продукт и UX», `appshelf/web/app.py:406-413` (`publish`), `appshelf/web/templates/history.html`, `blocked.html`, `appshelf/web/common.py:202` (`referer_path`).
 **What:** главный сценарий — опубликовать подряд несколько удалённых из App Store приложений (банк и его клоны), но после каждого «Опубликовать» человека уводит в каталог, а поиск `q`, фильтр `status` и сортировка списка теряются. Строка списка и так сразу показывает «в каталоге».
