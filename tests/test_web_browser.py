@@ -445,6 +445,7 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
     db.set_source(conn, shelf.id, PKG, "fourpda", "https://4pda.to/forum/dl/post/123/example.apk", topic)
     web.app.state.w.env.sources = Sources(FakeHttp(), pause=0)
     seed_app(conn, cfg, clock, versions=("1.0", "2.0"))
+    outside = []  # редиректы наружу: Playwright не перехватывает запрос после редиректа — он ушёл бы в сеть
 
     def route(target):
         request = target.request
@@ -452,6 +453,11 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
         result = web.client.request(request.method, u.path + ("?" + u.query if u.query else ""),
                                     content=request.post_data_buffer,
                                     headers={"user-agent": request.headers.get("user-agent", "")}, follow_redirects=False)
+        location = result.headers.get("location", "")
+        if result.is_redirect and urlsplit(location).netloc not in ("", "apps.example"):
+            outside.append(location)
+            target.fulfill(status=200, content_type="text/plain", body="Source")
+            return
         target.fulfill(status=result.status_code, headers=dict(result.headers), body=result.content)
 
     with playwright.sync_playwright() as runtime:
@@ -491,7 +497,8 @@ def test_shelf_layout_dialog_keyboard_and_primary_contrast(web, conn, cfg, clock
                 with page.expect_popup() as opened:
                     menu.get_by_role("link", name="Скачать из источника · 4PDA", exact=True).click()
                 popup = opened.value
-                popup.wait_for_url("https://4pda.to/forum/dl/post/123/example.apk", timeout=5000)
+                popup.wait_for_load_state()
+                assert outside.pop() == "https://4pda.to/forum/dl/post/123/example.apk" and not outside
                 popup.close()
                 assert page.url == "https://apps.example/android"
                 page.get_by_role("button", name="Сменить источник", exact=True).first.click()
