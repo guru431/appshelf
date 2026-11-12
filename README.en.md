@@ -569,7 +569,9 @@ hints, search and filters; guests cannot manage the shelf.
   the PIN or shelf token invalidates old codes.
 - **PIN** — 6 digits, set and changed by the owner in the collapsed "Гостевой доступ" block below public apps. Until a PIN is
   set, `/p` shows guests nothing; once it is set, the sign-in page links to it ("Открыть публичную полку по PIN-коду")
-  for guests who know only the site address. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
+  for guests who know only the site address. "Гостевой доступ" also shows a QR code of the `/p` address (without the
+  PIN): a phone camera opens it in the browser rather than in a messenger's in-app browser, whose guest cookie never
+  reaches Chrome. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie
   signed with `cookie-key`).
 - **Changing the PIN** invalidates all guest cookies and gives the public shelf a new directory token: APK links

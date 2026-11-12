@@ -979,3 +979,41 @@ def test_safari_banner_copies_address_or_selects_it(web, make_web, conn, cfg, cl
             assert not errors
         finally:
             browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("width", [320, 1280])
+def test_guest_access_qr_and_messenger_advice(web, make_web, conn, cfg, clock, width, local_chromium):
+    """QR адреса /p в «Гостевом доступе» помещается на узком экране; совет про Chrome на форме PIN читаем."""
+    db.ensure_public_shelf(conn, clock.iso())
+    web.client.post("/android/public/pin", data={"pin": "482913"})
+    anon = make_web(cfg, conn)
+    anon.client.headers["user-agent"] = "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile"
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 844})
+            page.route("https://apps.example/**", _route_to(web.client))
+            guest = browser.new_page(viewport={"width": width, "height": 844})
+            guest.route("https://apps.example/**", _route_to(anon.client))
+            for theme in ("light", "dark"):
+                web.client.get(f"/theme?set={theme}")
+                anon.client.get(f"/theme?set={theme}")
+                page.goto("https://apps.example/android/public")
+                block = page.locator("details.card").filter(has_text="Гостевой доступ")
+                block.locator("summary").click()
+                qr = block.get_by_role("img", name="QR-код адреса для гостей")
+                assert qr.is_visible()
+                box = qr.bounding_box()
+                assert box["width"] >= 150 and box["x"] + box["width"] <= width
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), theme
+                ratio, text = block.evaluate(MIN_TEXT_CONTRAST)
+                assert ratio >= 4.5, (theme, text, ratio)
+                guest.goto("https://apps.example/p")
+                assert guest.get_by_text("Открывайте страницу в Chrome", exact=False).is_visible()
+                ratio, text = guest.locator("main").evaluate(MIN_TEXT_CONTRAST)
+                assert ratio >= 4.5, (theme, text, ratio)
+                assert guest.evaluate("document.documentElement.scrollWidth <= innerWidth"), theme
+        finally:
+            browser.close()

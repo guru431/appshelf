@@ -1,4 +1,6 @@
+import base64
 import io
+import re
 
 import pytest
 import zxingcpp
@@ -141,6 +143,21 @@ def test_guest_without_pin_sees_only_form(shelf, anon):
     assert "Скачать APK" not in r.text and shelf.shelf not in r.text
     assert "/admin" not in r.text and "/android" not in r.text and "Выйти" not in r.text
     assert 'href="/privacy?back=/p"' in r.text                                   # cookie гостя и счётчики — в политике
+
+
+def test_guest_access_qr_holds_only_the_address(shelf, web, cfg):
+    """QR в «Гостевом доступе» — камерой телефона мимо встроенного браузера мессенджера; PIN в нём нет."""
+    page = web.client.get("/android/public").text
+    data = re.search(r'src="data:image/png;base64,([^"]+)" alt="QR-код адреса для гостей"', page)[1]
+    decoded = zxingcpp.read_barcode(Image.open(io.BytesIO(base64.b64decode(data))))
+    assert decoded is not None and decoded.text == f"{cfg.public_base}/p"
+
+
+def test_guest_form_advises_chrome_on_android(shelf, anon):
+    advice = "Открывайте страницу в Chrome"
+    android = anon.client.get("/p", headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0"})
+    desktop = anon.client.get("/p", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0"})
+    assert advice in android.text and 'name="pin"' in android.text and advice not in desktop.text
 
 
 def test_login_links_to_guest_page_only_when_pin_set(web, anon, conn, clock):

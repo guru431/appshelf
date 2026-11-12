@@ -5,6 +5,7 @@
 страница проверяет доступ и состав доставки Google Play перед постановкой задания."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -363,9 +364,10 @@ def _register_scope(app, w, scope: Scope):
             waiting = {a.package: store.android_waiting_reason(c, shelf.id, a.package)
                        for a in apps if a.status == "queued"} if shelf else {}
             nightly = (store.get_state(c, "nightly_last"), nightly_part(store.get_state(c, "nightly_result")))
-            if scope.public and edit:  # блок «Гостевой доступ» — владельцу
+            if scope.public and edit:  # блок «Гостевой доступ» — владельцу; в QR — только адрес, без PIN
                 guest = {"url": f"{cfg.public_base}/p", "closed": pin.closed_until(c, w.now()),
-                         "set_at": store.get_state(c, pin.SET_AT_KEY) if pin.is_set(c) else ""}
+                         "set_at": store.get_state(c, pin.SET_AT_KEY) if pin.is_set(c) else "",
+                         "qr": base64.b64encode(qr_png(f"{cfg.public_base}/p")).decode()}
             used = {r[0] for r in c.execute("SELECT google_account_id FROM android_apps WHERE shelf_id=? "
                                            "AND source='play'", (shelf.id,))} if shelf else set()
             expired = [g.email for g in google_accounts(c, request)
