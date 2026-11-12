@@ -485,6 +485,17 @@ def test_remove_and_pin(web, conn, cfg, tmp_path):
     assert db.list_apps(conn, shelf(conn).id) == [] and not list((cfg.archive / shelf(conn).shelf).iterdir())
 
 
+def test_remove_after_interrupted_rotation_clears_new_dir(web, conn, cfg, tmp_path):
+    """Смена токена прервалась после переименования: «Снять с полки» доделывает перенос и удаляет из нового каталога."""
+    add_link(web, conn, tmp_path)
+    old = shelf(conn)
+    db.set_shelf_next(conn, old.id, "e" * 32)
+    (cfg.archive / old.shelf).rename(cfg.archive / ("e" * 32))
+    web.client.post(f"/android/apps/{PKG}/remove")
+    assert shelf(conn).shelf == "e" * 32 and db.list_apps(conn, old.id) == []
+    assert not list((cfg.archive / ("e" * 32)).iterdir()) and not (cfg.archive / old.shelf).exists()
+
+
 def test_old_target_sdk_warning(web, conn, tmp_path):
     add_link(web, conn, tmp_path, target_sdk=22, min_sdk=21)
     page = web.client.get("/android").text

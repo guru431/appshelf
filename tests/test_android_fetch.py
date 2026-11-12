@@ -785,6 +785,37 @@ def test_interrupted_rotation_finished_on_start(ctx, cfg, conn, clock, tmp_path,
     assert not (cfg.archive / shelf.shelf).exists()
 
 
+@pytest.mark.parametrize("kind", ["check", "upload"])
+def test_interrupted_rotation_finished_before_writing(ctx, cfg, conn, clock, tmp_path, kind):
+    """Смена токена прервалась после переименования каталога: новая версия ложится в новый каталог, а не
+    воссоздаёт прежний, который Apache продолжает раздавать."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    (cfg.archive / shelf.shelf).rename(cfg.archive / ("e" * 32))
+    if kind == "check":
+        ctx.sources.apks[PKG] = make_apk(tmp_path / "v2.apk", version_code=2)
+        ctx.sources._latest[PKG] = Latest(2, "", True)
+        fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "w")
+    else:
+        assert run(ctx, conn, shelf, "upload", clock, package=PKG, name="",
+                   path=str(make_apk(tmp_path / "v2.apk", version_code=2)))["status"] == "done"
+    new = db.get_shelf(conn, shelf.id)
+    assert (new.shelf, new.shelf_next) == ("e" * 32, "") and on_shelf(cfg, new) == [f"{PKG}-1", f"{PKG}-2"]
+    assert not (cfg.archive / shelf.shelf).exists()
+
+
+def test_repeated_rotation_moves_versions_left_in_old_dir(ctx, cfg, conn, clock, tmp_path):
+    """Прежний код успел положить версию в каталог отозванного токена: повтор rotate_shelf переносит её в новый."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    old, new = cfg.archive / shelf.shelf, cfg.archive / ("e" * 32)
+    old.rename(new)
+    (old / f"{PKG}-2").mkdir(parents=True)
+    (old / f"{PKG}-2" / "icon.png").write_bytes(b"png")
+    assert fetch.rotate_shelf(cfg, conn, shelf.id).shelf == "e" * 32
+    assert sorted(p.name for p in new.iterdir()) == [f"{PKG}-1", f"{PKG}-2"] and not old.exists()
+
+
 def test_check_with_stale_shelf_writes_to_new_dir(ctx, cfg, conn, clock, tmp_path):
     """Ночная проверка взяла полку до смены токена, а замок скачивания — после: версия ложится в новый каталог."""
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
