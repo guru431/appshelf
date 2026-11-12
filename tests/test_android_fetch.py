@@ -684,6 +684,25 @@ def test_recover_marks_lost_upload_as_error(ctx, cfg, conn, clock, tmp_path):
     assert json.loads(conn.execute("SELECT payload FROM android_jobs WHERE id=?", (lost,)).fetchone()[0])["path"]
 
 
+@pytest.mark.parametrize("current", [False, True])
+def test_recover_releases_card_of_lost_upload(ctx, cfg, conn, clock, tmp_path, current):
+    """Новая версия своим файлом шла, когда служба перезапустилась: карточка не остаётся «скачивается…»."""
+    shelf = shelf_of(conn, clock)
+    if current:
+        shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    else:
+        db.put_app(conn, shelf.id, PKG, "Пример", "upload", "", clock.iso())
+    up = cfg.tmp_dir / "web" / "up-4.apk"
+    up.parent.mkdir(parents=True, exist_ok=True)
+    make_apk(up, version_code=2)
+    db.enqueue(conn, shelf.id, "upload", clock.iso(), package=PKG, payload={"path": str(up), "name": ""})
+    db.take_job(conn)
+    db.set_status(conn, shelf.id, PKG, "downloading")               # run_job успел, затем перезапуск
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).recover()
+    app = db.get_app(conn, shelf.id, PKG)
+    assert app["status"] == ("ok" if current else "error") and "загрузите" in app["last_error"]
+
+
 def test_apk_name_is_safe():
     assert fetch.apk_name("ru.x", "1.0 beta/2") == "ru.x-1.0_beta_2.apk"
     assert fetch.apk_name("ru.x", "") == "ru.x-v.apk"

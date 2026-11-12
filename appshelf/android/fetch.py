@@ -537,9 +537,12 @@ def rotate_shelf(cfg, c, shelf_id: int, *, transaction=None) -> db.Shelf | None:
 
 def recover(c, now: str) -> None:
     """После перезапуска appshelf-web (его tmp/web уже очищен): прерванные задания — снова в очередь, загрузки,
-    чей файл пропал вместе с tmp, — ошибка с просьбой загрузить заново."""
+    чей файл пропал вместе с tmp, — ошибка с просьбой загрузить заново и у карточки (иначе «скачивается…» навсегда)."""
     db.requeue_running(c)
-    for job in c.execute("SELECT id, payload FROM android_jobs WHERE kind='upload' AND status='queued'").fetchall():
+    for job in c.execute("SELECT id, shelf_id, package, payload FROM android_jobs "
+                         "WHERE kind='upload' AND status='queued'").fetchall():
         path = json.loads(job["payload"] or "{}").get("path", "")
         if not path or not Path(path).exists():
             db.finish_job(c, job["id"], "error", now, UPLOAD_LOST)
+            if job["package"]:
+                app_failed(c, job["shelf_id"], job["package"], SourceError(UPLOAD_LOST), now)
