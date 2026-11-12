@@ -231,8 +231,10 @@ class LoginFlow:
 
         Повтор с тем же flow_id (двойное «Войти»: браузер бросает первый запрос, а с ним и cookie входа) к Apple не
         идёт: ждёт первый и получает его итог — LoginFinished(итог settle) или LoginJoined(отказ Apple). Итог
-        хранится join_wait после конца первого запроса; позже или без итога — LoginExpired. Повтор с другим кодом —
-        LoginCodeMismatch: flow_id мог получить и другой браузер, тем же паролем попавший в окно шага 1."""
+        хранится join_wait после конца первого запроса; позже или без итога — LoginExpired. Удавшийся вход повтору с
+        другим кодом не отдаётся — LoginCodeMismatch: flow_id мог получить и другой браузер, тем же паролем попавший
+        в окно шага 1. Отказ Apple первому запросу — тот же отказ повтору с любым кодом: вход не состоялся, а
+        неудачу Apple уже засчитал первый."""
         self.purge()
         digest = hashlib.sha256(code.encode()).digest()
         with self._lock:
@@ -242,14 +244,14 @@ class LoginFlow:
             else:
                 mine = self._finishing[flow_id] = _Finishing(self.clock() + self.ttl, p.intent.email, digest)
         if p is None:
-            if other is not None and not hmac.compare_digest(digest, other.code):
-                raise LoginCodeMismatch(other.email)
             if other is None or not other.done.wait(self.join_wait):
                 raise LoginExpired()
             if other.error is not None:
                 raise LoginJoined(other.error)
             if other.outcome is None:
                 raise LoginExpired()
+            if not hmac.compare_digest(digest, other.code):
+                raise LoginCodeMismatch(other.email)
             raise LoginFinished(other.outcome)
         try:
             if self.clock() >= p.expires:

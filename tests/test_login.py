@@ -360,6 +360,20 @@ def test_code_step_with_other_code_gets_no_outcome():
         f.finish(flow_id, "123456")
 
 
+def test_code_retry_after_apple_refusal_shares_refusal_not_mismatch():
+    # Apple отклонил первый код, человек вернулся и ввёл верный: тот же отказ, а не «чужой код» — иначе одна опечатка
+    # считалась бы двумя неудачами входа этим Apple ID
+    f, _, _ = flow()
+    tool = needs_code()
+    _, flow_id, _ = f.start(tool, KNOWN, "pw")
+    tool.errors["login"] = IpatoolError("invalid_code", "")
+    with pytest.raises(IpatoolError) as first:
+        f.finish(flow_id, "111111")
+    with pytest.raises(LoginJoined) as joined:
+        f.finish(flow_id, "123456")
+    assert joined.value.error is first.value and not isinstance(joined.value, LoginExpired)
+
+
 def test_limiter_global_minute_and_apple_id_hour():
     clock = Clock()
     lim = Limiter(clock.monotonic)
