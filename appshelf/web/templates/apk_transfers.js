@@ -302,10 +302,10 @@
     bar.value = percent;
     var text = percent + ' % · ' + size(record.loaded || 0) + ' из ' + size(record.size);
     if (record.speed > 0 && record.state === 'uploading') text += ' · ' + size(record.speed) + '/с';
-    status.textContent = (record.message || 'Отправляем APK') + ' · ' + text;
+    status.textContent = (record.state === 'done' ? 'Файл передан на обработку' : record.message || 'Отправляем APK') + ' · ' + text;
     status.className = record.state === 'error' ? 'meta err' : 'meta';
     box.querySelector('[data-upload-controls]').hidden = record.state === 'done';
-    var hint = box.querySelector('[data-upload-background]'); hint.hidden = false;
+    var hint = box.querySelector('[data-upload-background]'); hint.hidden = record.state === 'done';
     hint.textContent = record.blob ? 'Отправляем частями. Если Android усыпит браузер, продолжим при возвращении. Прогресс хранится 7 дней.' :
       'Файл не сохранён в браузере. После закрытия страницы выберите тот же APK — продолжим с сохранённой части.';
     box.querySelector('[data-upload-pause]').textContent = record.state === 'uploading' ? 'Пауза' : 'Продолжить';
@@ -332,7 +332,10 @@
     await renderTray();
   }
   async function renderTray() {
-    var records = (await read()).filter(function (r) { return r.owner === currentUser && r.state !== 'done' && !views.has(r.key); });
+    // Завершённая на глазах передача остаётся строкой со ссылкой: задание и карточка видны только после обновления.
+    var records = (await read()).filter(function (r) {
+      return r.owner === currentUser && !views.has(r.key) && (r.state !== 'done' || trayItems.has(r.key));
+    });
     if (!tray && records.length) {
       tray = document.createElement('section'); tray.className = 'card'; tray.setAttribute('aria-label', 'Загрузки APK');
       document.querySelector('main').prepend(tray);
@@ -358,8 +361,16 @@
         tray.append(item.title, item.box, item.link); trayItems.set(record.key, item);
       }
       item.title.textContent = record.filename;
+      var focused = item.box.contains(document.activeElement);
       display(item.box, record); controls(item.box, record.key, record);
+      if (record.state === 'done') {
+        item.link.textContent = location.pathname === record.target ? 'Обновить страницу' : 'Открыть полку';
+        item.link.href = record.target + '?person=' + currentUser; item.link.hidden = false;
+        if (focused) item.link.focus();   // «Пауза» и «Отменить» скрыты — фокус не должен упасть на body
+        return;
+      }
       // Новая версия карточки продолжается только из её формы: каталог с открытым диалогом источника.
+      item.link.textContent = 'Выбрать тот же файл для продолжения';
       item.link.href = record.package ? record.target + '?person=' + currentUser + '#source-' + encodeURIComponent(record.package)
         : record.target + '/add?person=' + currentUser + '#add-file';
       item.link.hidden = !!(record.blob || localFiles.has(record.key));
