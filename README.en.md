@@ -733,7 +733,10 @@ Local integration suites without external network (browser, JDK and apksigner, A
 commands in [CLAUDE.md](CLAUDE.md) (Russian), section "Команды".
 
 GitHub Actions runs the fast suite on Linux too (`.github/workflows/tests.yml`): flock, process groups and file
-modes behave as on the server, which Windows cannot check. Editing and updating the ipatool-cpp patches:
+modes behave as on the server, which Windows cannot check. A separate job there, in a `debian:trixie` container, runs
+the offline APK signature and F-Droid catalog checks (`test_apk_verification.py`, `test_fdroid_verification.py`) with
+apksigner and the JDK from apt, as on the server: it notices a change in apksigner's output before the live shelf does.
+Editing and updating the ipatool-cpp patches:
 [ipatool/README.md](ipatool/README.md) (Russian).
 
 ## License

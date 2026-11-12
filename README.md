@@ -713,7 +713,9 @@ Google Play подключается заново личным аккаунто�
 команды в [CLAUDE.md](CLAUDE.md), раздел «Команды».
 
 Быстрый набор гоняет и GitHub Actions на Linux (`.github/workflows/tests.yml`): flock, группы процессов
-и права файлов, как на сервере, на Windows не проверить. Правка и обновление патчей ipatool-cpp —
+и права файлов, как на сервере, на Windows не проверить. Отдельный job там же в контейнере `debian:trixie` гоняет
+офлайн-проверки подписи APK и каталога F-Droid (`test_apk_verification.py`, `test_fdroid_verification.py`) с apksigner
+и JDK из apt, как на сервере: смену формата вывода apksigner он заметит раньше живой полки. Правка и обновление патчей ipatool-cpp —
 [ipatool/README.md](ipatool/README.md).
 
 ## Лицензия
