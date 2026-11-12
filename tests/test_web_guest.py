@@ -143,6 +143,18 @@ def test_guest_without_pin_sees_only_form(shelf, anon):
     assert 'href="/privacy?back=/p"' in r.text                                   # cookie гостя и счётчики — в политике
 
 
+def test_login_links_to_guest_page_only_when_pin_set(web, anon, conn, clock):
+    """Гость, знающий только адрес сайта, попадает с «/» на вход — оттуда ссылка на /p, если полка открыта по PIN."""
+    link = '<a href="/p">Открыть публичную полку по PIN-коду</a>'
+    assert link not in anon.client.get("/login").text
+    db.ensure_public_shelf(conn, clock.iso())
+    assert link not in anon.client.get("/login").text                            # полка есть, PIN нет
+    web.client.post("/android/public/pin", data={"pin": PIN})
+    assert link in anon.client.get("/login").text
+    assert link in web.client.get("/login").text
+    assert link not in web.client.get("/apple/add").text                         # «Добавить Apple ID» — не гостю
+
+
 def test_guest_right_pin_lists_apps_without_actions(shelf, anon):
     r = enter(anon.client, PIN)
     assert (r.status_code, r.headers["location"]) == (303, "/p")
