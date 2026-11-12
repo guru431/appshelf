@@ -64,6 +64,17 @@ def test_old_android_tab_keeps_target_for_all_mutations(web, conn, cfg, clock, a
         assert db.list_apps(conn, mine.id)[0].pending is None
 
 
+def test_android_action_from_old_tab_shows_its_shelf(web, conn, cfg, clock, acct):
+    # другая вкладка переключила участника: после действия — полка, на которой действовали, с новой карточкой
+    other = make_account(conn, clock, email="member@example.org", role="member", legacy=False)
+    sign_in(web.client, cfg, conn, clock, other.user_id)
+    web.client.get(f"/who/{other.user_id}", follow_redirects=False)
+    r = web.client.post("/android/add/rustore", params={"person": acct.user_id}, data={"package": "ru.example.new"})
+    assert r.status_code == 200 and r.context["who"].id == acct.user_id
+    assert [a.package for a in r.context["apps"]] == ["ru.example.new"]
+    assert web.client.get("/android").context["who"].id == acct.user_id
+
+
 def test_old_android_add_form_uses_page_owner(web, conn, cfg, clock, acct):
     other = make_account(conn, clock, email="member@example.org", role="member", legacy=False)
     sign_in(web.client, cfg, conn, clock, other.user_id)
