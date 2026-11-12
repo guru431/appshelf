@@ -31,12 +31,27 @@ if sudo -u www-data test -r "$ENV_FILE"; then
   echo "ОШИБКА: www-data читает $ENV_FILE (PUB_TOKEN): убрать www-data из группы appshelf, /etc/appshelf — 0711" >&2
   exit 1
 fi
-# ночная проверка (до 4 ч) держит прежний код в памяти и догружает модули лениво: после pip и подмены — смесь версий
-if systemctl is-active --quiet appshelf-nightly.service; then
-  echo "ОШИБКА: идёт ночная проверка — выложить после неё или прервать (прерванное доделает следующая ночь):" >&2
-  echo "  sudo systemctl stop appshelf-nightly.service" >&2
-  exit 1
+# ночная проверка (до 4 ч) держит прежний код в памяти и догружает модули лениво: после pip и подмены — смесь версий.
+# Таймер стоит до конца установки, чтобы 04:30 не наступило между проверкой и подменой; пропуск догонит Persistent=true.
+nightly_timer=0
+if systemctl is-active --quiet appshelf-nightly.timer; then
+  nightly_timer=1
+  systemctl stop appshelf-nightly.timer
 fi
+on_exit() {
+  if [ "$nightly_timer" = 1 ]; then
+    systemctl start appshelf-nightly.timer || echo "ВНИМАНИЕ: не запустился appshelf-nightly.timer" >&2
+  fi
+}
+trap on_exit EXIT
+# Type=oneshot: всё время работы служба в «activating», а is-active видит только active
+case "$(systemctl show -P ActiveState appshelf-nightly.service)" in
+  active|activating|deactivating|reloading)
+    echo "ОШИБКА: идёт ночная проверка — выложить после неё или прервать (прерванное доделает следующая ночь):" >&2
+    echo "  sudo systemctl stop appshelf-nightly.service" >&2
+    exit 1
+    ;;
+esac
 
 chown -R root:"$GROUP" "$NEW"
 chmod -R u=rwX,go=rX "$NEW"

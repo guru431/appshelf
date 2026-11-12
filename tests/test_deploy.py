@@ -78,9 +78,55 @@ restore_previous
 def test_install_refuses_while_nightly_check_runs():
     # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
-    check = text.index("systemctl is-active --quiet appshelf-nightly.service")
+    check = text.index("systemctl show -P ActiveState appshelf-nightly.service")
     assert check < text.index('pip" install') < text.index('mv "$NEW/$p" "$R/$p"')
-    assert "exit 1" in text[check:text.index("fi", check)]
+    assert "exit 1" in text[check:text.index("esac", check)]
+
+
+def run_nightly_guard(tmp_path, state, timer):
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    guard = text[text.index("# ночная проверка (до 4 ч)"):text.index('chown -R root:"$GROUP" "$NEW"')]
+    log = tmp_path / "systemctl.log"
+    wrapper = '''
+systemctl() {
+  printf '%s\\n' "$*" >> "$MOCK_LOG"
+  case "$1" in
+    is-active)  # как настоящий: «да» только для active и reloading
+      if [ "${!#}" = appshelf-nightly.timer ]; then [ "$MOCK_TIMER" = active ]
+      else [ "$MOCK_STATE" = active ] || [ "$MOCK_STATE" = reloading ]; fi ;;
+    show) printf '%s\\n' "$MOCK_STATE" ;;
+  esac
+}
+''' + guard + "echo REACHED\n"
+    env = {**os.environ, "MOCK_LOG": log.as_posix(), "MOCK_STATE": state, "MOCK_TIMER": timer}
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", wrapper], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    return result, log.read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("state", ["activating", "active", "deactivating", "reloading"])
+def test_install_sees_oneshot_nightly_check_and_restarts_its_timer(tmp_path, state):
+    # Type=oneshot всё время работы — «activating», а is-active отвечает «да» только на active: отказ не срабатывал
+    result, calls = run_nightly_guard(tmp_path, state, "active")
+    assert result.returncode == 1 and "идёт ночная проверка" in result.stderr
+    assert "REACHED" not in result.stdout
+    assert calls == ["is-active --quiet appshelf-nightly.timer", "stop appshelf-nightly.timer",
+                     "show -P ActiveState appshelf-nightly.service", "start appshelf-nightly.timer"]
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("timer", ["active", "inactive"])
+def test_install_holds_nightly_timer_until_exit(tmp_path, timer):
+    # таймер 04:30 мог запустить проверку между проверкой состояния и подменой кода
+    result, calls = run_nightly_guard(tmp_path, "inactive", timer)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED" in result.stdout
+    if timer == "active":
+        assert calls[1:] == ["stop appshelf-nightly.timer", "show -P ActiveState appshelf-nightly.service",
+                             "start appshelf-nightly.timer"]
+    else:  # выключенный владельцем таймер выкладка не включает
+        assert calls[1:] == ["show -P ActiveState appshelf-nightly.service"]
 
 
 def install_rollback_check():

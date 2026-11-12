@@ -178,7 +178,8 @@ token in the link close it to the internet.
 What ships is the committed `HEAD` (`git archive`): with uncommitted changes in the code `deploy.sh` refuses. While
 the nightly check runs (`appshelf-nightly.service`, up to 4 h) the deploy refuses too: that process keeps the old
 code in memory and imports modules lazily; wait for it or stop it (`sudo systemctl stop appshelf-nightly.service`,
-the next night finishes what was interrupted). The new code replaces the old one as a whole and only after `pip`
+the next night finishes what was interrupted). During the install `appshelf-nightly.timer` is stopped (a missed run
+catches up afterwards), so the check cannot start halfway through the code swap. The new code replaces the old one as a whole and only after `pip`
 succeeds. If `/healthz` does not answer 200 within 10 s, `install.sh` restores the previous code (`.previous`) by
 itself when the database is readable by it, otherwise it prints the manual steps. To roll back, deploy the previous
 commit (across a database schema change — only if that migration declared the schema readable by the older code, see
