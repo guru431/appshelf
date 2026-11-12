@@ -6,7 +6,7 @@ import pytest
 
 from android_fakes import FakeSources
 from apk_factory import cert_sha, make_apk, png_bytes
-from appshelf import ipa, jobs, store
+from appshelf import apk, ipa, jobs, store
 from appshelf.android import db, fetch, net
 from appshelf.android.sources import RUSTORE_DOWN, SPLIT_TEXT, Got, Latest, SplitOnly
 from appshelf.config import GB
@@ -29,6 +29,21 @@ def test_store_apk_refuses_personless_shelf(ctx, conn, clock, tmp_path):
                         expected_signer='', name_hint='', icon=None)
     assert path.is_file() and not fetch.shelf_root(ctx.env.cfg, shelf).exists()
     assert not db.list_apps(conn, shelf.id)
+
+
+def test_store_apk_refuses_apk_failing_signature_verification(ctx, cfg, conn, clock, tmp_path):
+    """Публикация — только после apksigner verify: изменённый после подписи APK не ложится поверх рабочей версии."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    before = (dict(db.current_version(conn, shelf.id, PKG)), on_shelf(cfg, shelf))
+    path = make_apk(tmp_path / "v2.apk", version_code=2)
+    raw = bytearray(path.read_bytes())
+    raw[10] ^= 1                                       # время в заголовке первой записи: разбор цел, подпись — нет
+    path.write_bytes(bytes(raw))
+    with pytest.raises(apk.ApkError, match="криптографическая"):
+        fetch.store_apk(ctx.env, conn, shelf, path, source="upload", source_ref="", expected_package=PKG,
+                        expected_signer="", name_hint="", icon=None)
+    assert (dict(db.current_version(conn, shelf.id, PKG)), on_shelf(cfg, shelf)) == before
+    assert path.is_file()
 
 
 def run(ctx, conn, shelf, kind, clock, package="", **payload) -> dict:
