@@ -115,6 +115,19 @@ def test_owner_adds_to_public_and_worker_fills_it(web, conn, tmp_path):
     assert 'href="/android/public/add"' in page                                          # «Добавить в публичную»
 
 
+def test_public_add_pages_mark_add_tab_current(web, conn, tmp_path):
+    # «Добавить в публичную» и сравнение копирования: текущая — вкладка «Добавить», чип — «Публичная»
+    add_personal(web, conn, tmp_path)
+    for path in ("/android/public/add", f"/android/public/add/from-shelf?package={PKG}"):
+        tabs = web.client.get(path).text.split('<nav class="tabs">')[1].split("</nav>")[0]
+        assert '<a href="/android/public/add" class="on" aria-current="page">' in tabs, path
+        assert '<a href="/android/public" class="">' in tabs, path
+    page = web.client.get("/android/public").text
+    tabs = page.split('<nav class="tabs">')[1].split("</nav>")[0]
+    assert '<a href="/android/public" class="on" aria-current="page">' in tabs
+    assert '<span class="who">Публичная</span>' in web.client.get("/android/public/add").text
+
+
 def test_remove_from_public_warns_about_guests(web, member, conn, tmp_path):
     shelf = add_public(web, conn, tmp_path)
     assert f'href="/android/public/apps/{PKG}/remove"' in web.client.get("/android/public").text

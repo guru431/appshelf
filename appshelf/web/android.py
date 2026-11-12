@@ -165,7 +165,7 @@ def register_routes(app, w) -> None:
             if original is None:
                 return PlainTextResponse('not found', status_code=404)
             plan = copy_preview(c, source, db.public_shelf(c), package)
-        return w.page(request, 'public_copy.html', 'a_public', status, package=package, plan=plan,
+        return w.page(request, 'public_copy.html', 'a_public_add', status, package=package, plan=plan,
                       error=error, sources=SOURCES)
 
     @app.get('/android/public/add/from-shelf', dependencies=owner)
@@ -416,7 +416,7 @@ def _register_scope(app, w, scope: Scope):
             mine = _owner_shelf(c, request) if scope.public else None
             own_apps = [a for a in db.list_apps(c, mine.id) if a.current is not None] if mine else []
         play_accounts = [g for g in accounts if g.play == "ok"]
-        return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
+        return w.page(request, "android_add.html", "a_public_add" if scope.public else "a_add", status_code, q=q,
                       found=found, search_errors=search_errors, sources=SOURCES,
                       on_shelf=on_shelf, error=error, link_url=link_url,
                       prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts),

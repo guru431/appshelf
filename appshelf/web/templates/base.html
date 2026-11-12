@@ -7,7 +7,8 @@
 {# сильнее заголовка Referrer-Policy (и глобального в Apache): свои POST несут Origin, чужим сайтам Referer не уходит #}
 <meta name="referrer" content="same-origin">
 {% set heading = page_title or {'catalog': 'Каталог', 'history': 'Покупки', 'blocked': 'Удалённые', 'apple': 'Аккаунты',
-   'admin': 'Участники', 'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная', 'settings': 'Настройки',
+   'admin': 'Участники', 'a_catalog': 'Каталог', 'a_add': 'Добавить', 'a_public': 'Публичная',
+   'a_public_add': 'Добавить', 'settings': 'Настройки',
    'login': 'Вход', 'guest': 'Публичная полка'}.get(nav, '') %}
 <title>{{ heading ~ ' · ' if heading }}appshelf</title>
 <link rel="manifest" href="/pwa/manifest.webmanifest">
@@ -358,6 +359,8 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 {%- endmacro %}
 {% if nav not in ('login', 'guest') %}
 {% set android = section == 'android' %}
+{# публичная полка: каталог (a_public) и «Добавить» с копированием (a_public_add) — чип «Публичная» у обоих #}
+{% set public = nav in ('a_public', 'a_public_add') %}
 <header{% if nav in ('apple', 'admin') %} class="with-back"{% endif %}>
   {% if nav in ('apple', 'admin') %}<div class="back-row"><a class="back" href="/settings" aria-label="Назад в Настройки">Настройки</a></div>{% endif %}
   <h1>{{ heading }}</h1>
@@ -365,14 +368,14 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
   <details class="pop acct">
     {%- if android %}
     {# Android-раздел: полка одного из вошедших (/who/<id>) или публичная #}
-    <summary aria-label="Выбрать полку"><span class="chip"><span class="who">{{ 'Публичная' if nav == 'a_public' else who.name if who else 'Меню' }}</span></span></summary>
+    <summary aria-label="Выбрать полку"><span class="chip"><span class="who">{{ 'Публичная' if public else who.name if who else 'Меню' }}</span></span></summary>
     <div class="sheet">
       <div class="menu-heading">Личные</div><div class="shelves">
-        {%- for u in users or [] %}{% if who and u.id == who.id and nav != 'a_public' %}<span class="on" aria-current="true">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
+        {%- for u in users or [] %}{% if who and u.id == who.id and not public %}<span class="on" aria-current="true">{{ u.name }}</span>{% else %}<a href="/who/{{ u.id }}?back=/android">{{ u.name }}</a>{% endif %}{% endfor -%}
       </div>
       <div class="menu-heading">Общие</div><div class="shelves">
         {%- set label %}<span class="shelf">Публичная<span class="meta">все участники и гости по PIN</span></span>{% endset -%}
-        {%- if nav == 'a_public' %}<span class="on" aria-current="true">{{ label }}</span>{% else %}<a href="/android/public">{{ label }}</a>{% endif -%}
+        {%- if public %}<span class="on" aria-current="true">{{ label }}</span>{% else %}<a href="/android/public">{{ label }}</a>{% endif -%}
       </div>
     {%- else %}
     {# на чипе — участник; адрес — только если Apple ID у него несколько #}
@@ -404,8 +407,8 @@ dialog .close { float: right; margin: -8px -8px 8px 8px; }
 {% set grid = '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8"/>' %}
 <nav class="tabs">
   {%- if android %}
-  {{ tab('/android/public' if nav == 'a_public' else '/android', 'a_public' if nav == 'a_public' else 'a_catalog', 'Каталог', grid) }}
-  {% if nav != 'a_public' or edit %}{{ tab('/android/public/add' if nav == 'a_public' else '/android/add', 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}{% endif %}
+  {{ tab('/android/public' if public else '/android', 'a_public' if public else 'a_catalog', 'Каталог', grid) }}
+  {% if nav != 'a_public' or edit %}{{ tab('/android/public/add' if public else '/android/add', 'a_public_add' if public else 'a_add', 'Добавить', '<circle cx="12" cy="12" r="8.2"/><path d="M12 8v8M8 12h8"/>') }}{% endif %}
   {%- else %}
   {# ?os=apple: на телефоне Android «/» открыл бы Android-раздел #}
   {{ tab('/?os=apple', 'catalog', 'Каталог', grid) }}
