@@ -68,7 +68,8 @@ def free_bytes(path: Path) -> int:
 
 def _archive(cfg: Config) -> Path:
     if not cfg.archive.is_dir():
-        raise ArchiveUnavailable(f"архив {cfg.archive} недоступен — смонтирован ли он?")
+        # без пути: текст доходит до карточек и писем, а путь архива — внутренний (он есть в appshelf.env)
+        raise ArchiveUnavailable("архив недоступен — смонтирован ли он?")
     return cfg.archive
 
 

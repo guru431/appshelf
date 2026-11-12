@@ -270,6 +270,6 @@ def test_integrity_summary_reports_owner_once_per_episode(ctx, cfg, conn, clock,
 def test_integrity_summary_failure_keeps_stamp(ctx, cfg, conn, clock, monkeypatch):
     monkeypatch.setattr(nightly, "_integrity", REAL_INTEGRITY)
     cfg.archive.rmdir()
-    assert nightly.run(ctx.env, conn).endswith(f" | Целостность: не проверена — архив {cfg.archive} недоступен — "
+    assert nightly.run(ctx.env, conn).endswith(" | Целостность: не проверена — архив недоступен — "
                                                "смонтирован ли он?")
     assert stamp(cfg) == clock.iso() and ctx.sent == []

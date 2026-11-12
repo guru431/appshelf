@@ -62,6 +62,7 @@ def test_catalog_banner_when_archive_unavailable(web, cfg):
     cfg.archive.rmdir()  # шара не смонтирована
     r = web.client.get("/")
     assert r.status_code == 200 and "Архив недоступен" in r.text and TOKEN not in r.text.split("<main>")[1]
+    assert str(cfg.archive) not in r.text and cfg.archive.as_posix() not in r.text  # путь архива — внутренний
 
 
 def test_cross_origin_post_forbidden(web, conn, cfg, clock):

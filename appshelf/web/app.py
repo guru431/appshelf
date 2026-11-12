@@ -243,8 +243,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         try:
             free = jobs.free_space(env)
         except jobs.ArchiveUnavailable:
-            banners.append(f"Архив недоступен ({cfg.archive}): установка и скачивание не работают — "
-                           "смонтирован ли он?")
+            banners.append("Архив недоступен: установка и скачивание не работают — смонтирован ли он?")
         else:
             if free < jobs.BANNER_FREE:
                 banners.append(f"Мало места: свободно {free / GB:.1f} ГБ.")
