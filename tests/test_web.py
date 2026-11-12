@@ -179,6 +179,18 @@ def test_publish_and_unpublish(web, conn, cfg, clock, acct):
     assert store.list_apps(conn, 1) == [] and not (root / "7-1.0").exists()
 
 
+def test_publish_returns_to_list_with_search_and_sort(web, conn, clock):
+    # публикуют подряд несколько приложений из «Покупок» или «Удалённых»: поиск, фильтр и сортировка остаются
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
+    page = web.client.get("/history", params={"q": "vk", "sort": "date", "dir": "asc"}).text
+    assert 'name="back" value="/history?q=vk&amp;sort=date&amp;dir=asc"' in page
+    r = web.client.post("/apps/7/publish", data={"back": "/history?q=vk&sort=date&dir=asc"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/history?q=vk&sort=date&dir=asc"
+    for back in ("", "//evil.example/x", "https://evil.example/"):
+        r = web.client.post("/apps/7/publish", data={"back": back}, follow_redirects=False)
+        assert r.headers["location"] == "/?os=apple", back
+
+
 def test_api_status(web, conn, cfg, clock):
     seed_app(conn, cfg, clock)
     set_session(conn, 1, "ok")

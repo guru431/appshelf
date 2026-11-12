@@ -24,7 +24,7 @@
     {%- if i.name != i.catalog_name %}{{ i.catalog_name }} · {% endif -%}
     ID {{ i.id }}</div></div>
   {% if i.status == 'owned' %}<div class="act">{% if i.published %}<span class="meta done">в каталоге</span>{% else %}
-    <form method="post" action="{{ post_url('/apps/' ~ i.id ~ '/publish') }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>{% endif %}
+    <form method="post" action="{{ post_url('/apps/' ~ i.id ~ '/publish') }}"><input type="hidden" name="back" value="{{ here }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>{% endif %}
 </div>
 {% else %}
 <div class="row hint">{% if q %}Ничего не найдено{% elif shown == 'owned' %}В аккаунте пока ничего не найдено{% else %}Здесь пусто{% endif %}

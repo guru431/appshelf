@@ -20,7 +20,7 @@ from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, android, google_signin, pwa, signin
-from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png
+from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png, safe_next
 from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
@@ -406,13 +406,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return done(request, "/history")
 
     @app.post("/apps/{app_id}/publish")
-    def publish(request: Request, app_id: int):
+    def publish(request: Request, app_id: int, back_url: str = Form("", alias="back")):
+        """Возврат — на список, с которого публиковали («Покупки», «Удалённые» с поиском, фильтром и сортировкой):
+        публикуют подряд несколько. Только свой путь; без него — каталог."""
         aid = request.state.acct.id
         with w.conn() as c:
             if not store.has_purchase(c, aid, app_id):  # чужое или несуществующее — как нет
                 return gone(request, "Покупка не найдена на этой полке.")
             store.publish(c, aid, app_id, now())
-        return done(request)
+        target = safe_next(back_url)
+        return done(request, target) if target != "/" else done(request)
 
     @app.post("/apps/{app_id}/retry")
     def retry(request: Request, app_id: int):
