@@ -2,12 +2,6 @@
 Идеи и feature-запросы (не баги — те в [FINDINGS.md](FINDINGS.md)), только `proposed`. Ревизия: MonthlyStratReview 1-го числа. Stale >90 дней → alert.
 Новые записи сверху. Реализованные — удаляются (след в `git log`), отклонённые — переносятся в [IDEAS-archive.md](IDEAS-archive.md).
 
-## 2026-11-12 · «Опубликовать» в «Покупках» и «Удалённых» — оставаться на списке с поиском и фильтром [P3]
-**Context:** адверсариальный аудит 2026-11-12, линза «продукт и UX», `appshelf/web/app.py:406-413` (`publish`), `appshelf/web/templates/history.html`, `blocked.html`, `appshelf/web/common.py:202` (`referer_path`).
-**What:** главный сценарий — опубликовать подряд несколько удалённых из App Store приложений (банк и его клоны), но после каждого «Опубликовать» человека уводит в каталог, а поиск `q`, фильтр `status` и сортировка списка теряются. Строка списка и так сразу показывает «в каталоге».
-**Proposal:** в `publish` возвращать туда, откуда пришли: `done(request, referer_path(request))` или скрытое поле `back` в формах; каталог оставить целью действий с карточки. На телефоне Android это заодно снимает уход в Android-раздел (находка «Действия Apple-полки с телефона Android…» в FINDINGS.md).
-**Status:** proposed
-
 ## 2026-11-12 · iPhone: предупреждать «откройте в Safari», если полку открыли в Chrome/Firefox для iOS [P3]
 **Context:** адверсариальный аудит 2026-11-12, линза «продукт и UX», `appshelf/web/common.py:137-139` (`WebCtx.page`, `device`), `appshelf/web/templates/catalog.html:34-35`, `help_parts.html`.
 **What:** справка сама говорит, что из Chrome установка не запускается, но каталог показывает «Установить» (itms-services) в любом браузере iOS без предупреждения — нажатие ничего не делает, и полка выглядит сломанной. Эти браузеры однозначно видны по User-Agent (CriOS, FxiOS, EdgiOS).
