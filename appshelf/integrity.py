@@ -48,12 +48,14 @@ KINDS = {  # вид проблемы → подпись в кратком ито
     "no_apk": "нет файла APK",
     "apk_size": "размер APK не совпадает с базой",
     "apk_sha256": "SHA-256 APK не совпадает с базой",
+    "pending_name": "версия ждёт решения по подписи под угадываемым именем каталога (переименует старт appshelf-web)",
     "orphan": "в полке, но нет строки в базе",
     "partial": "незавершённое скачивание (.partial)",
     "shelf_next": "незавершённый перенос каталога полки (доделает старт appshelf-web)",
     "no_account": "строки версий без Apple ID",
     "no_android_shelf": "строки APK без Android-полки",
     "unknown": "каталог архива не принадлежит ни одному Apple ID",
+    "orphan_home": "HOME ipatool без Apple ID в базе (учётка и cookies; сам не удаляется — сверьте базу, удалите вручную)",
 }
 
 
@@ -141,10 +143,13 @@ def open_ro(path: Path, any_schema: bool = False) -> sqlite3.Connection:
     return c
 
 
-def check(cfg: Config, c, deep: bool = False) -> Report:
-    """Полки всех Apple ID против строк versions и чужое в архиве. Архив недоступен — ArchiveUnavailable."""
+def check(cfg: Config, c, deep: bool = False, homes: bool = False) -> Report:
+    """Полки всех Apple ID против строк versions и чужое в архиве. Архив недоступен — ArchiveUnavailable. homes —
+    ещё HOME ipatool без строки Apple ID: только для живой базы (снимок не знает Apple ID, добавленных после него)."""
     jobs._archive(cfg)
     rep = Report(deep=deep)
+    if homes:
+        _homes(cfg, c, rep)
     rows = defaultdict(list)
     for r in c.execute("SELECT * FROM versions ORDER BY account_id, app_id, id"):
         rows[r["account_id"]].append(r)
@@ -203,6 +208,18 @@ def restore_report(cfg: Config, db: Path, secrets_dir: Path, cookie_key: Path, *
                 {"provider": "Google Play", "accounts": google, "action": "повторное подключение личных аккаунтов Play"},
                 {"provider": "4PDA", "participants": users, "action": "повторный импорт личной сессии при необходимости"}],
             "external_connections_verified": False}
+
+
+def _homes(cfg: Config, c, rep: Report) -> None:
+    """accounts/<id> без строки Apple ID. Сначала каталоги, потом строки: новый Apple ID получает HOME после своей
+    строки, удаляемый теряет его имя (метка .deleted-) до удаления строки — в обычном порядке ложной сироты нет."""
+    if not cfg.accounts_dir.is_dir():
+        return
+    found = sorted(int(p.name) for p in cfg.accounts_dir.iterdir() if re.fullmatch(r"[0-9]+", p.name))
+    known = {a.id for a in people.all_accounts(c)}
+    for aid in found:
+        if aid not in known:
+            rep.add("orphan_home", aid)
 
 
 def _nonempty(path: Path) -> bool:
@@ -311,6 +328,8 @@ def _apk(root: Path, sid: int, v, deep: bool, rep: Report) -> None:
     if not vd.is_dir():
         rep.add("no_dir", None, d, shelf=sid)
         return
+    if v["role"] == "pending" and not android_db.PENDING_DIR_RE.search(d):  # до решения — не по ссылке /d/
+        rep.add("pending_name", None, d, shelf=sid)
     name = android_fetch.apk_name(v["package"], v["version_name"])
     f = vd / name
     if not f.is_file():

@@ -6,7 +6,7 @@ import pytest
 
 from android_fakes import FakeSources
 from apk_factory import cert_sha, make_apk, png_bytes
-from appshelf import ipa, jobs, store
+from appshelf import apk, ipa, jobs, store
 from appshelf.android import db, fetch, net
 from appshelf.android.sources import RUSTORE_DOWN, SPLIT_TEXT, Got, Latest, SplitOnly
 from appshelf.config import GB
@@ -29,6 +29,21 @@ def test_store_apk_refuses_personless_shelf(ctx, conn, clock, tmp_path):
                         expected_signer='', name_hint='', icon=None)
     assert path.is_file() and not fetch.shelf_root(ctx.env.cfg, shelf).exists()
     assert not db.list_apps(conn, shelf.id)
+
+
+def test_store_apk_refuses_apk_failing_signature_verification(ctx, cfg, conn, clock, tmp_path):
+    """Публикация — только после apksigner verify: изменённый после подписи APK не ложится поверх рабочей версии."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    before = (dict(db.current_version(conn, shelf.id, PKG)), on_shelf(cfg, shelf))
+    path = make_apk(tmp_path / "v2.apk", version_code=2)
+    raw = bytearray(path.read_bytes())
+    raw[10] ^= 1                                       # время в заголовке первой записи: разбор цел, подпись — нет
+    path.write_bytes(bytes(raw))
+    with pytest.raises(apk.ApkError, match="криптографическая"):
+        fetch.store_apk(ctx.env, conn, shelf, path, source="upload", source_ref="", expected_package=PKG,
+                        expected_signer="", name_hint="", icon=None)
+    assert (dict(db.current_version(conn, shelf.id, PKG)), on_shelf(cfg, shelf)) == before
+    assert path.is_file()
 
 
 def run(ctx, conn, shelf, kind, clock, package="", **payload) -> dict:
@@ -147,6 +162,40 @@ def test_pending_version_is_not_at_predictable_path_until_accepted(ctx, cfg, con
     current = db.current_version(conn, shelf.id, PKG)
     assert current["dir"] == f"{PKG}-6" and (root / f"{PKG}-6" / fetch.apk_name(PKG, "1.0")).is_file()
     assert not (root / pending["dir"]).exists()
+
+
+def legacy_pending(ctx, cfg, conn, clock, tmp_path):
+    """pending, скачанная до случайных имён каталогов: <пакет>-<versionCode>, по ссылке её можно угадать."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    run(ctx, conn, shelf, "upload", clock, path=str(make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")),
+        name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    (root / pending["dir"]).rename(root / f"{PKG}-6")
+    conn.execute("UPDATE android_versions SET dir=? WHERE id=?", (f"{PKG}-6", pending["id"]))
+    return shelf, root, pending["id"]
+
+
+def test_start_moves_legacy_pending_to_random_name(ctx, cfg, conn, clock, tmp_path):
+    shelf, root, vid = legacy_pending(ctx, cfg, conn, clock, tmp_path)
+    worker = jobs.Worker(ctx.env, lambda: store.connect(cfg.db))
+    worker.recover()
+    hidden = conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"]
+    assert db.PENDING_DIR_RE.search(hidden) and hidden.startswith(f"{PKG}-6-p")
+    assert (root / hidden / fetch.apk_name(PKG, "1.0")).is_file() and not (root / f"{PKG}-6").exists()
+    worker.recover()                                                # повтор ничего не меняет
+    assert conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"] == hidden
+    assert on_shelf(cfg, shelf) == sorted([f"{PKG}-5", hidden])
+
+
+def test_failed_legacy_pending_rename_keeps_directory(ctx, cfg, conn, clock, tmp_path):
+    shelf, root, vid = legacy_pending(ctx, cfg, conn, clock, tmp_path)
+    conn.execute("CREATE TRIGGER fail_hide AFTER UPDATE OF dir ON android_versions "
+                 "BEGIN SELECT RAISE(ABORT, 'hide failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="hide failed"):
+        db.hide_pending(conn, root, shelf.id, vid)
+    assert conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"] == f"{PKG}-6"
+    assert on_shelf(cfg, shelf) == [f"{PKG}-5", f"{PKG}-6"]
 
 
 def test_failed_accept_puts_pending_directory_back(ctx, cfg, conn, clock, tmp_path):
@@ -669,6 +718,25 @@ def test_recover_marks_lost_upload_as_error(ctx, cfg, conn, clock, tmp_path):
     assert json.loads(conn.execute("SELECT payload FROM android_jobs WHERE id=?", (lost,)).fetchone()[0])["path"]
 
 
+@pytest.mark.parametrize("current", [False, True])
+def test_recover_releases_card_of_lost_upload(ctx, cfg, conn, clock, tmp_path, current):
+    """Новая версия своим файлом шла, когда служба перезапустилась: карточка не остаётся «скачивается…»."""
+    shelf = shelf_of(conn, clock)
+    if current:
+        shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    else:
+        db.put_app(conn, shelf.id, PKG, "Пример", "upload", "", clock.iso())
+    up = cfg.tmp_dir / "web" / "up-4.apk"
+    up.parent.mkdir(parents=True, exist_ok=True)
+    make_apk(up, version_code=2)
+    db.enqueue(conn, shelf.id, "upload", clock.iso(), package=PKG, payload={"path": str(up), "name": ""})
+    db.take_job(conn)
+    db.set_status(conn, shelf.id, PKG, "downloading")               # run_job успел, затем перезапуск
+    jobs.Worker(ctx.env, lambda: store.connect(cfg.db)).recover()
+    app = db.get_app(conn, shelf.id, PKG)
+    assert app["status"] == ("ok" if current else "error") and "загрузите" in app["last_error"]
+
+
 def test_apk_name_is_safe():
     assert fetch.apk_name("ru.x", "1.0 beta/2") == "ru.x-1.0_beta_2.apk"
     assert fetch.apk_name("ru.x", "") == "ru.x-v.apk"
@@ -749,6 +817,37 @@ def test_interrupted_rotation_finished_on_start(ctx, cfg, conn, clock, tmp_path,
     new = db.get_shelf(conn, shelf.id)
     assert (new.shelf, new.shelf_next) == ("e" * 32, "") and on_shelf(cfg, new) == [f"{PKG}-1"]
     assert not (cfg.archive / shelf.shelf).exists()
+
+
+@pytest.mark.parametrize("kind", ["check", "upload"])
+def test_interrupted_rotation_finished_before_writing(ctx, cfg, conn, clock, tmp_path, kind):
+    """Смена токена прервалась после переименования каталога: новая версия ложится в новый каталог, а не
+    воссоздаёт прежний, который Apache продолжает раздавать."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    (cfg.archive / shelf.shelf).rename(cfg.archive / ("e" * 32))
+    if kind == "check":
+        ctx.sources.apks[PKG] = make_apk(tmp_path / "v2.apk", version_code=2)
+        ctx.sources._latest[PKG] = Latest(2, "", True)
+        fetch.check_app(ctx.env, conn, shelf, db.get_app(conn, shelf.id, PKG), tmp_path / "w")
+    else:
+        assert run(ctx, conn, shelf, "upload", clock, package=PKG, name="",
+                   path=str(make_apk(tmp_path / "v2.apk", version_code=2)))["status"] == "done"
+    new = db.get_shelf(conn, shelf.id)
+    assert (new.shelf, new.shelf_next) == ("e" * 32, "") and on_shelf(cfg, new) == [f"{PKG}-1", f"{PKG}-2"]
+    assert not (cfg.archive / shelf.shelf).exists()
+
+
+def test_repeated_rotation_moves_versions_left_in_old_dir(ctx, cfg, conn, clock, tmp_path):
+    """Прежний код успел положить версию в каталог отозванного токена: повтор rotate_shelf переносит её в новый."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    old, new = cfg.archive / shelf.shelf, cfg.archive / ("e" * 32)
+    old.rename(new)
+    (old / f"{PKG}-2").mkdir(parents=True)
+    (old / f"{PKG}-2" / "icon.png").write_bytes(b"png")
+    assert fetch.rotate_shelf(cfg, conn, shelf.id).shelf == "e" * 32
+    assert sorted(p.name for p in new.iterdir()) == [f"{PKG}-1", f"{PKG}-2"] and not old.exists()
 
 
 def test_check_with_stale_shelf_writes_to_new_dir(ctx, cfg, conn, clock, tmp_path):

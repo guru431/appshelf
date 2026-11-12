@@ -129,7 +129,7 @@ def check(cfg, args) -> int:
         cfg = replace(cfg, pub_dir=args.archive)
     try:
         with closing(integrity.open_ro(args.db or cfg.db)) as c:
-            rep = integrity.check(cfg, c, deep=args.deep)
+            rep = integrity.check(cfg, c, deep=args.deep, homes=args.db is None)
     except (integrity.DbError, jobs.ArchiveUnavailable) as e:
         print(e, file=sys.stderr)
         return 2

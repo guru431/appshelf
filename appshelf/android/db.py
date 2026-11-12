@@ -364,6 +364,30 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
     return True
 
 
+def hide_pending(c, root: Path, shelf_id: int, version_id: int) -> bool:
+    """pending, скачанная до случайных имён каталогов (<пакет>-<versionCode>), — в каталог со случайным именем, как
+    у новых: до решения по подписи её не скачать по угадываемой ссылке. Порядок — как у accept_pending:
+    переименование последним шагом транзакции, не записалась строка — каталог возвращается. Имя уже случайное или
+    каталога нет — ничего (нет каталога — покажет appshelf check). → переименована ли."""
+    renamed = None
+    try:
+        with tx(c):
+            v = c.execute("SELECT package, version_code, dir FROM android_versions WHERE id=? AND shelf_id=? "
+                          "AND role='pending'", (version_id, shelf_id)).fetchone()
+            if (v is None or PENDING_DIR_RE.search(v["dir"]) or not ANDROID_DIR_RE.match(v["dir"])
+                    or not (root / v["dir"]).is_dir()):
+                return False
+            name = version_dir(c, shelf_id, root, v["package"], v["version_code"], pending=True)
+            c.execute("UPDATE android_versions SET dir=? WHERE id=?", (name, version_id))
+            (root / v["dir"]).replace(root / name)
+            renamed = (root / name, root / v["dir"])
+    except BaseException:
+        if renamed is not None:
+            renamed[0].replace(renamed[1])
+        raise
+    return True
+
+
 def _rejected_key(shelf_id: int, package: str) -> str:
     return f"android_rejected:{shelf_id}:{package}"
 

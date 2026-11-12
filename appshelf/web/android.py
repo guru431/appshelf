@@ -718,6 +718,7 @@ def _register_scope(app, w, scope: Scope):
             with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT), w.conn() as c:
                 jobs._archive(cfg)
                 shelf, app_row = own(c, request, package)
+                shelf = fetch.finish_move(cfg, c, shelf)  # смена токена прервалась — удалять из нового каталога
                 done = app_row is not None and fn(c, fetch.shelf_root(cfg, shelf), shelf.id)
         except jobs.ArchiveUnavailable:
             return catalog_page(request, 503, ARCHIVE_DOWN)

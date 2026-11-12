@@ -285,6 +285,15 @@ def test_license_not_found_shows_text(ctx, cfg, conn, clock):
     assert app.status == "error" and app.last_error == "у Apple ID нет лицензии на это приложение"
 
 
+def test_describe_hides_file_paths():
+    """Путь в архиве несёт токен полки, а текст ошибки видят люди (карточка, задание)."""
+    token = "a" * 32
+    for e in (FileNotFoundError(errno.ENOENT, "No such file or directory", f"/pub/{token}/x/icon.png"),
+              OSError(errno.EIO, "Input/output error", f"/pub/{token}/x.apk", None, f"/pub/{token}/y.apk")):
+        assert token not in jobs.describe(e) and e.strerror in jobs.describe(e)
+    assert jobs.describe(OSError("без пути")) == "OSError: без пути"
+
+
 def test_same_version_keeps_current(ctx, cfg, conn, clock, tmp_path):
     acct = owner(conn, clock)
     seed_app(conn, cfg, clock, versions=("1.2.3",), make_dirs=True)  # ext 900, задание publish в очереди
@@ -489,7 +498,7 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     owner(conn, clock)
     (cfg.accounts_dir / ".new-0123456789abcdef" / ".ipatool").mkdir(parents=True)
     (cfg.accounts_dir / "1").mkdir()
-    (cfg.accounts_dir / "7" / ".ipatool").mkdir(parents=True)   # Apple ID №7 удалили посреди входа
+    (cfg.accounts_dir / ".deleted-9" / ".ipatool").mkdir(parents=True)  # удаление Apple ID №9 дошло до COMMIT
     cfg.locks_dir.mkdir(parents=True)
     for name in (".new-0123456789abcdef.lock", ".new-0123456789abcdef.wait", "1.lock", "1.wait", "7.lock", "7.wait",
                  "download.lock", "download.wait"):
@@ -497,6 +506,44 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     worker(ctx, cfg).recover()
     assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"]
     assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "1.wait", "download.lock", "download.wait"]
+
+
+def test_recover_keeps_unmarked_homes_even_with_empty_database(ctx, cfg, conn, clock):
+    """Не тот data_dir, пропавшая или старая база: учётки ipatool без строки Apple ID остаются — их покажет
+    appshelf check; удаляются только помеченные при удалении Apple ID."""
+    for name in ("1", "7"):
+        (cfg.accounts_dir / name / ".ipatool").mkdir(parents=True)
+    worker(ctx, cfg).recover()
+    assert sorted(p.name for p in cfg.accounts_dir.iterdir()) == ["1", "7"]
+
+
+def test_recover_returns_home_of_removal_interrupted_before_commit(ctx, cfg, conn, clock):
+    owner(conn, clock)
+    (cfg.accounts_dir / ".deleted-1" / ".ipatool").mkdir(parents=True)   # строка Apple ID №1 осталась
+    worker(ctx, cfg).recover()
+    assert [p.name for p in cfg.accounts_dir.iterdir()] == ["1"] and (cfg.accounts_dir / "1" / ".ipatool").is_dir()
+
+
+def test_failed_removal_puts_homes_back(ctx, cfg, conn, clock, monkeypatch):
+    petr = member(conn, clock)
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=petr.user_id)
+    for a in (petr, second):
+        (cfg.accounts_dir / str(a.id) / ".ipatool").mkdir(parents=True)
+    replace = Path.replace
+
+    def failing(self, target):
+        if Path(target).name == f".deleted-{second.id}":
+            raise OSError(errno.EIO, "Input/output error")
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing)
+    with pytest.raises(OSError):
+        jobs.remove_user(cfg, conn, petr.user_id)
+    assert sorted(p.name for p in cfg.accounts_dir.iterdir()) == sorted([str(petr.id), str(second.id)])
+    assert people.get_account(conn, petr.id) is not None and people.get_account(conn, second.id) is not None
+    monkeypatch.setattr(Path, "replace", replace)
+    jobs.remove_user(cfg, conn, petr.user_id)
+    assert list(cfg.accounts_dir.iterdir()) == []
 
 
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):

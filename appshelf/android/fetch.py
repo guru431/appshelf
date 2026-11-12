@@ -9,6 +9,8 @@ import os
 import re
 import secrets
 import shutil
+import sys
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -179,7 +181,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
     совпасть, нет пакета в RuStore — нужна галочка ack (у приложения на полке подпись уже задана) и метка «не
     сверена»; AppGallery и F-Droid — другая подпись не отказ, а метка."""
     with jobs.hold(env.cfg.download_lock):
-        shelf = db.get_shelf(c, shelf.id)  # токен каталога мог смениться (rotate_shelf), пока ждали замок
+        shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))  # токен мог смениться, пока ждали замок
         if shelf is None or expected_package and db.get_app(c, shelf.id, expected_package) is None:
             raise store.AppGone(expected_package or ref)
         _space(env, c)
@@ -373,11 +375,11 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
     """Принятые APK полки владельца — независимыми копиями, без обращения к магазину.
     Повторный запуск дополняет историю, сохраняя настройки публичной карточки и проверку новой подписи."""
     with jobs.hold(env.cfg.download_lock):
-        shelf = db.get_shelf(c, shelf.id)
+        shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))
         if shelf is None:
             raise store.AppGone(package)
         _space(env, c)
-        source = db.get_shelf(c, source_id)
+        source = finish_move(env.cfg, c, db.get_shelf(c, source_id))
         user = people.get_user(c, source.user_id) if source is not None and source.user_id is not None else None
         original = db.get_app(c, source_id, package)
         version = db.current_version(c, source_id, package)
@@ -408,10 +410,13 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
                 continue
             _space(env, c)
             folder = shelf_root(env.cfg, source) / version["dir"]
-            shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+            try:
+                shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+                icon = (folder / "icon.png").read_bytes()
+            except OSError:  # в пути — токен личной полки, а ошибку видят на публичной
+                raise SourceError("APK на полке владельца сейчас недоступен — повторите позже") from None
             if ipa.sha256(path) != version["sha256"]:
                 raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
-            icon = (folder / "icon.png").read_bytes()
             store_apk(env, c, shelf, path, source=version["source"], source_ref=original["source_ref"],
                       expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon,
                       allow_older=True)
@@ -456,6 +461,9 @@ def run_job(env, c, job) -> None:
             _copy_to_public(env, c, shelf, package, payload["from_shelf"], work)
         elif job["kind"] == "upload":
             with jobs.hold(env.cfg.download_lock):
+                shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))  # токен мог смениться, пока ждали замок
+                if shelf is None:
+                    raise store.AppGone(package)
                 _space(env, c)
                 _, result = store_apk(env, c, shelf, Path(payload["path"]), source="upload", source_ref="",
                                       expected_package=package or None, expected_signer="",
@@ -506,8 +514,8 @@ def run_job(env, c, job) -> None:
 def rotate_shelf(cfg, c, shelf_id: int, *, transaction=None) -> db.Shelf | None:
     """Новый случайный токен каталога Android-полки: appshelf rotate-token и смена PIN публичной полки (spec §7, §8).
     Файлы внутри не меняются — ссылки на APK строятся на странице. Как jobs.move_shelf: новый токен сначала ложится
-    в shelf_next, сбой посередине доделает jobs.move_shelves; под замком скачивания store_apk не пишет в прежний
-    каталог. Идёт задание полки или чьё-то скачивание — AccountBusy, архив недоступен — ArchiveUnavailable; полку
+    в shelf_next, сбой посередине доделает jobs.move_shelves или первая же запись либо удаление в каталоге полки
+    (finish_move); под замком скачивания store_apk не пишет в прежний каталог. Идёт задание полки или чьё-то скачивание — AccountBusy, архив недоступен — ArchiveUnavailable; полку
     удалили, пока ждали замок, — None. transaction позволяет сменить PIN вместе с записью shelf_next:
     после COMMIT незавершённый перенос доделывается уже с новым PIN."""
     jobs._archive(cfg)
@@ -522,21 +530,72 @@ def rotate_shelf(cfg, c, shelf_id: int, *, transaction=None) -> db.Shelf | None:
                     return None
                 if not shelf.shelf_next:
                     db.set_shelf_next(c, shelf_id, secrets.token_hex(16))
-            shelf = db.get_shelf(c, shelf_id)
-            src, dst = cfg.archive / shelf.shelf, cfg.archive / shelf.shelf_next
-            if src.is_dir() and not dst.exists():
-                os.replace(src, dst)
+            _move_dirs(cfg, db.get_shelf(c, shelf_id))
             db.finish_shelf_move(c, shelf_id)
             return db.get_shelf(c, shelf_id)
     except IpatoolError as e:  # не дождались замка скачивания
         raise jobs.AccountBusy(f"Android-полка №{shelf_id}") from e
 
 
+def _move_dirs(cfg, shelf: db.Shelf) -> None:
+    """Каталог полки — на shelf_next, под замком скачивания вызывающего. Оба каталога есть (перенос прервался, а
+    прежний код успел положить версию в старый) — версии, которых нет в новом, переезжают туда (как jobs._move_files)."""
+    src, dst = cfg.archive / shelf.shelf, cfg.archive / shelf.shelf_next
+    if src.is_dir() and not dst.exists():
+        os.replace(src, dst)
+    elif src.is_dir():
+        for d in src.iterdir():
+            if db.ANDROID_DIR_RE.match(d.name) and not (dst / d.name).exists():
+                os.replace(d, dst / d.name)
+        with suppress(OSError):  # остались чужие файлы — их покажет appshelf check
+            src.rmdir()
+
+
+def finish_move(cfg, c, shelf: db.Shelf | None) -> db.Shelf | None:
+    """Под замком скачивания: смена токена прервалась (shelf_next) — доделать, прежде чем писать в каталог полки или
+    удалять из него, иначе файлы лягут в каталог отозванного токена, а строки — к новому. Сбой шары —
+    ArchiveUnavailable (без пути: в нём токен)."""
+    if shelf is None or not shelf.shelf_next:
+        return shelf
+    try:
+        _move_dirs(cfg, shelf)
+    except OSError as e:
+        raise jobs.ArchiveUnavailable(f"перенос каталога полки не завершён: {e.strerror or type(e).__name__}") from e
+    db.finish_shelf_move(c, shelf.id)
+    return db.get_shelf(c, shelf.id)
+
+
 def recover(c, now: str) -> None:
     """После перезапуска appshelf-web (его tmp/web уже очищен): прерванные задания — снова в очередь, загрузки,
-    чей файл пропал вместе с tmp, — ошибка с просьбой загрузить заново."""
+    чей файл пропал вместе с tmp, — ошибка с просьбой загрузить заново и у карточки (иначе «скачивается…» навсегда)."""
     db.requeue_running(c)
-    for job in c.execute("SELECT id, payload FROM android_jobs WHERE kind='upload' AND status='queued'").fetchall():
+    for job in c.execute("SELECT id, shelf_id, package, payload FROM android_jobs "
+                         "WHERE kind='upload' AND status='queued'").fetchall():
         path = json.loads(job["payload"] or "{}").get("path", "")
         if not path or not Path(path).exists():
             db.finish_job(c, job["id"], "error", now, UPLOAD_LOST)
+            if job["package"]:
+                app_failed(c, job["shelf_id"], job["package"], SourceError(UPLOAD_LOST), now)
+
+
+def hide_pending(cfg, c) -> None:
+    """При старте appshelf-web: версии pending, скачанные до случайных имён каталогов, — под случайное имя
+    (db.hide_pending), под замком скачивания. Архив недоступен, замок занят, сбой шары — в журнал (без пути: в нём
+    токен), повторит следующий старт; служба из-за этого не встаёт."""
+    rows = [r for r in c.execute("SELECT id, shelf_id, dir FROM android_versions WHERE role='pending'").fetchall()
+            if not db.PENDING_DIR_RE.search(r["dir"])]
+    if not rows:
+        return
+    try:
+        jobs._archive(cfg)
+        with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT):
+            for r in rows:
+                shelf = finish_move(cfg, c, db.get_shelf(c, r["shelf_id"]))
+                if shelf is not None:
+                    db.hide_pending(c, shelf_root(cfg, shelf), shelf.id, r["id"])
+    except (jobs.ArchiveUnavailable, IpatoolError, OSError) as e:
+        if isinstance(e, IpatoolError):
+            why = "идёт скачивание"
+        else:
+            why = (e.strerror or type(e).__name__) if isinstance(e, OSError) else str(e)
+        print(f"appshelf: версии, ждущие решения по подписи, не перенесены под случайное имя: {why}", file=sys.stderr)

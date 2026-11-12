@@ -116,6 +116,18 @@ def test_orphans_are_reported_not_removed(two, cfg, conn, clock):
     assert tree(cfg.archive) == files_before
 
 
+def test_ipatool_home_without_apple_id(two, cfg, conn):
+    """HOME без строки Apple ID сам не удаляется (Worker.recover убирает только помеченные): его показывает check
+    живой базы; снимок с другим набором Apple ID его не видит."""
+    for name in ("1", str(two["petr_acct"].id), "77", ".new-0123456789abcdef", ".deleted-78"):
+        (cfg.accounts_dir / name).mkdir(parents=True)
+    files_before = tree(cfg.accounts_dir)
+    assert integrity.check(cfg, conn).ok
+    rep = integrity.check(cfg, conn, homes=True)
+    assert [(p.kind, p.account) for p in rep.problems] == [("orphan_home", 77)]
+    assert "Apple ID №77" in rep.text() and tree(cfg.accounts_dir) == files_before
+
+
 def test_shelf_dir_missing_and_version_dir_missing(cfg, conn, clock):
     own = owner(conn, clock)
     petr = make_account(conn, clock, email=PETR, role="member", legacy=False)
@@ -499,6 +511,19 @@ def test_android_shelf_next_reported(ctx, cfg, conn, clock, tmp_path):
     assert (rep.problems[0].shelf, rep.problems[0].account) == (shelf.id, None)
     assert f"Android-полка №{shelf.id}" in rep.text()
     assert_private(rep, shelf.shelf, "fedcba9876543210fedcba9876543210")
+
+
+def test_android_pending_at_predictable_name(ctx, cfg, conn, clock, tmp_path):
+    """Версия ждёт решения по подписи, а каталог — <пакет>-<versionCode> (скачана до случайных имён)."""
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    conn.execute("UPDATE android_versions SET role='pending'")
+    rep = integrity.check(cfg, conn)
+    assert kinds(rep) == ["pending_name"] and rep.problems[0].path == "ru.example.app-1"
+    assert "угадываемым именем" in rep.text()
+    hidden = "ru.example.app-1-p" + "0" * 32
+    (root / "ru.example.app-1").rename(root / hidden)
+    conn.execute("UPDATE android_versions SET dir=?", (hidden,))
+    assert integrity.check(cfg, conn).ok
 
 
 def test_android_missing_apk(ctx, cfg, conn, clock, tmp_path):
