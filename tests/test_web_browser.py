@@ -694,6 +694,7 @@ def test_search_portions_keep_focus_and_row_in_place(web, local_chromium):
             assert button.bounding_box()["y"] == top and keys() == ["rustore:Alpha:"]
             send("done", {"html": rows("Beta", "Alpha", "Gamma"), "count": 3, "errors": 0})
             assert page.evaluate("document.activeElement.textContent") == "Добавить · Alpha"
+            assert button.bounding_box()["y"] == top   # «Остановить» скрыта, но её место осталось: строки не поднялись
             assert keys() == ["rustore:Alpha:"]
             assert "найдено вариантов: 3" in page.locator("#search-summary").inner_text()
             page.locator("#source-search input[name=q]").focus()   # фокус ушёл — отложенная порция встаёт на место

@@ -49,7 +49,8 @@
   var names = {{ sources | tojson }}, rows = {}, started = 0;
   function finish(text) {
     if (stream) stream.close();
-    stream = null; clearInterval(timer); stop.hidden = true;
+    // visibility, а не hidden: место кнопки остаётся — найденное под формой не подскакивает, пока его читают
+    stream = null; clearInterval(timer); stop.style.visibility = 'hidden';
     form.querySelector('button').disabled = false; summary.textContent = text;
     Object.values(rows).forEach(function (target) {
       if (target.row.classList.contains('busy')) {
@@ -93,7 +94,7 @@
   function start() {
     var query = input.value.trim(); if (!query) return;
     if (stream) stream.close(); clearInterval(timer);
-    progress.hidden = false; stop.hidden = false; results.replaceChildren(); statuses.replaceChildren(); rows = {}; pending = null;
+    progress.hidden = false; stop.hidden = false; stop.style.visibility = ''; results.replaceChildren(); statuses.replaceChildren(); rows = {}; pending = null;
     {{ (['rustore', 'fourpda', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github'] if not public else ['rustore', 'fdroid', 'fdroid_archive', 'izzy', 'play', 'appgallery', 'apkpure', 'github']) | tojson }}.forEach(addRow);
     started = Date.now(); form.querySelector('button').disabled = true;
     function tick() { summary.textContent = 'Поиск идёт · ' + Math.floor((Date.now() - started) / 1000) + ' с'; }
