@@ -123,7 +123,7 @@ def manifest(ipa_url: str, icon_url: str, bundle_id: str, version: str, title: s
 def _to_png(raw: bytes) -> bytes:
     if raw[12:16] == b"CgBI":  # первый чанк после сигнатуры PNG
         return _cgbi_to_png(raw)
-    img = Image.open(io.BytesIO(raw))
+    img = Image.open(io.BytesIO(raw), formats=("PNG", "JPEG"))  # iTunesArtwork бывает и JPEG; прочие декодеры — нет
     img.load()
     out = io.BytesIO()
     img.convert("RGBA").save(out, "PNG")

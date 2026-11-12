@@ -81,3 +81,11 @@ def test_icon_falls_back_to_app_icon_then_placeholder(tmp_path):
     png = ipa.extract_icon(make_ipa(tmp_path / "a.ipa", artwork=b"not an image", app_icon=png_bytes((0, 255, 0, 255))))
     assert pixel(png) == (0, 255, 0, 255)
     assert ipa.extract_icon(make_ipa(tmp_path / "b.ipa")) == ipa.placeholder_png()
+
+
+def test_icon_opens_only_png_and_jpeg(tmp_path):
+    """iTunesArtwork — PNG или JPEG; прочие декодеры Pillow (EPS вызвал бы Ghostscript) не пробуются."""
+    gif = io.BytesIO()
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(gif, "GIF")
+    png = ipa.extract_icon(make_ipa(tmp_path / "a.ipa", artwork=gif.getvalue(), app_icon=png_bytes((0, 255, 0, 255))))
+    assert pixel(png) == (0, 255, 0, 255)
