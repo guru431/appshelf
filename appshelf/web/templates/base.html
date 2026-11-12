@@ -494,11 +494,18 @@ addEventListener('click', function (e) {   // «Скопировать ссыл�
   if (!b) return;
   e.preventDefault();
   var link = b.getAttribute('data-copy');
-  function show() {
-    if (b.nextElementSibling) return;
-    var code = document.createElement('code');
-    code.textContent = link;
-    b.after(code);
+  function show() {   // показанный адрес выделен: остаётся «Скопировать» системного меню
+    var code = b.nextElementSibling;
+    if (!code) {
+      code = document.createElement('code');
+      code.textContent = link;
+      b.after(code);
+    }
+    if (code.tagName !== 'CODE') return;
+    var range = document.createRange(), selection = getSelection();
+    range.selectNodeContents(code);
+    selection.removeAllRanges();
+    selection.addRange(range);
   }
   if (!navigator.clipboard) { show(); return; }
   navigator.clipboard.writeText(link).then(function () { b.textContent = 'Скопировано'; }, show);

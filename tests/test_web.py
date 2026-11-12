@@ -27,6 +27,21 @@ def test_privacy_without_login(web):
     assert "ко всему аккаунту" in r.text and "Пока Google Play не подключён, доступа к почте" in r.text
 
 
+def test_privacy_covers_apple_id_guests_mail_and_browser_and_is_linked(web):
+    """Политика — про всё, что хранится: Apple ID, гости, письма, хранилище браузера; ссылки — со входа, «Настроек»
+    и формы PIN, «Назад» — только на свой путь."""
+    anon = TestClient(web.app, base_url=f"https://{HOST}")
+    text = anon.get("/privacy").text
+    for fact in ("токен App Store", "10 минут", "история покупок", "90 дней", "по сети /64", "«Настройки» → «Письма»",
+                 "адрес Google-аккаунта", "localStorage", "IndexedDB", "14 дней"):
+        assert fact in text, fact
+    assert "Назад" not in text                                             # с экрана согласия Google — без «Назад»
+    assert '<a href="/settings">Назад</a>' in anon.get("/privacy?back=/settings").text
+    assert "Назад" not in anon.get("/privacy?back=//evil.example").text     # чужой адрес — как без back
+    assert 'href="/privacy?back=/settings"' in web.client.get("/settings").text
+    assert 'href="/privacy?back=/login"' in anon.get("/login").text         # форма PIN — test_web_guest
+
+
 def test_pwa_manifest_and_icons_without_login(web):
     # iOS «На экран „Домой“» и браузеры берут манифест и иконку без cookie
     anon = TestClient(web.app)
@@ -111,6 +126,29 @@ def test_ios_card_matches_android_card(web, conn, cfg, clock):
     for page in (desktop, iphone):
         menu = page.split('class="sheet action-list"')[1].split("</details>")[0]
         assert link in menu and "<button>" not in menu   # в «⋯» — только вторичные и опасная кнопки
+
+
+IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)"
+
+
+@pytest.mark.parametrize("ua, banner", [
+    (IOS + " CriOS/130.0.6723.90 Mobile/15E148 Safari/604.1", True),          # Chrome для iOS
+    (IOS + " FxiOS/132.0 Mobile/15E148 Safari/605.1.15", True),               # Firefox
+    (IOS + " EdgiOS/130.0.2849.80 Version/18.0 Mobile/15E148 Safari/604.1", True),
+    (IOS + " Version/18.0 YaBrowser/24.10.5.400.10 SA/3 Mobile/15E148 Safari/604.1", True),
+    (IOS + " Version/18.0 Mobile/15E148 Safari/604.1", False),                # Safari
+    ("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/130.0 Mobile Safari/537.36", False),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0 Safari/537.36", False),
+])
+def test_ios_other_browser_banner_on_catalog_and_login(web, ua, banner):
+    """Из Chrome и других браузеров iOS «Установить» (itms-services) ничего не делает — просим открыть в Safari."""
+    text = "Установка работает только в Safari"
+    catalog = web.client.get("/?os=apple", headers={"User-Agent": ua}).text
+    login = TestClient(web.app, base_url=f"https://{HOST}", headers={"user-agent": ua}).get("/login?next=/").text
+    assert (text in catalog, text in login) == (banner, banner)
+    if banner:
+        assert 'data-copy="https://apps.example/?os=apple">Скопировать адрес' in catalog
+        assert 'data-copy="https://apps.example/login?next=/">Скопировать адрес' in login
 
 
 def test_banners_for_expired_session_and_low_space(web, conn):

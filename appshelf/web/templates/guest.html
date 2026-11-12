@@ -19,7 +19,10 @@
   </form>
   {% endif %}
   </div>
-  <p class="hint">PIN сообщает владелец полки. После ввода полка открывается в этом браузере на 90 дней.</p>
+  <p class="hint">PIN сообщает владелец полки. После ввода полка открывается в этом браузере на 90 дней.
+    <a href="/privacy?back=/p">Конфиденциальность</a>: что хранит сервер.</p>
+  {% if device == 'android' %}<p class="hint">Открывайте страницу в Chrome: во встроенном браузере
+    Telegram или WhatsApp PIN придётся вводить снова.</p>{% endif %}
 </div>
 {% else %}
 {% include 'shelf_filter.html' %}

@@ -23,7 +23,8 @@ The web UI is in Russian.
   appshelf checks which of them your Apple ID holds a license for.
 - iPhone catalog with an "Install" button (from a computer — a QR code next to it); the current and the previous
   version are kept, and one of them can be pinned to survive later updates. iOS does not install over an installed
-  app — offload it first (see "Updating an installed app").
+  app — offload it first (see "Updating an installed app"). Installing works only from Safari: opened in Chrome,
+  Firefox, Edge, Opera or Yandex Browser for iOS, the catalog and sign-in offer to copy the address.
 - Nightly check for new versions (versions downloaded this week are marked in the catalog: apps removed from the
   App Store get updates only from here) and "Проверить обновления всех" (check all for updates) above the catalog;
   mail — see "Mail", including a weekly digest of new versions for every person.
@@ -578,7 +579,10 @@ hints, search and filters; guests cannot manage the shelf.
   guest page after entering the PIN. It links directly to the current APK; updates keep the link, while changing
   the PIN or shelf token invalidates old codes.
 - **PIN** — 6 digits, set and changed by the owner in the collapsed "Гостевой доступ" block below public apps. Until a PIN is
-  set, `/p` shows guests nothing. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
+  set, `/p` shows guests nothing; once it is set, the sign-in page links to it ("Открыть публичную полку по PIN-коду")
+  for guests who know only the site address. "Гостевой доступ" also shows a QR code of the `/p` address (without the
+  PIN): a phone camera opens it in the browser rather than in a messenger's in-app browser, whose guest cookie never
+  reaches Chrome. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie
   signed with `cookie-key`).
 - **Changing the PIN** invalidates all guest cookies and gives the public shelf a new directory token: APK links

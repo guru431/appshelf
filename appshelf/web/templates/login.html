@@ -3,6 +3,10 @@
 <div class="auth">
   {% if add %}<h2>appshelf — добавить Apple ID</h2>
   {% else %}<div class="brand"><img src="/pwa/icon-180.png" alt=""><h1>appshelf</h1></div>{% endif %}
+  {# по ссылке-приглашению адрес входа без неё не поможет — о Safari говорит баннер приглашения #}
+  {% if ios_other and not add and not invited %}<div class="banner"><p>Установка работает только в Safari — откройте
+    эту страницу в Safari.</p>
+    <button type="button" class="secondary" data-copy="{{ cfg.public_base ~ here }}">Скопировать адрес</button></div>{% endif %}
   {% if invited and not add %}<div class="banner">Приглашение принято — войдите своим Apple ID
     {%- if cfg.google_enabled %} или через Google{% endif %}.
     {% if device == 'apple' %}Откройте эту ссылку в Safari: во встроенном браузере Telegram или WhatsApp установка
@@ -48,6 +52,7 @@
   {% elif step == 2 %}
   <p class="hint">Код не пришёл — на iPhone: Настройки → [ваше имя] → Вход и безопасность → Получить код проверки.</p>
   {% else %}
+  {% if public_pin %}<p class="hint">Есть только PIN-код? <a href="/p">Открыть публичную полку по PIN-коду</a></p>{% endif %}
   <p class="hint">Вход — вашим Apple ID и паролем от него. Пароль на сервере не сохраняется: он нужен только для входа
     и живёт в памяти не дольше 10 минут. Вход запоминается на год на этом устройстве; в приложении на экране «Домой»
     войти нужно отдельно.</p>
@@ -62,6 +67,8 @@
     {%- if cfg.google_enabled and not add %} Нет Apple ID — «Войти через Google».{% endif %}</p>
   {% elif not invited %}<p class="hint">С компьютера — управление полкой. Приложения ставят с телефона: по QR-коду
     у приложения.</p>{% endif %}
+  {% if not add %}<p class="hint"><a href="/privacy?back={{ here | urlencode }}">Конфиденциальность</a>: что хранит
+    сервер.</p>{% endif %}
   {% endif %}
 </div>
 {% endblock %}

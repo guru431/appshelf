@@ -17,6 +17,7 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .. import jobs, notify, people, store, webauth
+from ..android import db as android_db, pin
 from ..ipatool import IpatoolError
 from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WHO_COOKIE, WebCtx, back, back_to, safe_next
 from .login import (TTL, Intent, LoginBusy, LoginCodeMismatch, LoginExpired, LoginFinished, LoginInProgress,
@@ -76,9 +77,12 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
         if found is not None:
             (request.state.users, request.state.user, request.state.accounts, request.state.acct,
              request.state.who) = found
+    # гость, знающий только адрес сайта, попадает сюда с «/» — ему ссылка на /p (spec 2026-10-28 §10)
+    with w.conn() as c:
+        public_pin = not add and pin.is_set(c) and android_db.public_shelf(c) is not None
     return w.page(request, "login.html", "apple" if add else "login", status_code, step=step, email=email,
                   next=safe_next(next_), error=error, action=action, add=add, link=link,
-                  invited=bool(w.cookie(request, INVITE_COOKIE)))
+                  invited=bool(w.cookie(request, INVITE_COOKIE)), public_pin=public_pin)
 
 
 def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None, how: str = ""):

@@ -204,8 +204,11 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return PlainTextResponse("ok")
 
     @app.get("/privacy", response_class=HTMLResponse)
-    def privacy(request: Request):
-        return w.page(request, "privacy.html", "guest", page_title="Конфиденциальность")
+    def privacy(request: Request, back_: str = Query("", alias="back")):
+        """Без шапки и вкладок (её открывают и без входа); «Назад» — только по своему back=: в веб-приложении с
+        экрана «Домой» кнопки браузера нет, а Referer с экрана согласия Google — чужой."""
+        return w.page(request, "privacy.html", "guest", page_title="Конфиденциальность",
+                      back=back_ if back_ and safe_next(back_) == back_ else "")
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings(request: Request):

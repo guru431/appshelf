@@ -40,6 +40,10 @@
 {% if guest %}
 <details class="card"><summary>Гостевой доступ</summary>
   <p>Адрес для гостей: <a href="{{ guest.url }}">{{ guest.url }}</a> — гость вводит PIN и видит только этот список.</p>
+  <p class="hint">Или покажите QR-код: камера телефона откроет адрес сразу в браузере, а не во встроенном браузере
+    мессенджера, где PIN пришлось бы вводить снова. PIN в QR-код не входит.</p>
+  <p><img src="data:image/png;base64,{{ guest.qr }}" alt="QR-код адреса для гостей" width="196" height="196"
+       style="max-width: 100%; height: auto; background: #fff"></p>
   {% if not guest.set_at %}<p class="err">Задайте PIN — до этого гости ничего не видят.</p>
   {% else %}<p class="meta">PIN задан <span class="date">{{ guest.set_at[:16] | replace('T', ' ') }} UTC</span>.</p>{% endif %}
   {% if guest.closed %}<p class="err">Ввод PIN закрыт до <span class="date">{{ guest.closed[:16] | replace('T', ' ') }} UTC</span>: за сутки слишком

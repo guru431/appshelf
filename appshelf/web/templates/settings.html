@@ -24,7 +24,8 @@
 {% endfor %}
 </div>
 <h2>Справка</h2>
-<nav class="card shelves" aria-label="Справка"><a href="/help">Как установить, обновить и добавить приложения</a></nav>
+<nav class="card shelves" aria-label="Справка"><a href="/help">Как установить, обновить и добавить приложения</a>
+  <a href="/privacy?back=/settings">Конфиденциальность: что хранит сервер</a></nav>
 <h2>Выход</h2>
 <form method="post" action="{{ post_url('/logout') }}"><button class="secondary">Выйти из всех участников этого браузера</button></form>
 {% endblock %}
