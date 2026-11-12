@@ -422,7 +422,8 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   may require removing the app and its data. A verified v3 key rotation chain is labelled "Ключ обновлён разработчиком"
   with the minimum Android version; the decision stays manual. A matching key alone does not guarantee a safe app.
   Until decided the version lives in `<package>-<versionCode>-p<32 hex>` and cannot be downloaded through shelf links;
-  "Принять" (Accept) moves it to the regular directory. The night does not download a pending or rejected version
+  "Принять" (Accept) moves it to the regular directory. A pending version downloaded before random names existed is
+  moved under one when `appshelf-web` starts. The night does not download a pending or rejected version
   again (same source and versionCode). The owner gets a mail about a version with a new key on their own and the
   public shelf (one per decision); the night's result adds "ждут решения по подписи: K" (awaiting a signature
   decision).
@@ -635,8 +636,8 @@ the database it checks the directory, `app.ipa` of the recorded size, `icon.png`
 its links point at this shelf; `--deep` also compares the IPA's SHA-256 (saved on download) and the itemId, external
 version id and bundle id inside the IPA — it reads the whole archive. Separately: directories without database rows,
 `.partial` (normal during a download), an unfinished shelf move, archive directories that belong to no Apple ID.
-Android shelves likewise: the version directory, an APK of the recorded size, `icon.png`, and with `--deep` the APK's
-SHA-256. Apple IDs and Android shelves are reported by number, shelf tokens as `<токен>` or their first four
+Android shelves likewise: the version directory, an APK of the recorded size, `icon.png`, a version awaiting a
+signature decision under a guessable directory name, and with `--deep` the APK's SHA-256. Apple IDs and Android shelves are reported by number, shelf tokens as `<токен>` or their first four
 characters. `--json` gives a
 machine-readable report. Exit code: 0 — no problems, 1 — problems found, 2 — the check did not run (archive not
 mounted, no database).

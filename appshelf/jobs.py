@@ -694,7 +694,8 @@ class Worker:
 
     def recover(self) -> None:
         """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь, как и временные HOME входов
-        новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME удалённых посреди входа Apple ID."""
+        новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME удалённых посреди входа Apple ID; версии
+        Android, ждущие решения по подписи под угадываемым именем каталога, — под случайное."""
         c = self.connect()
         try:
             store.requeue_running(c)
@@ -707,6 +708,7 @@ class Worker:
             except Exception:  # уборка загрузок APK не останавливает обработчик
                 traceback.print_exc()
             android_fetch.recover(c, self.env.now())  # после очистки tmp/web: загрузки без файла — ошибка
+            android_fetch.hide_pending(cfg, c)
         finally:
             c.close()
         for home in cfg.accounts_dir.glob("*"):

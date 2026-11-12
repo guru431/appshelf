@@ -501,6 +501,19 @@ def test_android_shelf_next_reported(ctx, cfg, conn, clock, tmp_path):
     assert_private(rep, shelf.shelf, "fedcba9876543210fedcba9876543210")
 
 
+def test_android_pending_at_predictable_name(ctx, cfg, conn, clock, tmp_path):
+    """Версия ждёт решения по подписи, а каталог — <пакет>-<versionCode> (скачана до случайных имён)."""
+    shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
+    conn.execute("UPDATE android_versions SET role='pending'")
+    rep = integrity.check(cfg, conn)
+    assert kinds(rep) == ["pending_name"] and rep.problems[0].path == "ru.example.app-1"
+    assert "угадываемым именем" in rep.text()
+    hidden = "ru.example.app-1-p" + "0" * 32
+    (root / "ru.example.app-1").rename(root / hidden)
+    conn.execute("UPDATE android_versions SET dir=?", (hidden,))
+    assert integrity.check(cfg, conn).ok
+
+
 def test_android_missing_apk(ctx, cfg, conn, clock, tmp_path):
     shelf, root = android_shelf(ctx, cfg, conn, clock, tmp_path)
     (root / "ru.example.app-1" / "ru.example.app-1.0.apk").unlink()

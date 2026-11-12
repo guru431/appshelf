@@ -164,6 +164,40 @@ def test_pending_version_is_not_at_predictable_path_until_accepted(ctx, cfg, con
     assert not (root / pending["dir"]).exists()
 
 
+def legacy_pending(ctx, cfg, conn, clock, tmp_path):
+    """pending, скачанная до случайных имён каталогов: <пакет>-<versionCode>, по ссылке её можно угадать."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
+    run(ctx, conn, shelf, "upload", clock, path=str(make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")),
+        name="", package=PKG)
+    root = fetch.shelf_root(cfg, shelf)
+    pending = db.list_apps(conn, shelf.id)[0].pending
+    (root / pending["dir"]).rename(root / f"{PKG}-6")
+    conn.execute("UPDATE android_versions SET dir=? WHERE id=?", (f"{PKG}-6", pending["id"]))
+    return shelf, root, pending["id"]
+
+
+def test_start_moves_legacy_pending_to_random_name(ctx, cfg, conn, clock, tmp_path):
+    shelf, root, vid = legacy_pending(ctx, cfg, conn, clock, tmp_path)
+    worker = jobs.Worker(ctx.env, lambda: store.connect(cfg.db))
+    worker.recover()
+    hidden = conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"]
+    assert db.PENDING_DIR_RE.search(hidden) and hidden.startswith(f"{PKG}-6-p")
+    assert (root / hidden / fetch.apk_name(PKG, "1.0")).is_file() and not (root / f"{PKG}-6").exists()
+    worker.recover()                                                # повтор ничего не меняет
+    assert conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"] == hidden
+    assert on_shelf(cfg, shelf) == sorted([f"{PKG}-5", hidden])
+
+
+def test_failed_legacy_pending_rename_keeps_directory(ctx, cfg, conn, clock, tmp_path):
+    shelf, root, vid = legacy_pending(ctx, cfg, conn, clock, tmp_path)
+    conn.execute("CREATE TRIGGER fail_hide AFTER UPDATE OF dir ON android_versions "
+                 "BEGIN SELECT RAISE(ABORT, 'hide failed'); END")
+    with pytest.raises(sqlite3.IntegrityError, match="hide failed"):
+        db.hide_pending(conn, root, shelf.id, vid)
+    assert conn.execute("SELECT dir FROM android_versions WHERE id=?", (vid,)).fetchone()["dir"] == f"{PKG}-6"
+    assert on_shelf(cfg, shelf) == [f"{PKG}-5", f"{PKG}-6"]
+
+
 def test_failed_accept_puts_pending_directory_back(ctx, cfg, conn, clock, tmp_path):
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "a.apk", version_code=5))
     run(ctx, conn, shelf, "upload", clock, path=str(make_apk(tmp_path / "b.apk", version_code=6, cert=b"CERT-B")),

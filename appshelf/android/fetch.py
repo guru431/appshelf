@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import shutil
+import sys
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
@@ -575,3 +576,26 @@ def recover(c, now: str) -> None:
             db.finish_job(c, job["id"], "error", now, UPLOAD_LOST)
             if job["package"]:
                 app_failed(c, job["shelf_id"], job["package"], SourceError(UPLOAD_LOST), now)
+
+
+def hide_pending(cfg, c) -> None:
+    """При старте appshelf-web: версии pending, скачанные до случайных имён каталогов, — под случайное имя
+    (db.hide_pending), под замком скачивания. Архив недоступен, замок занят, сбой шары — в журнал (без пути: в нём
+    токен), повторит следующий старт; служба из-за этого не встаёт."""
+    rows = [r for r in c.execute("SELECT id, shelf_id, dir FROM android_versions WHERE role='pending'").fetchall()
+            if not db.PENDING_DIR_RE.search(r["dir"])]
+    if not rows:
+        return
+    try:
+        jobs._archive(cfg)
+        with jobs.hold(cfg.download_lock, jobs.REMOVE_LOCK_WAIT):
+            for r in rows:
+                shelf = finish_move(cfg, c, db.get_shelf(c, r["shelf_id"]))
+                if shelf is not None:
+                    db.hide_pending(c, shelf_root(cfg, shelf), shelf.id, r["id"])
+    except (jobs.ArchiveUnavailable, IpatoolError, OSError) as e:
+        if isinstance(e, IpatoolError):
+            why = "идёт скачивание"
+        else:
+            why = (e.strerror or type(e).__name__) if isinstance(e, OSError) else str(e)
+        print(f"appshelf: версии, ждущие решения по подписи, не перенесены под случайное имя: {why}", file=sys.stderr)

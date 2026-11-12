@@ -48,6 +48,7 @@ KINDS = {  # вид проблемы → подпись в кратком ито
     "no_apk": "нет файла APK",
     "apk_size": "размер APK не совпадает с базой",
     "apk_sha256": "SHA-256 APK не совпадает с базой",
+    "pending_name": "версия ждёт решения по подписи под угадываемым именем каталога (переименует старт appshelf-web)",
     "orphan": "в полке, но нет строки в базе",
     "partial": "незавершённое скачивание (.partial)",
     "shelf_next": "незавершённый перенос каталога полки (доделает старт appshelf-web)",
@@ -311,6 +312,8 @@ def _apk(root: Path, sid: int, v, deep: bool, rep: Report) -> None:
     if not vd.is_dir():
         rep.add("no_dir", None, d, shelf=sid)
         return
+    if v["role"] == "pending" and not android_db.PENDING_DIR_RE.search(d):  # до решения — не по ссылке /d/
+        rep.add("pending_name", None, d, shelf=sid)
     name = android_fetch.apk_name(v["package"], v["version_name"])
     f = vd / name
     if not f.is_file():
