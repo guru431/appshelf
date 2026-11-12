@@ -330,7 +330,7 @@ class Sources:
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""
-        if links.APPGALLERY_ID_RE.match(ref):
+        if links.APPGALLERY_ID_RE.fullmatch(ref):
             self._wait()
             ref = appgallery.package_of(self.http, ref)
         self._wait()

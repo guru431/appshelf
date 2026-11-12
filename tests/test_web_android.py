@@ -167,6 +167,7 @@ def test_search_remembers_the_package_of_a_failed_bundle_job(web, conn, clock, m
 
 def test_add_rustore_rejects_bad_package(web, conn):
     assert web.client.post("/android/add/rustore", data={"package": "../x", "name": ""}).status_code == 400
+    assert web.client.post("/android/add/rustore", data={"package": "ru.example\n", "name": ""}).status_code == 400
     assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
 
 

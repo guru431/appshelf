@@ -123,7 +123,7 @@ def read_apk(path: Path) -> ApkInfo:
     if m.get("requiredSplitTypes") or _true(app.get("isSplitRequired")):
         raise ApkError("приложению нужен набор файлов (split APK) — одним файлом из браузера не ставится")
     package = m.get("package")
-    if not isinstance(package, str) or not PACKAGE_RE.match(package):
+    if not isinstance(package, str) or not PACKAGE_RE.fullmatch(package):
         raise ApkError("в манифесте нет годного имени пакета")
     code = m.get("versionCode")
     if not isinstance(code, int) or isinstance(code, bool):

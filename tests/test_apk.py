@@ -62,6 +62,12 @@ def test_rejects_split_xapk_and_garbage(tmp_path):
         apk.read_apk(make_apk(tmp_path / "u.apk", scheme=None))
 
 
+def test_package_with_trailing_newline_refused(tmp_path):
+    """«$» совпадает и перед хвостовым «\\n»: такой пакет попадал в имена каталога и файла."""
+    with pytest.raises(apk.ApkError, match="имени пакета"):
+        apk.read_apk(make_apk(tmp_path / "n.apk", package="ru.example.app\n"))
+
+
 def test_broken_manifest_is_apk_error(tmp_path):
     import zipfile
     path = tmp_path / "b.apk"

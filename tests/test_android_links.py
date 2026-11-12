@@ -60,6 +60,8 @@ def test_unknown_page_is_direct_link():
     "https://apkpure.com/name/com..x",
     "https://www.rustore.ru/catalog/app/bad..pkg",
     "https://apt.izzysoft.de/fdroid/index/apk/bad..pkg",
+    "https://play.google.com/store/apps/details?id=com.example.app%0A",  # «$» пропускал хвостовой «\n»
+    "https://appgallery.huawei.com/app/C102312137%0A",
 ])
 def test_bad_package_in_store_link_refused(url):
     with pytest.raises(net.FetchError, match="не похоже на страницу приложения"):

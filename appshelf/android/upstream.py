@@ -105,7 +105,7 @@ def repositories(http: Http, package: str, *, metadata_links=(), description: st
     Без прямого sourceCode читается описание именно package в Play, затем не более одной страницы сайта автора.
     Сетевой сбой сохраняется как ошибка, отсутствие страницы или авторских ссылок — пустой результат.
     """
-    if not PACKAGE_RE.match(package):
+    if not PACKAGE_RE.fullmatch(package):
         raise SourceError("не похоже на имя пакета")
     found, websites = [], []
 
