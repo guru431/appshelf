@@ -285,6 +285,15 @@ def test_license_not_found_shows_text(ctx, cfg, conn, clock):
     assert app.status == "error" and app.last_error == "у Apple ID нет лицензии на это приложение"
 
 
+def test_describe_hides_file_paths():
+    """Путь в архиве несёт токен полки, а текст ошибки видят люди (карточка, задание)."""
+    token = "a" * 32
+    for e in (FileNotFoundError(errno.ENOENT, "No such file or directory", f"/pub/{token}/x/icon.png"),
+              OSError(errno.EIO, "Input/output error", f"/pub/{token}/x.apk", None, f"/pub/{token}/y.apk")):
+        assert token not in jobs.describe(e) and e.strerror in jobs.describe(e)
+    assert jobs.describe(OSError("без пути")) == "OSError: без пути"
+
+
 def test_same_version_keeps_current(ctx, cfg, conn, clock, tmp_path):
     acct = owner(conn, clock)
     seed_app(conn, cfg, clock, versions=("1.2.3",), make_dirs=True)  # ext 900, задание publish в очереди

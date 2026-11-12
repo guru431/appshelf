@@ -408,10 +408,13 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
                 continue
             _space(env, c)
             folder = shelf_root(env.cfg, source) / version["dir"]
-            shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+            try:
+                shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
+                icon = (folder / "icon.png").read_bytes()
+            except OSError:  # в пути — токен личной полки, а ошибку видят на публичной
+                raise SourceError("APK на полке владельца сейчас недоступен — повторите позже") from None
             if ipa.sha256(path) != version["sha256"]:
                 raise apk.ApkError("Сохранённый APK повреждён — контрольная сумма не совпала")
-            icon = (folder / "icon.png").read_bytes()
             store_apk(env, c, shelf, path, source=version["source"], source_ref=original["source_ref"],
                       expected_package=package, expected_signer=version["signer"], name_hint=original["name"], icon=icon,
                       allow_older=True)

@@ -122,6 +122,9 @@ def describe(e: Exception) -> str:
         return f"ipatool: {e.message}"[:500]
     if isinstance(e, (LowSpace, ArchiveUnavailable, ipa.IpaError)):
         return str(e)[:500]
+    if isinstance(e, OSError) and (e.filename is not None or isinstance(e, shutil.Error)):
+        # путь в архиве несёт токен полки, а текст видят на карточке — только причина (как android/net.py)
+        return f"{type(e).__name__}: {e.strerror or 'сбой файловой операции'}"[:500]
     return f"{type(e).__name__}: {e}"[:500]
 
 
@@ -619,7 +622,7 @@ def _finish_move(cfg: Config, c, acct):
     try:
         return _move_files(cfg, c, acct)
     except OSError as e:
-        raise ArchiveUnavailable(f"перенос каталога полки не завершён: {e}") from e
+        raise ArchiveUnavailable(f"перенос каталога полки не завершён: {e.strerror or type(e).__name__}") from e
 
 
 def _relink(manifest: Path, old: str, new: str) -> None:

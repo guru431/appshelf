@@ -167,6 +167,22 @@ def test_copy_personal_apk_to_public_without_download(web, cfg, conn, tmp_path, 
     assert db.current_version(conn, public.id, PKG) is not None
 
 
+@pytest.mark.parametrize("lost", ["apk", "icon"])
+def test_copy_failure_does_not_reveal_owner_shelf_token(web, member, cfg, conn, tmp_path, lost):
+    """Сбой чтения с личной полки: путь с её токеном не попадает ни в задание, ни на публичную карточку."""
+    mine = add_personal(web, conn, tmp_path)
+    current = db.current_version(conn, mine.id, PKG)
+    folder = fetch.shelf_root(cfg, mine) / current["dir"]
+    (folder / (fetch.apk_name(PKG, current["version_name"]) if lost == "apk" else "icon.png")).unlink()
+    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    work(web, conn)
+    job = conn.execute("SELECT status, error FROM android_jobs WHERE kind='copy'").fetchone()
+    app = db.get_app(conn, db.public_shelf(conn).id, PKG)
+    assert job["status"] == "error" and "недоступен" in job["error"] and "недоступен" in app["last_error"]
+    assert mine.shelf not in job["error"] and mine.shelf not in app["last_error"]
+    assert mine.shelf not in member.client.get("/android/public").text
+
+
 def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn, clock, tmp_path):
     mine = add_personal(web, conn, tmp_path)
     uid = conn.execute("SELECT id FROM users WHERE role='member'").fetchone()[0]
