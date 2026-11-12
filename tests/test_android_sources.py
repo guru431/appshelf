@@ -119,6 +119,18 @@ def test_rustore_latest_is_version_code():
     assert latest == sources.Latest(2026062416, "", True)
 
 
+@pytest.mark.parametrize("code", [None, 0, -1, "2026062416", True, 1.5])
+def test_rustore_without_version_code_is_unknown_format(code):
+    """Пропавший или негодный versionCode — громкая ошибка, а не «новее нет» всем карточкам RuStore."""
+    data = fixture("overall")
+    if code is None:
+        del data["body"]["versionCode"]
+    else:
+        data["body"]["versionCode"] = code
+    with pytest.raises(sources.SourceError, match="неизвестном формате"):
+        sources.Sources(FakeHttp({OVERALL: data}), sleep=lambda s: None).latest("rustore", "ru.sberbankmobile", "")
+
+
 def test_link_latest_changed_by_validators():
     url = "https://bank.example/app.apk"
     meta = net.Meta(url, 200, '"abc"', "Wed, 28 Oct 2026 10:54:49 GMT", 176172934, "")
