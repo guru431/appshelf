@@ -635,7 +635,9 @@ Read-only: the database is opened without writes, nothing in the archive is chan
 the database it checks the directory, `app.ipa` of the recorded size, `icon.png`, that `manifest.plist` parses and
 its links point at this shelf; `--deep` also compares the IPA's SHA-256 (saved on download) and the itemId, external
 version id and bundle id inside the IPA — it reads the whole archive. Separately: directories without database rows,
-`.partial` (normal during a download), an unfinished shelf move, archive directories that belong to no Apple ID.
+`.partial` (normal during a download), an unfinished shelf move, archive directories that belong to no Apple ID,
+and for the live database (no `--db`) ipatool HOMEs without an Apple ID: they are never removed automatically, the
+service only removes those marked while deleting an Apple ID.
 Android shelves likewise: the version directory, an APK of the recorded size, `icon.png`, a version awaiting a
 signature decision under a guessable directory name, and with `--deep` the APK's SHA-256. Apple IDs and Android shelves are reported by number, shelf tokens as `<токен>` or their first four
 characters. `--json` gives a

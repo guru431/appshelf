@@ -34,6 +34,7 @@ NOT_PURCHASED = "этого приложения нет в покупках Appl
 ACCOUNT_GONE = "Apple ID удалён"
 FAILED_MAX = 50          # id с технической ошибкой в ходе проверки справочника — не больше
 INTERACTIVE_BATCH = 8   # после восьми действий — один шаг фоновой проверки, чтобы она тоже продвигалась
+DELETED_HOME = ".deleted-"  # accounts/.deleted-<id> — HOME удаляемого Apple ID (_remove, Worker.recover)
 
 
 class LowSpace(Exception):
@@ -320,32 +321,49 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
                 held.enter_context(hold(lock, REMOVE_LOCK_WAIT))
             except IpatoolError as e:  # hold не дождался вызова ipatool этого Apple ID
                 raise AccountBusy(a.email) from e
-        with store.tx(c):
-            busy = next((a for a in accts if store.account_running(c, a.id)), None)
-            if busy is not None:
-                raise AccountBusy(busy.email)
-            check()
-            fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
-            uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
-            removing = {a.id for a in fresh}
-            for uid in uids:
-                last = user_id is not None or not people.google_of(c, uid) and not any(
-                    a.id not in removing for a in people.accounts_of(c, uid))
-                shelf = android_db.shelf_for_user(c, uid)
-                if last and shelf is not None and _android_running(c, shelf.id):
-                    raise AccountBusy("Android-полка")
-            for a in fresh:
-                store.delete_shelf(c, a.id)
-                c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
-            gids = []
-            if user_id is not None:
-                gids = [g.id for g in people.google_of(c, user_id)]
-                if any(_google_running(c, gid) for gid in gids):
-                    raise AccountBusy("Google Play")
-                c.execute("DELETE FROM google_accounts WHERE user_id=?", (user_id,))
-            for gid in gids:
-                _google_apps_gone(c, gid)
-            gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
+        marked: list[tuple[Path, Path]] = []  # (HOME, его метка удаления) — вернуть, если COMMIT не прошёл
+        try:
+            with store.tx(c):
+                busy = next((a for a in accts if store.account_running(c, a.id)), None)
+                if busy is not None:
+                    raise AccountBusy(busy.email)
+                check()
+                fresh = [a for a in (people.get_account(c, a.id) for a in accts) if a is not None]
+                uids = dict.fromkeys([a.user_id for a in fresh] + ([user_id] if user_id is not None else []))
+                removing = {a.id for a in fresh}
+                for uid in uids:
+                    last = user_id is not None or not people.google_of(c, uid) and not any(
+                        a.id not in removing for a in people.accounts_of(c, uid))
+                    shelf = android_db.shelf_for_user(c, uid)
+                    if last and shelf is not None and _android_running(c, shelf.id):
+                        raise AccountBusy("Android-полка")
+                for a in fresh:
+                    store.delete_shelf(c, a.id)
+                    c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
+                gids = []
+                if user_id is not None:
+                    gids = [g.id for g in people.google_of(c, user_id)]
+                    if any(_google_running(c, gid) for gid in gids):
+                        raise AccountBusy("Google Play")
+                    c.execute("DELETE FROM google_accounts WHERE user_id=?", (user_id,))
+                for gid in gids:
+                    _google_apps_gone(c, gid)
+                gone = [s for s in (_drop_user_if_empty(c, uid) for uid in uids) if s is not None]
+                # HOME — под метку последним шагом: Worker.recover удаляет только помеченные и без строки Apple ID,
+                # а сбой до COMMIT (строка осталась) возвращает имя — здесь или при старте
+                for a in fresh:
+                    home = cfg.accounts_dir / str(a.id)
+                    mark = home.with_name(f"{DELETED_HOME}{a.id}")
+                    if home.is_dir():
+                        home.replace(mark)
+                        marked.append((home, mark))
+        except BaseException:
+            for home, mark in reversed(marked):
+                try:
+                    mark.replace(home)
+                except OSError as e:  # вернёт Worker.recover при старте: строка Apple ID осталась
+                    print(f"appshelf: HOME Apple ID №{home.name} не возвращён: {e.strerror}", file=sys.stderr)
+            raise
         for shelf in gone:
             _drop_android_dirs(cfg, shelf)
         for uid in uids:
@@ -359,7 +377,8 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
             store.rmtree_logged(cfg.shelf_root(a))
             if a.shelf_next:  # перенос прервался после переименования каталога
                 store.rmtree_logged(cfg.archive / a.shelf_next)
-            store.rmtree_logged(cfg.accounts_dir / str(a.id))
+        for _, mark in marked:
+            store.rmtree_logged(mark)
     for lock in locks:
         _drop_lock(lock)
 
@@ -694,8 +713,10 @@ class Worker:
 
     def recover(self) -> None:
         """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь, как и временные HOME входов
-        новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME удалённых посреди входа Apple ID; версии
-        Android, ждущие решения по подписи под угадываемым именем каталога, — под случайное."""
+        новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME с меткой удаления (_remove), чьей строки
+        Apple ID нет; есть строка — удаление не дошло до COMMIT, имя возвращается. HOME без метки и без Apple ID не
+        трогаются: база могла их временно не видеть (не тот data_dir, старый снимок) — их показывает appshelf check.
+        Версии Android, ждущие решения по подписи под угадываемым именем каталога, — под случайное."""
         c = self.connect()
         try:
             store.requeue_running(c)
@@ -712,8 +733,14 @@ class Worker:
         finally:
             c.close()
         for home in cfg.accounts_dir.glob("*"):
-            if home.name.startswith(".new-") or (home.name.isdigit() and home.name not in known):
+            aid = home.name.removeprefix(DELETED_HOME)
+            if home.name.startswith(".new-"):
                 shutil.rmtree(home, ignore_errors=True)
+            elif home.name.startswith(DELETED_HOME) and aid.isdigit():
+                if aid not in known:  # удаление Apple ID дошло до COMMIT, а каталог убрать не успели
+                    shutil.rmtree(home, ignore_errors=True)
+                elif not (cfg.accounts_dir / aid).exists():  # сбой до COMMIT: Apple ID остался — и его учётка
+                    home.replace(cfg.accounts_dir / aid)
         for lock in [*cfg.locks_dir.glob("*.lock"), *cfg.locks_dir.glob("*.wait")]:
             if lock.stem.startswith(".new-") or (lock.stem.isdigit() and lock.stem not in known):
                 lock.unlink(missing_ok=True)

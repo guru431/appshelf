@@ -116,6 +116,18 @@ def test_orphans_are_reported_not_removed(two, cfg, conn, clock):
     assert tree(cfg.archive) == files_before
 
 
+def test_ipatool_home_without_apple_id(two, cfg, conn):
+    """HOME без строки Apple ID сам не удаляется (Worker.recover убирает только помеченные): его показывает check
+    живой базы; снимок с другим набором Apple ID его не видит."""
+    for name in ("1", str(two["petr_acct"].id), "77", ".new-0123456789abcdef", ".deleted-78"):
+        (cfg.accounts_dir / name).mkdir(parents=True)
+    files_before = tree(cfg.accounts_dir)
+    assert integrity.check(cfg, conn).ok
+    rep = integrity.check(cfg, conn, homes=True)
+    assert [(p.kind, p.account) for p in rep.problems] == [("orphan_home", 77)]
+    assert "Apple ID №77" in rep.text() and tree(cfg.accounts_dir) == files_before
+
+
 def test_shelf_dir_missing_and_version_dir_missing(cfg, conn, clock):
     own = owner(conn, clock)
     petr = make_account(conn, clock, email=PETR, role="member", legacy=False)

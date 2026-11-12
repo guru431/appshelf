@@ -216,7 +216,7 @@ def _integrity(env: Env, c) -> str:
     письмо владельцу, одно на эпизод; чистая проверка эпизод закрывает."""
     try:
         with hold(env.cfg.download_lock):
-            rep = integrity.check(env.cfg, c)
+            rep = integrity.check(env.cfg, c, homes=True)
         if rep.ok:
             notify.reset(c, INTEGRITY_KEY)
             return f"{INTEGRITY}проблем нет"
