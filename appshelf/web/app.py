@@ -20,7 +20,7 @@ from ..android.sources import Sources
 from ..config import GB, Config, from_env
 from ..nightly import result_for
 from . import accounts, admin, android, google_signin, pwa, signin
-from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png
+from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png, safe_next
 from .login import Limiter, LoginFlow
 
 PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
@@ -35,6 +35,7 @@ NEW_VERSION_DAYS = 7  # метка «новая версия» в каталог
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
 SHELF_BUSY = "Полка занята скачиванием — повторите через минуту"
+APPLE_HOME = "/?os=apple"  # каталог Apple после действий и «Отмена»: «/» с телефона Android ведёт в Android-раздел
 STATE_LINKS = (("recent", "новые за неделю"), ("errors", "ошибки"), ("active", "в очереди"))  # значения filter_shelf
 BLOCKED_FILTERS = {"owned": "Есть в аккаунте", "unknown": "Не проверено", "missing": "Нет в аккаунте",  # «Удалённые»
                    "failed": "Ошибка проверки", "all": "Все"}
@@ -106,7 +107,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         """Нет того, с чем работала страница (удалили в другой вкладке, чужое): 404 страницей с путём назад."""
         android = request.url.path.startswith("/android")
         return w.page(request, "confirm.html", "a_catalog" if android else "catalog", 404, refused=True,
-                      cancel="/android" if android else "/", question=text)
+                      cancel="/android" if android else APPLE_HOME, question=text)
 
     @app.exception_handler(store.AppGone)
     async def app_gone(request, error):
@@ -188,9 +189,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def not_found():
         return PlainTextResponse("not found", status_code=404)
 
-    def done(request: Request, path: str = "/"):
+    def done(request: Request, path: str = APPLE_HOME):
         """Действие выполнено на полке из ?account= — она и становится активной: иначе ответ показал бы полку из
-        cookie, которую могла переключить другая вкладка, и действие выглядело бы несработавшим."""
+        cookie, которую могла переключить другая вкладка, и действие выглядело бы несработавшим. Каталог — с ?os=apple:
+        «/» с телефона Android увёл бы в Android-раздел."""
         resp = back(path)
         w.set_cookie(resp, ACCT_COOKIE, str(request.state.acct.id), webauth.COOKIE_AGE)
         return resp
@@ -424,13 +426,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return done(request, "/history")
 
     @app.post("/apps/{app_id}/publish")
-    def publish(request: Request, app_id: int):
+    def publish(request: Request, app_id: int, back_url: str = Form("", alias="back")):
+        """Возврат — на список, с которого публиковали («Покупки», «Удалённые» с поиском, фильтром и сортировкой):
+        публикуют подряд несколько. Только свой путь; без него — каталог."""
         aid = request.state.acct.id
         with w.conn() as c:
             if not store.has_purchase(c, aid, app_id):  # чужое или несуществующее — как нет
                 return gone(request, "Покупка не найдена на этой полке.")
             store.publish(c, aid, app_id, now())
-        return done(request)
+        target = safe_next(back_url)
+        return done(request, target) if target != "/" else done(request)
 
     @app.post("/apps/{app_id}/retry")
     def retry(request: Request, app_id: int):
@@ -457,8 +462,30 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             store.check_update(c, aid, app_id, now())
         return done(request)
 
+    def unpublish_page(request: Request, app_id: int):
+        """Подтверждение «Снять с публикации»: удаляются все версии, и закреплённые тоже, — их список с размерами."""
+        with w.conn() as c:
+            item = next((x for x in store.list_apps(c, request.state.acct.id) if x.app_id == app_id), None)
+        if item is None:
+            return gone(request)
+        roles = {"current": "текущая", "previous": "предыдущая", "kept": "сохранённая"}
+        versions = [{"name": v["version"], "size": v["size"],
+                     "notes": [roles[v["role"]]] + (["закреплена"] if v["pinned"] else [])}
+                    for v in (item.current, item.previous, item.kept) if v is not None]
+        return w.page(request, "confirm.html", "catalog",
+                      question=f"Снять с публикации «{item.name}»? Файлы IPA и ссылки установки всех версий удалятся, "
+                               "включая закреплённые." if versions else f"Снять с публикации «{item.name}»?",
+                      versions=versions, action=f"/apps/{app_id}/unpublish", button="Снять с публикации",
+                      cancel=APPLE_HOME, hidden={"confirm": "1"})
+
+    @app.get("/apps/{app_id}/unpublish", response_class=HTMLResponse)
+    def confirm_unpublish(request: Request, app_id: int):
+        return unpublish_page(request, app_id)
+
     @app.post("/apps/{app_id}/unpublish", response_class=HTMLResponse)
-    def unpublish(request: Request, app_id: int):
+    def unpublish(request: Request, app_id: int, confirm: str = Form("")):
+        if confirm != "1":  # форма открытой до подтверждения страницы — сначала вопрос
+            return unpublish_page(request, app_id)
         a = request.state.acct
         with w.conn() as c:
             if not store.has_app(c, a.id, app_id):
@@ -503,7 +530,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             row = store.old_version(c, request.state.acct.id, app_id, version_id)
         if row is None:
-            return w.page(request, "confirm.html", "catalog", 404, refused=True, cancel="/",
+            return w.page(request, "confirm.html", "catalog", 404, refused=True, cancel=APPLE_HOME,
                           question="Версия не найдена: её уже удалили, или она стала текущей.")
         pinned = " Закрепление будет снято." if row["pinned"] else ""
         return w.page(request, "confirm.html", "catalog", 409 if changed else 200,
@@ -512,7 +539,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                       error="Версия изменилась, пока страница была открыта, — проверьте и подтвердите снова."
                       if changed else "",
                       action=f"/apps/{app_id}/versions/{version_id}/remove", button="Удалить версию",
-                      cancel="/",
+                      cancel=APPLE_HOME,
                       hidden={"snapshot": store.version_snapshot(row)})
 
     @app.get("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)

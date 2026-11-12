@@ -73,7 +73,8 @@ def test_cross_origin_post_forbidden(web, conn, cfg, clock):
     r = web.client.post("/apps/123/unpublish", headers={"Origin": "https://evil.example",
                                                         "X-Forwarded-Host": f"evil.example, {HOST}"})
     assert r.status_code == 403 and store.list_apps(conn, 1)
-    r = web.client.post("/apps/123/unpublish", headers={"Origin": f"https://{HOST}"}, follow_redirects=False)
+    r = web.client.post("/apps/123/unpublish", data={"confirm": "1"}, headers={"Origin": f"https://{HOST}"},
+                        follow_redirects=False)
     assert r.status_code == 303 and store.list_apps(conn, 1) == []
 
 
@@ -168,8 +169,27 @@ def test_publish_and_unpublish(web, conn, cfg, clock, acct):
     root = cfg.shelf_root(acct)
     (root / "7-1.0").mkdir(parents=True)
     store.add_version(conn, 1, root, 7, store.NewVersion("1.0", "1", "900", "13.0", "iphone", 1, "7-1.0"), clock.iso())
-    web.client.post("/apps/7/unpublish")
+    page = web.client.get("/apps/7/unpublish")                # «⋯» → «Снять…» — сначала вопрос со списком версий
+    assert page.status_code == 200 and "Снять с публикации «VK»?" in page.text and "<li>1.0 · < 1 МБ · текущая</li>" \
+        in page.text.replace("&lt;", "<") and 'name="confirm" value="1"' in page.text
+    assert 'href="/?os=apple"' in page.text and store.list_apps(conn, 1)
+    r = web.client.post("/apps/7/unpublish")                 # форма старой страницы без подтверждения — тот же вопрос
+    assert r.status_code == 200 and "Снять с публикации «VK»?" in r.text and store.list_apps(conn, 1)
+    r = web.client.post("/apps/7/unpublish", data={"confirm": "1"}, follow_redirects=False)
+    assert r.headers["location"] == "/?os=apple"
     assert store.list_apps(conn, 1) == [] and not (root / "7-1.0").exists()
+
+
+def test_publish_returns_to_list_with_search_and_sort(web, conn, clock):
+    # публикуют подряд несколько приложений из «Покупок» или «Удалённых»: поиск, фильтр и сортировка остаются
+    store.upsert_purchases(conn, 1, [{"id": 7, "bundleId": "com.vk.vkclient", "name": "VK"}], clock.iso())
+    page = web.client.get("/history", params={"q": "vk", "sort": "date", "dir": "asc"}).text
+    assert 'name="back" value="/history?q=vk&amp;sort=date&amp;dir=asc"' in page
+    r = web.client.post("/apps/7/publish", data={"back": "/history?q=vk&sort=date&dir=asc"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/history?q=vk&sort=date&dir=asc"
+    for back in ("", "//evil.example/x", "https://evil.example/"):
+        r = web.client.post("/apps/7/publish", data={"back": back}, follow_redirects=False)
+        assert r.headers["location"] == "/?os=apple", back
 
 
 def test_api_status(web, conn, cfg, clock):
@@ -344,7 +364,7 @@ def test_link_to_catalog_app_without_license_is_not_owned(web, conn, monkeypatch
     assert store.list_apps(conn, 1)[0].status == "nolicense"                  # повторять бесполезно
     text = web.client.get("/blocked").text
     assert "Есть в аккаунте · 0" in text and "Нет в аккаунте · 1" in text and "state-missing" in text
-    web.client.post("/apps/492224193/unpublish")
+    web.client.post("/apps/492224193/unpublish", data={"confirm": "1"})
     assert store.list_purchases(conn, 1) == []                                # ложной покупки в «Истории» нет
 
 
@@ -412,7 +432,7 @@ def test_theme_switch_returns_without_referer(web):
 def test_unpublish_refused_while_archive_unavailable(web, conn, cfg, clock):
     seed_app(conn, cfg, clock, versions=("1.0",))
     cfg.archive.rmdir()                                    # шара отвалилась: файлы остались бы без строк
-    r = web.client.post("/apps/123/unpublish")
+    r = web.client.post("/apps/123/unpublish", data={"confirm": "1"})
     assert r.status_code == 503 and "снять с публикации сейчас нельзя" in r.text
     assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
 

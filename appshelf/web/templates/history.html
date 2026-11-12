@@ -27,7 +27,7 @@
     {%- if r['bundle_id'] %}{{ r['bundle_id'] }}{% if r['purchase_date'] %} · <span class="date">{{ r['purchase_date'][:10] }}</span>{% endif %}
     {%- else %}ID {{ r['app_id'] }}{% endif %}</div></div>
   <div class="act">{% if r['published'] %}<span class="meta done">в каталоге</span>{% else %}
-    <form method="post" action="{{ post_url('/apps/' ~ r['app_id'] ~ '/publish') }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>
+    <form method="post" action="{{ post_url('/apps/' ~ r['app_id'] ~ '/publish') }}"><input type="hidden" name="back" value="{{ here }}"><button class="sm tint">Опубликовать</button></form>{% endif %}</div>
 </div>
 {% else %}
 <div class="row hint">{% if q %}Ничего не найдено{% elif refreshing %}Загружаю историю…{% elif refreshed %}История загружена — покупок в ней нет.{% else %}История ещё не загружалась — нажмите «Обновить историю» (нужен вход в Apple ID).{% endif %}</div>

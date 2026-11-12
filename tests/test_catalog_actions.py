@@ -9,7 +9,7 @@ def test_unpublish_while_shelf_busy_says_so(web, conn, cfg, clock, monkeypatch):
     seed_app(conn, cfg, clock, versions=("1.0",))
     monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
     with ipatool.hold(cfg.download_lock):                  # чьё-то скачивание IPA или APK
-        r = web.client.post("/apps/123/unpublish")
+        r = web.client.post("/apps/123/unpublish", data={"confirm": "1"})
     assert r.status_code == 503 and "Полка занята скачиванием" in r.text
     assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
 
@@ -50,7 +50,7 @@ def test_stale_version_confirmation_asks_again(web, conn, cfg, clock):
     assert web.client.post(url, data={"snapshot": fresh}, follow_redirects=False).status_code == 303
     gone = web.client.post(url, data={"snapshot": fresh})                   # уже удалена: страница, не голый текст
     assert gone.status_code == 404 and gone.headers["content-type"].startswith("text/html")
-    assert "Версия не найдена" in gone.text and 'href="/"' in gone.text
+    assert "Версия не найдена" in gone.text and 'href="/?os=apple"' in gone.text
     assert web.client.get(url).status_code == 404 and "Версия не найдена" in web.client.get(url).text
 
 
@@ -124,7 +124,19 @@ def test_check_all_updates_once(web, conn, cfg, clock):
 def test_action_on_missing_app_is_a_page_with_way_back(web, conn, cfg, clock):
     r = web.client.post("/apps/999/unpublish")              # сняли в другой вкладке
     assert r.status_code == 404 and r.headers["content-type"].startswith("text/html")
-    assert "Приложение не найдено" in r.text and 'href="/"' in r.text
+    assert "Приложение не найдено" in r.text and 'href="/?os=apple"' in r.text
+
+
+def test_apple_action_from_android_phone_stays_in_apple_section(web, conn, cfg, clock):
+    # «/» с телефона Android ведёт в Android-раздел: после Apple-действия человек оказался бы не там, где действовал
+    seed_app(conn, cfg, clock, versions=("1.0", "2.0"))
+    phone = {"user-agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8)"}
+    r = web.client.post("/apps/check", headers=phone, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/?os=apple"
+    assert web.client.get(r.headers["location"], headers=phone).context["nav"] == "catalog"
+    assert 'href="/?os=apple"' in web.client.post("/apps/999/unpublish", headers=phone).text
+    old = conn.execute("SELECT id FROM versions WHERE role='previous'").fetchone()[0]
+    assert 'href="/?os=apple"' in web.client.get(f"/apps/123/versions/{old}/remove", headers=phone).text
 
 
 def test_app_gone_during_action_is_a_page(web, conn, cfg, clock, monkeypatch):

@@ -1,5 +1,6 @@
 import io
 import json
+import re
 from dataclasses import replace
 
 import pytest
@@ -504,10 +505,24 @@ def test_remove_and_pin(web, conn, cfg, tmp_path):
     vid = db.list_apps(conn, shelf(conn).id)[0].current["id"]
     assert web.client.post(f"/android/apps/{PKG}/versions/{vid}/pin", follow_redirects=False).status_code == 303
     assert db.list_apps(conn, shelf(conn).id)[0].current["pinned"] == 1
+    files = {"file": ("b.apk", make_apk(tmp_path / "b.apk", version_code=2, version_name="2").read_bytes())}
+    web.client.post(f"/android/apps/{PKG}/upload", files=files)
+    work(web, conn)
+    assert 'class="btn danger" href="/android/apps/' + PKG + '/remove?person=1"' in web.client.get("/android").text
+    page = web.client.get(f"/android/apps/{PKG}/remove?person=1")        # «Снять с полки» — сначала вопрос
+    items = re.findall(r"<li>(.*?)</li>", page.text.replace("&lt;", "<"))
+    assert items == ["2 · < 1 МБ · текущая · свой файл: единственная копия на этой полке",
+                     "1.0 · < 1 МБ · предыдущая · закреплена"], items
+    assert 'name="confirm" value="1"' in page.text and 'href="/android?person=1"' in page.text
+    assert "у гостей" not in page.text
+    r = web.client.post(f"/android/apps/{PKG}/remove")                   # форма старой страницы — тот же вопрос
+    assert r.status_code == 200 and "Снять с полки" in r.text and len(db.list_apps(conn, shelf(conn).id)) == 1
     web.client.post(f"/android/apps/{PKG}/versions/{vid}/unpin")
-    assert db.list_apps(conn, shelf(conn).id)[0].current["pinned"] == 0
-    web.client.post(f"/android/apps/{PKG}/remove")
+    assert db.list_apps(conn, shelf(conn).id)[0].previous["pinned"] == 0
+    web.client.post(f"/android/apps/{PKG}/remove", data={"confirm": "1"})
     assert db.list_apps(conn, shelf(conn).id) == [] and not list((cfg.archive / shelf(conn).shelf).iterdir())
+    r = web.client.get(f"/android/apps/{PKG}/remove?person=1")
+    assert r.status_code == 404 and "уже нет на полке" in r.text
 
 
 def test_remove_after_interrupted_rotation_clears_new_dir(web, conn, cfg, tmp_path):

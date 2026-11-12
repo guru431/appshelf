@@ -18,12 +18,12 @@ from pathlib import Path
 from fastapi import Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
-from .. import apk, ipatool, jobs, notify, people, store
+from .. import apk, ipatool, jobs, notify, people, store, webauth
 from ..android import db, fdroid_index, fetch, forge, github, links, net, pin, play
 from ..config import GB
 from ..nightly import SEP
 from .admin import owner_only
-from .common import TEMPLATES, back, filter_shelf, mutation_url, qr_png
+from .common import TEMPLATES, WHO_COOKIE, back, filter_shelf, mutation_url, qr_png
 
 OS_COOKIE = "appshelf_os"   # раздел, открытый последним: apple | android — для компьютера (spec §5)
 SOURCES = {"rustore": "RuStore", "link": "сайт", "upload": "свой файл", "play": "Google Play",
@@ -166,7 +166,7 @@ def register_routes(app, w) -> None:
             if original is None:
                 return PlainTextResponse('not found', status_code=404)
             plan = copy_preview(c, source, db.public_shelf(c), package)
-        return w.page(request, 'public_copy.html', 'a_public', status, package=package, plan=plan,
+        return w.page(request, 'public_copy.html', 'a_public_add', status, package=package, plan=plan,
                       error=error, sources=SOURCES)
 
     @app.get('/android/public/add/from-shelf', dependencies=owner)
@@ -323,6 +323,15 @@ def _register_scope(app, w, scope: Scope):
     def not_found():
         return PlainTextResponse("not found", status_code=404)
 
+    def shelf_back(request: Request):
+        """Действие выполнено на полке из ?person= — её участник и становится активным: иначе ответ показал бы полку
+        из cookie, которую могла переключить другая вкладка (как done() Apple-полок). Публичная полка одна — выбор
+        участника она не трогает."""
+        resp = back(p)
+        if not scope.public:
+            w.set_cookie(resp, WHO_COOKIE, str(request.state.who.id), webauth.COOKIE_AGE)
+        return resp
+
     def shelf_of(c, request: Request):
         return db.public_shelf(c) if scope.public else db.shelf_for_user(c, request.state.who.id)
 
@@ -408,7 +417,7 @@ def _register_scope(app, w, scope: Scope):
             mine = _owner_shelf(c, request) if scope.public else None
             own_apps = [a for a in db.list_apps(c, mine.id) if a.current is not None] if mine else []
         play_accounts = [g for g in accounts if g.play == "ok"]
-        return w.page(request, "android_add.html", "a_public" if scope.public else "a_add", status_code, q=q,
+        return w.page(request, "android_add.html", "a_public_add" if scope.public else "a_add", status_code, q=q,
                       found=found, search_errors=search_errors, sources=SOURCES,
                       on_shelf=on_shelf, error=error, link_url=link_url,
                       prefix=p, public=scope.public, play_accounts=play_accounts, has_google=bool(accounts),
@@ -553,14 +562,14 @@ def _register_scope(app, w, scope: Scope):
                                google_account_id=account, paid=paid)
                     db.enqueue(c, shelf.id, "add", w.now(), package=package,
                                payload={"source": source, "ref": ref or package, **payload})
-        return back(p)
+        return shelf_back(request)
 
     def add_checked_play(request: Request, package: str, acct, link_url: str = ""):
         """Все способы добавления из Play проверяют доступ и состав APK до записи карточки и задания."""
         with w.conn() as c:
             _, existing = own(c, request, package)
         if existing is not None:
-            return back(p)
+            return shelf_back(request)
         try:
             checked = w.env.sources.play_app(package, account=acct,
                                              allow_paid=not scope.public and acct.user_id == request.state.who.id)
@@ -608,7 +617,7 @@ def _register_scope(app, w, scope: Scope):
             return add_package(request, source, package, name, payload, ref=ref)
         with w.conn() as c, store.tx(c):
             db.enqueue(c, ensure(c, request).id, "add", w.now(), payload=payload)
-        return back(p)
+        return shelf_back(request)
 
     @app.post(f"{p}/add/rustore", response_class=HTMLResponse, dependencies=deps)
     def add_rustore(request: Request, package: str = Form(""), name: str = Form("")):
@@ -668,7 +677,7 @@ def _register_scope(app, w, scope: Scope):
         with w.conn() as c, store.tx(c):
             shelf = ensure(c, request)
             db.enqueue(c, shelf.id, "add", w.now(), payload=payload)
-        return back(p)
+        return shelf_back(request)
 
     @app.post(f"{p}/add/upload", response_class=HTMLResponse, dependencies=deps)
     def add_upload(request: Request, file: UploadFile | None = File(None), name: str = Form("")):
@@ -683,7 +692,7 @@ def _register_scope(app, w, scope: Scope):
         except BaseException:
             path.unlink(missing_ok=True)
             raise
-        return back(p)
+        return shelf_back(request)
 
     @app.post(p + "/apps/{package}/upload", response_class=HTMLResponse, dependencies=deps)
     def upload_version(request: Request, package: str, file: UploadFile | None = File(None)):
@@ -703,7 +712,7 @@ def _register_scope(app, w, scope: Scope):
         except BaseException:
             path.unlink(missing_ok=True)
             raise
-        return back(p)
+        return shelf_back(request)
 
     @app.post(p + "/apps/{package}/retry", dependencies=deps)
     @app.post(p + "/apps/{package}/check", dependencies=deps)
@@ -713,7 +722,7 @@ def _register_scope(app, w, scope: Scope):
             if app_row is None:
                 return not_found()
             requeue(c, shelf, app_row)
-        return back(p)
+        return shelf_back(request)
 
     def change(request: Request, package: str, fn, missing=not_found):
         """Действие, которое может удалить каталоги на полке: архив недоступен — 503 и ничего не тронуто.
@@ -728,10 +737,43 @@ def _register_scope(app, w, scope: Scope):
             return catalog_page(request, 503, ARCHIVE_DOWN)
         except ipatool.IpatoolError:
             return catalog_page(request, 409, "Полка занята скачиванием — повторите через минуту")
-        return back(p) if done else missing()
+        return shelf_back(request) if done else missing()
+
+    def remove_page(request: Request, package: str):
+        """Подтверждение «Снять с полки»: удаляются все версии, и закреплённые, и свои файлы, которых больше нигде
+        нет, — их список с размерами; с публичной приложение пропадёт и у гостей."""
+        with w.conn() as c:
+            shelf, app_row = own(c, request, package)
+            rows = c.execute("SELECT version_name, size, role, pinned, source FROM android_versions WHERE shelf_id=? "
+                             "AND package=? ORDER BY version_code DESC, id DESC",
+                             (shelf.id, package)).fetchall() if app_row is not None else []
+        cancel = p if scope.public else p + f"?person={request.state.who.id}"
+        if app_row is None:
+            return w.page(request, "confirm.html", scope.nav, 404, refused=True, cancel=cancel,
+                          question="Этого приложения уже нет на полке: его сняли в другой вкладке.")
+        roles = {"current": "текущая", "previous": "предыдущая", "kept": "сохранённая", "pending": "ждёт решения"}
+        versions = [{"name": r["version_name"], "size": r["size"],
+                     "notes": [roles.get(r["role"], r["role"])] + (["закреплена"] if r["pinned"] else [])
+                     + (["свой файл: единственная копия на этой полке"] if r["source"] == "upload" else [])}
+                    for r in rows]
+        name = app_row["name"]
+        return w.page(request, "confirm.html", scope.nav,
+                      question=f"Снять с полки «{name}»? Файлы APK и ссылки установки всех версий удалятся, включая "
+                               "закреплённые." if versions else f"Снять с полки «{name}»?",
+                      versions=versions, action=f"{p}/apps/{package}/remove", button="Снять с полки", cancel=cancel,
+                      warning="Приложение пропадёт с публичной полки и у гостей: их ссылки установки перестанут "
+                              "работать." if scope.public else "",
+                      hidden={"confirm": "1"})
+
+    @app.get(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
+    def confirm_remove(request: Request, package: str):
+        return remove_page(request, package)
 
     @app.post(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
-    def remove(request: Request, package: str):
+    def remove(request: Request, package: str, confirm: str = Form("")):
+        if confirm != "1":  # форма открытой до подтверждения страницы — сначала вопрос
+            return remove_page(request, package)
+
         def drop(c, root, sid):
             db.remove_app(c, root, sid, package)
             return True
@@ -830,7 +872,7 @@ def _register_scope(app, w, scope: Scope):
             db.set_source(c, shelf.id, package, source, ref)
             requeue(c, shelf, db.get_app(c, shelf.id, package), ack=ack == "1",
                     previous=[old["source"], old["source_ref"], old["source_etag"], old["source_page"]])
-        return back(p)
+        return shelf_back(request)
 
     @app.post(p + "/jobs/{job_id}/dismiss", dependencies=deps)
     def dismiss(request: Request, job_id: int):
@@ -838,7 +880,7 @@ def _register_scope(app, w, scope: Scope):
             shelf = shelf_of(c, request)
             if shelf is not None:
                 db.dismiss_job(c, shelf.id, job_id)
-        return back(p)
+        return shelf_back(request)
 
     @app.post(p + "/jobs/{job_id}/alternative", dependencies=deps)
     def alternative(request: Request, job_id: int, source: str = Form("")):
@@ -854,13 +896,13 @@ def _register_scope(app, w, scope: Scope):
                     or not apk.PACKAGE_RE.fullmatch(package):
                 return not_found()
             if db.has_current(c, shelf.id, package) or db.active_for(c, shelf.id, package):
-                return back(p)
+                return shelf_back(request)
             db.put_app(c, shelf.id, package, payload.get("name") or package, source, package, w.now())
             db.set_source(c, shelf.id, package, source, package)
             db.set_status(c, shelf.id, package, "queued", "")
             db.enqueue(c, shelf.id, "add", w.now(), package=package,
                        payload={"source": source, "ref": package, "name": payload.get("name", "")})
             db.dismiss_job(c, shelf.id, job_id)
-        return back(p)
+        return shelf_back(request)
 
     return catalog_page

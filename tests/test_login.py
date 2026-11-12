@@ -346,6 +346,20 @@ def test_double_submit_of_code_joins_first_finish():
     assert f._finishing == {}
 
 
+def test_code_step_with_other_code_gets_no_outcome():
+    # чужой запрос с тем же flow_id (попал в окно шага 1 с тем же паролем) и другим кодом: итог первого не отдаётся
+    f, _, _ = flow()
+    tool = needs_code()
+    _, flow_id, _ = f.start(tool, KNOWN, "pw")
+    f.finish(flow_id, "123456")
+    f.settle(flow_id, (1, 1))
+    with pytest.raises(LoginExpired) as refused:
+        f.finish(flow_id, "654321")
+    assert refused.value.email == KNOWN.email and len(tool.calls) == 2
+    with pytest.raises(LoginFinished):                        # двойное «Войти» с тем же кодом — прежний итог
+        f.finish(flow_id, "123456")
+
+
 def test_limiter_global_minute_and_apple_id_hour():
     clock = Clock()
     lim = Limiter(clock.monotonic)

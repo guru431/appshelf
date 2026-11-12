@@ -363,8 +363,10 @@ sign-in it waits for one. If Apple refuses, the current version stays and instal
 last check (by the button or at night): "checked DD.MM HH:MM UTC — no newer version / new version downloaded /
 failed: …"; this is about the shelf, not the version on the phone.
 "Проверить обновления всех" (check all for updates) above the catalog queues this check for every app on the shelf.
-"Снять с публикации" (unpublish) while any download runs answers "Полка занята скачиванием" (shelf busy) — retry in
-a minute.
+"Снять с публикации" (unpublish) first shows a confirmation listing every version with its size (pinned ones are
+marked: they are deleted too); while any download runs it answers "Полка занята скачиванием" (shelf busy) — retry in
+a minute. "Снять с полки" (remove from shelf) on an Android shelf is confirmed the same way; on the public shelf the
+page warns that guests lose the app too.
 
 ## Android
 

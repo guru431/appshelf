@@ -19,7 +19,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from .. import jobs, notify, people, store, webauth
 from ..ipatool import IpatoolError
 from .common import ACCT_COOKIE, INVITE_COOKIE, LOGIN_COOKIE, WHO_COOKIE, WebCtx, back, back_to, safe_next
-from .login import TTL, Intent, LoginBusy, LoginExpired, LoginFinished, LoginInProgress, LoginJoined, drop_home
+from .login import (TTL, Intent, LoginBusy, LoginCodeMismatch, LoginExpired, LoginFinished, LoginInProgress,
+                    LoginJoined, drop_home)
 
 LOGIN_ERRORS = {
     "edge_rejected": "Apple отклонил запрос входа — попробуйте позже или сообщите владельцу",
@@ -299,9 +300,9 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                               next_="/apple" if add else next, error=error, status_code=status_code,
                               action="/apple/add" if add else "/login", add=add)
 
-        # шага нет — возможно, это повторное «Войти»: finish отдаст итог первого запроса
+        # шага нет — возможно, это повторное «Войти»: finish отдаст итог первого запроса, если код тот же
+        code = "".join(code.split())
         if pending is not None:
-            code = "".join(code.split())
             if not (code.isdigit() and len(code) == 6):  # опечатка в форме — не попытка входа, шаг не расходуем
                 return again("Код — 6 цифр", 400, step=2)
         if pending is not None and pending.account_id is not None:
@@ -317,6 +318,10 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
             with w.conn() as c:
                 user = people.get_user(c, uid)
             return admitted(w, request, user, aid, next) if user is not None else again(EXPIRED_STEP, 400)
+        except LoginCodeMismatch as e:  # чужой запрос с тем же flow_id — как неверный код
+            w.limiter.fail()
+            w.limiter.email_fail(e.email)
+            return again(EXPIRED_STEP, 400)
         except LoginExpired:
             return again(EXPIRED_STEP, 400)
         except LoginJoined as e:  # отказ первого из двух одинаковых запросов: неудача уже посчитана

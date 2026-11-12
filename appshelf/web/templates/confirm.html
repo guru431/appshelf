@@ -2,6 +2,8 @@
 {% block main %}
 <div class="card">
 <p>{{ question }}</p>
+{% if versions %}<ul>{% for v in versions %}<li>{{ v.name }} · {{ v.size | mb }} МБ{% for note in v.notes %} · {{ note }}{% endfor %}</li>{% endfor %}</ul>{% endif %}
+{% if warning %}<div class="banner"><p>{{ warning }}</p></div>{% endif %}
 {% if conflicts %}
 <div class="banner"><p>У совпадающих приложений останется версия принимающей полки. Вся история уходящей полки,
 включая закреплённые APK, будет удалена:</p>

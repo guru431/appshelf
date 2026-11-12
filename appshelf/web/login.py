@@ -3,6 +3,7 @@
 Входить могут несколько человек сразу — у каждого входа свой id (cookie браузера)."""
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 import shutil
@@ -30,6 +31,15 @@ def _timer(delay: float, fn):
 
 class LoginExpired(Exception):
     """Шаг 2 без шага 1 или после TTL."""
+
+
+class LoginCodeMismatch(LoginExpired):
+    """Повтор шага 2 с другим кодом: не двойное «Войти», а чужой запрос с тем же flow_id — итог первого не отдаём,
+    это неудача входа Apple ID email."""
+
+    def __init__(self, email: str):
+        super().__init__("code mismatch")
+        self.email = email
 
 
 class LoginBusy(Exception):
@@ -107,8 +117,11 @@ class _Running:
 
 @dataclass
 class _Finishing:
-    """Шаг 2 у Apple или только что завершённый: повторное «Войти» с той же cookie получит его итог. Пароля нет."""
+    """Шаг 2 у Apple или только что завершённый: повторное «Войти» с той же cookie и тем же кодом получит его итог.
+    Пароля нет, кода — только хэш."""
     expires: float
+    email: str
+    code: bytes = field(repr=False)      # SHA-256 кода первого запроса
     done: threading.Event = field(default_factory=threading.Event)
     outcome: object = None               # что передал settle: у signin — (user_id, account_id)
     error: IpatoolError | None = None
@@ -218,15 +231,19 @@ class LoginFlow:
 
         Повтор с тем же flow_id (двойное «Войти»: браузер бросает первый запрос, а с ним и cookie входа) к Apple не
         идёт: ждёт первый и получает его итог — LoginFinished(итог settle) или LoginJoined(отказ Apple). Итог
-        хранится join_wait после конца первого запроса; позже или без итога — LoginExpired."""
+        хранится join_wait после конца первого запроса; позже или без итога — LoginExpired. Повтор с другим кодом —
+        LoginCodeMismatch: flow_id мог получить и другой браузер, тем же паролем попавший в окно шага 1."""
         self.purge()
+        digest = hashlib.sha256(code.encode()).digest()
         with self._lock:
             p = self._pending.pop(flow_id, None)
             if p is None:
                 other = self._finishing.get(flow_id)
             else:
-                mine = self._finishing[flow_id] = _Finishing(self.clock() + self.ttl)
+                mine = self._finishing[flow_id] = _Finishing(self.clock() + self.ttl, p.intent.email, digest)
         if p is None:
+            if other is not None and not hmac.compare_digest(digest, other.code):
+                raise LoginCodeMismatch(other.email)
             if other is None or not other.done.wait(self.join_wait):
                 raise LoginExpired()
             if other.error is not None:

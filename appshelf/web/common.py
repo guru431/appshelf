@@ -4,7 +4,7 @@ from __future__ import annotations
 import io
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -34,13 +34,14 @@ CREATED_COOKIE = "appshelf_created"  # новая ссылка до показа
 # публичной полки) на https — с префиксом __Host- (браузер требует Secure, Path=/ и не
 # принимает Domain): соседний поддомен не подложит их на родительский домен. Имена в коде — без префикса, его ставит
 # WebCtx. Старые имена (без префикса) WebCtx.cookie читает только у долгоживущих (LEGACY_COOKIES) — год после
-# выкладки префикса, столько живёт cookie входа, а новых со старым именем уже не ставят: после 2028-01-01 (выкладка —
-# до 2027-01-01; позже — сдвинуть) чтение старых имён убрать. Потоки входа и приглашения живут минуты и сутки — их
-# старые имена не читаются: иначе подложенное с соседнего поддомена значение сработало бы до 2028 года.
+# выкладки префикса, столько живёт cookie входа, а новых со старым именем уже не ставят: до LEGACY_UNTIL (выкладка —
+# до 2027-01-01; позже — сдвинуть), после него не читает, а код чтения можно убрать. Потоки входа и приглашения живут
+# минуты и сутки — их старые имена не читаются: иначе подложенное с соседнего поддомена значение сработало бы до 2028 года.
 HOST_PREFIX = "__Host-"
 HOST_COOKIES = frozenset((webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, google.COOKIE, LOGIN_COOKIE, INVITE_COOKIE,
                           CREATED_COOKIE, pin.COOKIE))
 LEGACY_COOKIES = frozenset((webauth.COOKIE, ACCT_COOKIE, WHO_COOKIE, pin.COOKIE))
+LEGACY_UNTIL = datetime(2028, 1, 1, tzinfo=timezone.utc)
 
 
 @lru_cache(maxsize=128)
@@ -99,9 +100,10 @@ class WebCtx:
         return HOST_PREFIX + name if self.secure and name in HOST_COOKIES else name
 
     def cookie(self, request: Request, name: str) -> str:
-        """Значение cookie; у долгоживущих нет под новым именем — под старым, до 2028-01-01 (см. HOST_COOKIES)."""
+        """Значение cookie; у долгоживущих нет под новым именем — под старым, до LEGACY_UNTIL (см. HOST_COOKIES)."""
         value = request.cookies.get(self.cookie_name(name))
-        if value is not None or (name != self.cookie_name(name) and name not in LEGACY_COOKIES):
+        if value is not None or (name != self.cookie_name(name) and (
+                name not in LEGACY_COOKIES or datetime.fromisoformat(self.now()) >= LEGACY_UNTIL)):
             return value or ""
         return request.cookies.get(name, "")
 
