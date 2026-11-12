@@ -27,6 +27,21 @@ def test_privacy_without_login(web):
     assert "ко всему аккаунту" in r.text and "Пока Google Play не подключён, доступа к почте" in r.text
 
 
+def test_privacy_covers_apple_id_guests_mail_and_browser_and_is_linked(web):
+    """Политика — про всё, что хранится: Apple ID, гости, письма, хранилище браузера; ссылки — со входа, «Настроек»
+    и формы PIN, «Назад» — только на свой путь."""
+    anon = TestClient(web.app, base_url=f"https://{HOST}")
+    text = anon.get("/privacy").text
+    for fact in ("токен App Store", "10 минут", "история покупок", "90 дней", "по сети /64", "«Настройки» → «Письма»",
+                 "адрес Google-аккаунта", "localStorage", "IndexedDB", "14 дней"):
+        assert fact in text, fact
+    assert "Назад" not in text                                             # с экрана согласия Google — без «Назад»
+    assert '<a href="/settings">Назад</a>' in anon.get("/privacy?back=/settings").text
+    assert "Назад" not in anon.get("/privacy?back=//evil.example").text     # чужой адрес — как без back
+    assert 'href="/privacy?back=/settings"' in web.client.get("/settings").text
+    assert 'href="/privacy?back=/login"' in anon.get("/login").text         # форма PIN — test_web_guest
+
+
 def test_pwa_manifest_and_icons_without_login(web):
     # iOS «На экран „Домой“» и браузеры берут манифест и иконку без cookie
     anon = TestClient(web.app)

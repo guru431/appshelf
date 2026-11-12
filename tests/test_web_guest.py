@@ -140,6 +140,7 @@ def test_guest_without_pin_sees_only_form(shelf, anon):
     assert r.status_code == 200 and 'name="pin"' in r.text and 'inputmode="numeric"' in r.text
     assert "Скачать APK" not in r.text and shelf.shelf not in r.text
     assert "/admin" not in r.text and "/android" not in r.text and "Выйти" not in r.text
+    assert 'href="/privacy?back=/p"' in r.text                                   # cookie гостя и счётчики — в политике
 
 
 def test_guest_right_pin_lists_apps_without_actions(shelf, anon):

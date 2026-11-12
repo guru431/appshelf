@@ -62,6 +62,8 @@
     {%- if cfg.google_enabled and not add %} Нет Apple ID — «Войти через Google».{% endif %}</p>
   {% elif not invited %}<p class="hint">С компьютера — управление полкой. Приложения ставят с телефона: по QR-коду
     у приложения.</p>{% endif %}
+  {% if not add %}<p class="hint"><a href="/privacy?back={{ here | urlencode }}">Конфиденциальность</a>: что хранит
+    сервер.</p>{% endif %}
   {% endif %}
 </div>
 {% endblock %}
