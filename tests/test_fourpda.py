@@ -640,3 +640,14 @@ def test_browser_click_reaches_button_shown_in_mobile_jpeg(cfg, clock, local_chr
         assert clicked == "yes"
     finally:
         pool.close()
+
+
+def test_fourpda_redirects_keep_acted_on_person(connected, conn, cfg, tmp_path):
+    """Выбор APK и поиск по теме — на полке участника запроса: редирект ставит его и в cookie, как остальные
+    Android-действия, иначе /android показал бы участника, переключённого в другой вкладке."""
+    web = connected
+    web.sessions.http.files[FILE] = make_apk(tmp_path / "input.apk", package="ru.example.app").read_bytes()
+    for r in (web.client.post("/android/4pda/add", data={"url": FILE, "name": "Example", "topic": TOPIC},
+                              follow_redirects=False),
+              web.client.get("/android/4pda", params={"q": "example"}, follow_redirects=False)):
+        assert r.status_code == 303 and "appshelf_who=1" in r.headers.get("set-cookie", ""), r.headers

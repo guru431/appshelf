@@ -24,10 +24,15 @@ def register_routes(app, w, sessions, browser):
     def missing():
         return PlainTextResponse("not found", status_code=404)
 
-    def connected_response(uid):
-        response = back("/android/add")
+    def person_back(path, uid):
+        """Редирект на полку участника, для которого действовали: он же становится активным (как shelf_back в
+        web/android.py) — иначе ответ показал бы участника, переключённого в другой вкладке."""
+        response = back(path)
         w.set_cookie(response, WHO_COOKIE, str(uid), webauth.COOKIE_AGE)
         return response
+
+    def connected_response(uid):
+        return person_back("/android/add", uid)
 
     def connect_page(request, uid, error="", status=200, token=""):
         user = owner(request, uid)
@@ -205,7 +210,7 @@ def register_routes(app, w, sessions, browser):
     @app.get("/android/4pda")
     def search(request: Request, q: str = ""):
         query = q.strip()[:200]
-        return back("/android/add" + ("?" + urlencode({"q": query}) if query else ""))
+        return person_back("/android/add" + ("?" + urlencode({"q": query}) if query else ""), request.state.who.id)
 
     @app.get("/android/4pda/topic")
     def topic(request: Request, url: str = ""):
@@ -224,4 +229,4 @@ def register_routes(app, w, sessions, browser):
             shelf = db.ensure_shelf(c, request.state.who.id, w.now())
             db.enqueue(c, shelf.id, "add", w.now(), payload={"source": "fourpda", "ref": ref,
                        "name": name.strip()[:200], "source_page": page})
-        return back("/android")
+        return person_back("/android", request.state.who.id)
