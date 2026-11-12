@@ -452,6 +452,8 @@ def test_units_cap_memory():
         lines = (DEPLOY / unit).read_text(encoding="utf-8").splitlines()
         service = lines[lines.index("[Service]"):]
         assert f"MemoryMax={limit}" in service, unit
+        # web: ядро, убившее при пределе Chromium окна 4PDA, не должно останавливать всю службу с входами в памяти
+        assert ("OOMPolicy=continue" in service) == (unit == "appshelf-web.service"), unit
 
 
 def test_units_allow_google_dir():
