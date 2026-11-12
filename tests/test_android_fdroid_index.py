@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -255,3 +256,23 @@ def test_v2_signed_entry_authenticates_json_and_normalized_apk_hash(tmp_path):
     with pytest.raises(net.SourceError, match="сжатый каталог.*повреждён"):
         cat.info(PKG)
     assert cat.cache.read_bytes() == before
+
+
+def test_java_verifies_the_same_file_the_catalog_is_read_from(monkeypatch):
+    """Подписан только index-v1.json, рядом неподписанный entry.json без "index": каталог берётся из entry.json,
+    значит Java проверяет именно его — и отказывает. JSON до успешной проверки не разбирается."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(catalog([build(2, "new")]))) as signed, zipfile.ZipFile(out, "w") as jar:
+        jar.writestr("index-v1.json", signed.read("index-v1.json"))
+        jar.writestr("entry.json", json.dumps({"repo": {"timestamp": 1800000000000}, "apps": [], "packages": {}}))
+    checked = []
+
+    def java(args, **kw):  # подписан только index-v1.json
+        checked.append(args[-1])
+        return SimpleNamespace(returncode=0 if args[-1] == "index-v1.json" else 1, stdout=b"verified")
+
+    monkeypatch.setattr(index.subprocess, "run", java)
+    monkeypatch.setattr(index.json, "loads", lambda *a, **kw: pytest.fail("JSON разобран до проверки"))
+    with pytest.raises(net.SourceError, match="подпись"):
+        index.Catalog(FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, out.getvalue())}), archive=True).info(PKG)
+    assert checked == ["entry.json"]

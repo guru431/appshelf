@@ -242,28 +242,35 @@ class Catalog:
             raise SourceError("APK из F-Droid не совпал с SHA-256 в каталоге")
 
 
+def _index_entry(jar: zipfile.ZipFile) -> zipfile.ZipInfo:
+    """Файл каталога — по составу архива, без разбора JSON: Java проверяет именно тот, что потом читается."""
+    entries = jar.infolist()
+    if len({e.filename for e in entries}) != len(entries):
+        raise SourceError("повторяющиеся файлы в каталоге F-Droid")
+    entry = jar.getinfo("entry.json" if "entry.json" in jar.namelist() else "index-v1.json")
+    if entry.file_size > MAX_INDEX or sum(e.file_size for e in entries if e != entry) > 8 << 20:
+        raise SourceError("каталог F-Droid слишком большой")
+    return entry
+
+
 def _index_data(raw: bytes) -> dict:
     if len(raw) > MAX_JAR:
         raise SourceError("каталог F-Droid слишком большой")
     with zipfile.ZipFile(io.BytesIO(raw)) as jar:
-        entries = jar.infolist()
-        if len({e.filename for e in entries}) != len(entries):
-            raise SourceError("повторяющиеся файлы в каталоге F-Droid")
-        entry = jar.getinfo("entry.json" if "entry.json" in jar.namelist() else "index-v1.json")
-        if entry.file_size > MAX_INDEX or sum(e.file_size for e in entries if e != entry) > 8 << 20:
-            raise SourceError("каталог F-Droid слишком большой")
-        return json.loads(jar.read(entry))
+        return json.loads(jar.read(_index_entry(jar)))
 
 
 def verify(raw: bytes, signer: str | None = None) -> None:
     """Java's maintained JAR verifier; pinned certificate, signed JSON and full digest verification."""
     try:
-        _index_data(raw)
+        if len(raw) > MAX_JAR:
+            raise SourceError("каталог F-Droid слишком большой")
+        with zipfile.ZipFile(io.BytesIO(raw)) as jar:
+            entry_name = _index_entry(jar).filename
         with tempfile.TemporaryDirectory(prefix="appshelf-fdroid-") as temp:
             path = Path(temp) / "index.jar"
             path.write_bytes(raw)
             helper = Path(__file__).resolve().parent.parent / "data" / "VerifyIndex.java"
-            entry_name = "entry.json" if "index" in _index_data(raw) else "index-v1.json"
             result = subprocess.run(["java", "-Xmx384m", "--source", "11", str(helper), str(path),
                                      signer or REPO_SIGNER, entry_name],
                                     capture_output=True, timeout=25)
