@@ -454,6 +454,9 @@ def test_theme_switch_sets_cookie(web):
                        follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/history?q=x" and "theme=light" in r.headers["set-cookie"]
     assert 'data-theme="light"' in web.client.get("/").text
+    r = web.client.get("/theme", params={"set": "light"}, headers={"referer": "https://other.example/history?q=x"},
+                       follow_redirects=False)
+    assert r.headers["location"] == "/"  # путь со страницы чужого сайта у нас ничего не значит
 
 
 def test_theme_switch_returns_without_referer(web):

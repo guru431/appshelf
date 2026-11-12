@@ -205,8 +205,11 @@ def safe_next(target: str) -> str:
 
 
 def referer_path(request: Request) -> str:
-    """Своя страница, с которой пришли (тема, выбор полки) — вернуться на неё."""
+    """Своя страница, с которой пришли (тема, выбор полки) — вернуться на неё. Referer чужого сайта — каталог:
+    его путь у нас ничего не значит."""
     ref = urlsplit(request.headers.get("referer", ""))
+    if ref.netloc.lower() != urlsplit(request.app.state.w.cfg.public_base).netloc.lower():
+        return "/"
     return safe_next((ref.path or "/") + (f"?{ref.query}" if ref.query else ""))
 
 
