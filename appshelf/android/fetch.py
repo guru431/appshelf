@@ -540,13 +540,17 @@ def rotate_shelf(cfg, c, shelf_id: int, *, transaction=None) -> db.Shelf | None:
 
 def _move_dirs(cfg, shelf: db.Shelf) -> None:
     """Каталог полки — на shelf_next, под замком скачивания вызывающего. Оба каталога есть (перенос прервался, а
-    прежний код успел положить версию в старый) — версии, которых нет в новом, переезжают туда (как jobs._move_files)."""
+    прежний код успел положить версию в старый) — версии переезжают туда (как jobs._move_files). Каталог с тем же
+    именем в новом заменяется: в старый писали уже после переименования, его копия новее, а под отозванным токеном
+    Apache не должен раздавать ничего."""
     src, dst = cfg.archive / shelf.shelf, cfg.archive / shelf.shelf_next
     if src.is_dir() and not dst.exists():
         os.replace(src, dst)
     elif src.is_dir():
         for d in src.iterdir():
-            if db.ANDROID_DIR_RE.match(d.name) and not (dst / d.name).exists():
+            if db.ANDROID_DIR_RE.fullmatch(d.name):
+                if (dst / d.name).exists():
+                    shutil.rmtree(dst / d.name)
                 os.replace(d, dst / d.name)
         with suppress(OSError):  # остались чужие файлы — их покажет appshelf check
             src.rmdir()
@@ -558,6 +562,7 @@ def finish_move(cfg, c, shelf: db.Shelf | None) -> db.Shelf | None:
     ArchiveUnavailable (без пути: в нём токен)."""
     if shelf is None or not shelf.shelf_next:
         return shelf
+    jobs._archive(cfg)  # шара не смонтирована — не перенесли бы ничего, а новый токен записался бы
     try:
         _move_dirs(cfg, shelf)
     except OSError as e:

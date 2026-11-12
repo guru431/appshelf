@@ -850,6 +850,30 @@ def test_repeated_rotation_moves_versions_left_in_old_dir(ctx, cfg, conn, clock,
     assert sorted(p.name for p in new.iterdir()) == [f"{PKG}-1", f"{PKG}-2"] and not old.exists()
 
 
+def test_repeated_rotation_replaces_same_named_copy_in_new_dir(ctx, cfg, conn, clock, tmp_path):
+    """Каталог с тем же именем есть в обоих: копия в отозванном каталоге записана после переименования — она новее;
+    под отозванным токеном Apache не должен раздавать ничего."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    old, new = cfg.archive / shelf.shelf, cfg.archive / ("e" * 32)
+    old.rename(new)
+    (old / f"{PKG}-1").mkdir(parents=True)
+    (old / f"{PKG}-1" / "late.txt").write_bytes(b"late")
+    fetch.rotate_shelf(cfg, conn, shelf.id)
+    assert (new / f"{PKG}-1" / "late.txt").read_bytes() == b"late" and not old.exists()
+
+
+def test_interrupted_rotation_waits_for_unmounted_archive(ctx, cfg, conn, clock, tmp_path):
+    """Шара не смонтирована: переносить нечего, но и новый токен не записывается — иначе файлы остались бы под
+    прежним каталогом, а строки — у нового."""
+    shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))
+    db.set_shelf_next(conn, shelf.id, "e" * 32)
+    cfg.archive.rename(cfg.archive.with_name("gone"))
+    with pytest.raises(jobs.ArchiveUnavailable):
+        fetch.finish_move(cfg, conn, db.get_shelf(conn, shelf.id))
+    assert db.get_shelf(conn, shelf.id).shelf_next == "e" * 32
+
+
 def test_check_with_stale_shelf_writes_to_new_dir(ctx, cfg, conn, clock, tmp_path):
     """Ночная проверка взяла полку до смены токена, а замок скачивания — после: версия ложится в новый каталог."""
     shelf, _ = add_rustore(ctx, conn, clock, make_apk(tmp_path / "v1.apk"))

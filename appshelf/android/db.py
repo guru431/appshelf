@@ -374,7 +374,7 @@ def hide_pending(c, root: Path, shelf_id: int, version_id: int) -> bool:
         with tx(c):
             v = c.execute("SELECT package, version_code, dir FROM android_versions WHERE id=? AND shelf_id=? "
                           "AND role='pending'", (version_id, shelf_id)).fetchone()
-            if (v is None or PENDING_DIR_RE.search(v["dir"]) or not ANDROID_DIR_RE.match(v["dir"])
+            if (v is None or PENDING_DIR_RE.search(v["dir"]) or not ANDROID_DIR_RE.fullmatch(v["dir"])
                     or not (root / v["dir"]).is_dir()):
                 return False
             name = version_dir(c, shelf_id, root, v["package"], v["version_code"], pending=True)
