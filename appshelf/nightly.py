@@ -2,8 +2,9 @@
 справочник удалённых, новые версии опубликованного; затем Android-полки, еженедельные письма участникам о новых
 версиях (digests) и сводка appshelf check без удаления (_integrity, только владельцу); отметка для мониторинга.
 
-Apple ID без входа пропускаются: о входе пишет письмо (владельцу), а мониторинг срабатывает, лишь если сама
-проверка не отработала (нет nightly.stamp > 26 ч). Проблемы целостности — письмо владельцу, одно на эпизод."""
+Apple ID без входа пропускаются: о входе пишет письмо (владельцу сразу, участнику — в еженедельном), а
+мониторинг срабатывает, лишь если сама проверка не отработала (нет nightly.stamp > 26 ч). Проблемы целостности —
+письмо владельцу, одно на эпизод."""
 from __future__ import annotations
 
 import shutil
@@ -27,6 +28,7 @@ NO_LOGIN = "пропущена: нет входа ни в один Apple ID"
 NOT_IN_RUN = "пропущена: не было входа в этот Apple ID"
 SEP = " | "
 DIGEST_SUBJECT = "appshelf: что обновилось на полках"
+DIGEST_LOGIN_SUBJECT = "appshelf: нужен вход в аккаунт"  # новых версий нет, только раздел «Требует входа»
 DIGEST_DAYS = 7       # письмо участнику — не чаще раза в 7 дней (по датам UTC: время конца проверки плавает)
 DIGEST_BACK_DAYS = 14  # прошлое письмо давно (ночи не было, писать было нечего) — новые версии не старше этого
 # новые версии полки: текущая скачана позже since и не первая с публикации — как метка «новая версия» в каталоге
@@ -163,8 +165,10 @@ def result_for(result: str, email: str) -> str:
 
 def digests(env: Env, c) -> int:
     """Раз в неделю участнику — новые версии на его полках со времени прошлого письма (первое — за 7 дней): полки
-    его Apple ID, его Android-полка, владельцу — ещё публичная. Отключено в «Настройках» или писать нечего — письма
-    нет. Владельцу — на MAIL_TO, как остальные письма; участнику — на адрес его Google-аккаунта, иначе Apple ID
+    его Apple ID, его Android-полка, владельцу — ещё публичная. Участнику (не владельцу: ему об истечении пишет
+    mark_expired / play_expired сразу) — ещё раздел «Требует входа»: его Apple ID и подключения Google Play, которые
+    истекли; с ним письмо уходит и без новых версий. Отключено в «Настройках» или писать нечего — письма нет.
+    Владельцу — на MAIL_TO, как остальные письма; участнику — на адрес его Google-аккаунта, иначе Apple ID
     (адреса — только из базы). Шлёт только ночная проверка, под своим замком, — письмо одно; не ушло — повторим
     следующей ночью. → сколько писем отправлено."""
     now = datetime.fromisoformat(env.now())
@@ -178,7 +182,8 @@ def digests(env: Env, c) -> int:
         if not notify.digest_enabled(c, user.id) or last[:10] > due:
             continue
         since = max(last, (now - timedelta(days=DIGEST_BACK_DAYS if last else DIGEST_DAYS)).isoformat(timespec="seconds"))
-        shelves = [(f"Apple ID {a.email}", APPLE_NEW, a.id) for a in people.accounts_of(c, user.id)]
+        accounts = people.accounts_of(c, user.id)
+        shelves = [(f"Apple ID {a.email}", APPLE_NEW, a.id) for a in accounts]
         mine = android_db.shelf_for_user(c, user.id)
         if mine is not None:
             shelves.append(("Android", ANDROID_NEW, mine.id))
@@ -190,13 +195,23 @@ def digests(env: Env, c) -> int:
             rows = sorted(c.execute(query, (shelf_id, since)).fetchall(), key=lambda r: r["name"].casefold())
             if rows:
                 parts.append(title + ":\n" + "".join(f"  {r['name']} {r['version']}\n" for r in rows))
+        expired = [] if user.role == people.OWNER else (
+            [f"  Apple ID {a.email} — вход истёк\n" for a in accounts if a.session == "expired"] +
+            [f"  Google Play {g.email} — подключение истекло\n" for g in people.google_of(c, user.id)
+             if g.play == "expired"])
         to = env.cfg.mail_to if user.role == people.OWNER and env.cfg.mail_to else _address(c, user.id)
-        if not parts or not to:
+        if not (parts or expired) or not to:
             continue
-        body = (f"Новые версии на ваших полках с {since[:10]}:\n\n" + "\n".join(parts) +
+        blocks = []
+        if expired:
+            blocks.append("Требует входа — новые версии с этих аккаунтов не скачиваются:\n" + "".join(expired) +
+                          f"Войти заново: {env.cfg.public_base}/apple\n")
+        if parts:
+            blocks.append(f"Новые версии на ваших полках с {since[:10]}:\n\n" + "\n".join(parts))
+        body = ("\n".join(blocks) +
                 f"\nОткрыть полки: {env.cfg.public_base}/\nОтключить эти письма: {env.cfg.public_base}/settings\n")
         try:
-            env.send(DIGEST_SUBJECT, body, to)
+            env.send(DIGEST_SUBJECT if parts else DIGEST_LOGIN_SUBJECT, body, to)
         except Exception:  # сбой почты не останавливает остальные письма
             traceback.print_exc()
             continue

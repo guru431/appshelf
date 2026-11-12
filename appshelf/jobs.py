@@ -147,7 +147,7 @@ def app_failed(c, aid: int, app_id: int, e: Exception, now: str) -> None:
 
 def mark_expired(env: Env, c, acct) -> None:
     """Токен Apple ID истёк: его задания ждут входа. Письмо — только владельцу о его Apple ID, одно на эпизод;
-    участники видят баннер в панели."""
+    участники видят баннер в панели и раздел «Требует входа» еженедельного письма (nightly.digests)."""
     now = env.now()
     people.set_expired(c, acct.id, now)
     if people.is_owner_account(c, acct):

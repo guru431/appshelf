@@ -158,7 +158,8 @@ def _own_shelf(shelf: db.Shelf, account) -> bool:
 
 def play_expired(env, c, gid: int) -> None:
     """Google Play не принял токен аккаунта: подключение истекло, его задания ждут нового. Письмо — только о
-    Google-аккаунте владельца, одно на эпизод (как jobs.mark_expired); участники видят баннер."""
+    Google-аккаунте владельца, одно на эпизод (как jobs.mark_expired); участники видят баннер и раздел «Требует
+    входа» еженедельного письма (nightly.digests)."""
     now = env.now()
     people.set_play(c, gid, "expired", now)
     g = people.get_google(c, gid)

@@ -228,7 +228,7 @@ content="same-origin">` themselves: their own POSTs carry `Origin` even under a 
 no-referrer`, without which old Safari (before 16.4, no `Sec-Fetch-Site`) would get 403.
 
 When a store token expires there is a banner on the shelf and "Sign in again"; the owner gets an email about
-their Apple ID. If Apple breaks sign-in, use a fallback link (one-time, 24 h; it opens a page with a "Sign in"
+their Apple ID, a person sees it in the weekly digest (see "Mail"). If Apple breaks sign-in, use a fallback link (one-time, 24 h; it opens a page with a "Sign in"
 button, so a messenger's link preview does not use it up): "Участники" → "Sign-in link", or on the server
 
     sudo -u appshelf bash -c 'set -a; . /etc/appshelf/appshelf.env; set +a; /var/_sh/appshelf/.venv/bin/appshelf login-link --email <Apple ID>'
@@ -505,7 +505,8 @@ through a Google account connected to Play on the accounts page; there is no sha
   previously purchased app has not been checked yet.
 - **Expired.** A changed Google password or revoked access means "подключение Google Play истекло": a banner in the
   Android section and on the accounts page, the account's jobs wait, its apps are skipped at night; mail goes only
-  about the owner's Google accounts, one per episode. "Подключить заново" takes a new `oauth_token`.
+  about the owner's Google accounts, one per episode; a person sees it in the weekly digest. "Подключить заново"
+  takes a new `oauth_token`.
 - **Live test** — `pytest -m integration tests/test_android_play_live.py` with `APPSHELF_PLAY_TEST_GID=<id of a
   connected Google account>` in `.env`: `details` of a free package as `appshelf` on the server.
 
@@ -599,7 +600,9 @@ public shelves), the nightly integrity check found problems.
 
 The weekly digest "что обновилось на полках" (what was updated on the shelves) goes to every person at most once in
 7 days and is not sent when empty: new versions on the shelves of their Apple IDs and their Android shelf, for the
-owner also the public shelf. The owner gets it at `MAIL_TO`, a person at their Google account's address, else their
+owner also the public shelf. A person (not the owner, who is mailed about expiry right away) also gets a "Требует
+входа" (sign-in needed) section: their Apple IDs with an expired sign-in and expired Google Play connections, with a
+link to the accounts page; with it the digest is sent even without new versions. The owner gets it at `MAIL_TO`, a person at their Google account's address, else their
 Apple ID; hence `sendmail` must deliver outside too. A failed mail is retried the next night. To turn it off —
 Settings → "Письма" (Mail), with a button per person signed in to the browser.
 

@@ -162,6 +162,36 @@ def test_digest_at_most_weekly_and_never_empty(ctx, cfg, conn, clock):
     assert nightly.digests(env, conn) == 0 and len(mails) == 2          # нового нет — письма нет
 
 
+def test_digest_reminds_member_of_expired_logins_weekly(ctx, cfg, conn, clock):
+    ready(conn, cfg, clock)
+    set_session(conn, 1, "expired")                     # владельцу об истечении пишет mark_expired — не дублируем
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, session="expired")
+    make_account(conn, clock, email="petr.work@example", user_id=petr.user_id, legacy=False, session="ok")
+    for sub, mail in (("sub-1", "petr@mail.example"), ("sub-2", "petr.play@mail.example")):
+        people.set_play(conn, people.create_google(conn, petr.user_id, sub, mail, "Пётр", clock.iso()), "ok", clock.iso())
+    people.set_play(conn, 2, "expired", clock.iso())
+    env, mails = digest_env(ctx)
+    assert nightly.digests(env, conn) == 1                              # новых версий нет — письмо всё равно есть
+    (subject, body, to), = mails
+    assert (subject, to) == (nightly.DIGEST_LOGIN_SUBJECT, "petr@mail.example")
+    assert body.startswith("Требует входа — новые версии с этих аккаунтов не скачиваются:\n"
+                           "  Apple ID petr@example — вход истёк\n"
+                           "  Google Play petr.play@mail.example — подключение истекло\n"
+                           "Войти заново: https://apps.example/apple\n")
+    assert "petr.work@example" not in body and "petr@mail.example" not in body
+    assert "https://apps.example/settings" in body
+    clock.advance(86400)
+    assert nightly.digests(env, conn) == 0                              # та же частота: не чаще раза в 7 дней
+    clock.advance(6 * 86400)
+    seed_app(conn, cfg, clock, app_id=7, name="ВТБ", versions=("2.0", "2.1"), acct=people.get_account(conn, 3))
+    assert nightly.digests(env, conn) == 1                              # и новые версии, и раздел — одним письмом
+    subject, body, _ = mails[-1]
+    assert subject == nightly.DIGEST_SUBJECT and "Требует входа" in body and "Apple ID petr.work@example:\n  ВТБ 2.1" in body
+    notify.set_digest(conn, petr.user_id, False)
+    clock.advance(7 * 86400)
+    assert nightly.digests(env, conn) == 0                              # «Отключить» отключает и напоминание
+
+
 def test_digest_keeps_update_after_previous_version_removed(ctx, cfg, conn, clock):
     acct = ready(conn, cfg, clock)                                      # публикация скачала 1.0
     clock.advance(3600)

@@ -133,7 +133,7 @@ def test_nightly_expired_play_account_isolated(owner_play, ctx, conn, clock, tmp
     assert ctx.sent == [fetch.PLAY_EXPIRED_SUBJECT, nightly.DIGEST_SUBJECT]  # следующая ночь — без новых писем
 
 
-def test_member_expired_no_mail(ctx, conn, clock, tmp_path):
+def test_member_expired_only_in_weekly_letter(ctx, conn, clock, tmp_path):
     owner(conn, clock)
     uid = people.create_user(conn, "Мария", people.MEMBER, None, clock.iso())
     g = connected(conn, clock, uid)
@@ -145,4 +145,5 @@ def test_member_expired_no_mail(ctx, conn, clock, tmp_path):
     fake.expired = True
     ctx.sent.clear()
     assert nightly.run(ctx.env, conn).endswith("Android: обновлено 0, без изменений 0, ошибок 0")
-    assert people.get_google(conn, g.id).play == "expired" and ctx.sent == []
+    # письма об истечении сразу нет — только раздел «Требует входа» еженедельного
+    assert people.get_google(conn, g.id).play == "expired" and ctx.sent == [nightly.DIGEST_LOGIN_SUBJECT]

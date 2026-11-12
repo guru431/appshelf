@@ -16,7 +16,8 @@
 {% include 'device_profile.html' %}
 <h2>Письма</h2>
 <div class="card">
-<p class="hint">Раз в неделю — письмо о новых версиях на ваших полках; если обновлений не было, письма нет.</p>
+<p class="hint">Раз в неделю — письмо о новых версиях на ваших полках и об истёкшем входе в аккаунты; если писать не о чем,
+  письма нет.</p>
 {% for u in users %}{% set on = digest.get(u.id, True) %}
 <form method="post" action="/settings/digest" class="bar"><input type="hidden" name="user" value="{{ u.id }}"><input type="hidden" name="on" value="{{ 0 if on else 1 }}">
   <span>{% if users | length > 1 %}{{ u.name }}: {% endif %}{{ 'включено' if on else 'отключено' }}</span>
