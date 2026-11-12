@@ -248,7 +248,8 @@ SQLite `/var/lib/appshelf/appshelf.db` (локальный диск):
 
 - `/healthz` — без пароля, для внешней проверки сайта.
 - `status/nightly.stamp` — отметка ночной проверки; триггер мониторинга (например, Zabbix
-  `vfs.file.time[/var/lib/appshelf/status/nightly.stamp,modify]`) — «не обновлялась больше 26 ч».
+  `vfs.file.time[/var/lib/appshelf/status/nightly.stamp,modify]`) — «не обновлялась больше 30 ч» (сутки +
+  `TimeoutStartSec=4h` + запас: отметка пишется в конце прогона; было 26 ч — ложная тревога при долгом прогоне).
 
 ## 11. Тестирование
 

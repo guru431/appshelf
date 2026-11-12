@@ -660,7 +660,9 @@ once per episode.
 
 - `/healthz` — 200 without sign-in.
 - `status/nightly.stamp` — written at the end of every nightly check, with errors too (those are in the night's
-  result and in mail): a trigger "not updated for more than 26 h" means the check did not run at all.
+  result and in mail): a trigger "not updated for more than 30 h" means the check did not run at all. The threshold
+  is a day plus the service's `TimeoutStartSec=4h` and a margin: the check writes the stamp at the end, so with a
+  lower threshold a long run would raise a false alarm.
 - `status/backup.stamp` — after a successful nightly database snapshot (when `APPSHELF_BACKUP_DIR` is set): a
   trigger on age over 26 h means no snapshot was taken; there is no other signal of an `appshelf-backup` failure.
 
