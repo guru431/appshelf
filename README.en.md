@@ -181,7 +181,10 @@ code in memory and imports modules lazily; wait for it or stop it (`sudo systemc
 the next night finishes what was interrupted). During the install `appshelf-nightly.timer` is stopped (a missed run
 catches up afterwards), so the check cannot start halfway through the code swap. The new code replaces the old one as a whole and only after `pip`
 succeeds. If `/healthz` does not answer 200 within 10 s, `install.sh` restores the previous code (`.previous`) by
-itself when the database is readable by it, otherwise it prints the manual steps. To roll back, deploy the previous
+itself when the database is readable by it, otherwise it prints the manual steps. The `appshelf` package in `.venv`
+(the `.venv/bin/appshelf` CLI runs it; the services run the code in the directory) is installed before the swap; after
+any failed deploy `install.sh` reinstalls it from the code left in the directory, and the manual steps start with it —
+otherwise the CLI would run the rejected version and could move the database to its schema. To roll back, deploy the previous
 commit (across a database schema change — only if that migration declared the schema readable by the older code, see
 `SCHEMA_VERSION` in `store.py`). If
 `bin/ipatool` or `bin/ipatool-auth` was not built from the deployed `ipatool/`, `deploy.sh` reminds you to rebuild;

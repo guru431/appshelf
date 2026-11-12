@@ -79,7 +79,8 @@ def test_install_refuses_while_nightly_check_runs():
     # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     check = text.index("systemctl show -P ActiveState appshelf-nightly.service")
-    assert check < text.index('pip" install') < text.index('mv "$NEW/$p" "$R/$p"')
+    assert check < text.index('pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"')
+    assert check < text.index('mv "$NEW/$p" "$R/$p"')
     assert "exit 1" in text[check:text.index("esac", check)]
 
 
@@ -127,6 +128,50 @@ def test_install_holds_nightly_timer_until_exit(tmp_path, timer):
                              "start appshelf-nightly.timer"]
     else:  # выключенный владельцем таймер выкладка не включает
         assert calls[1:] == ["show -P ActiveState appshelf-nightly.service"]
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+@pytest.mark.parametrize("pending", [True, False])
+def test_failed_deploy_reinstalls_package_from_live_code(tmp_path, pending):
+    # пакет в site-packages ставился до подмены, а откат возвращал только $R: CLI (login-link, check) работал
+    # отвергнутой версией и мог перевести базу на её схему
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    functions = "\n".join(re.search(rf"(?ms)^{name}\(\) \{{.*?^\}}", text).group()
+                          for name in ("reinstall_package", "on_exit"))
+    live = tmp_path / "code"
+    (live / "appshelf").mkdir(parents=True)
+    (live / "appshelf" / "store.py").write_text("SCHEMA_VERSION = 11\n", encoding="utf-8")
+    (live / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    pip = live / ".venv" / "bin" / "pip"
+    pip.parent.mkdir(parents=True)
+    log = tmp_path / "pip.log"
+    # подставной pip, как настоящий, мусорит в исходном каталоге
+    pip.write_text('#!/bin/bash\nsrc="${!#}"\nprintf "%s\\n" "$*" >> "$PIP_LOG"\n'
+                   'cat "$src/appshelf/store.py" >> "$PIP_LOG"\nmkdir "$src/build" "$src/appshelf.egg-info"\n',
+                   encoding="utf-8", newline="\n")
+    pip.chmod(0o755)
+    env = {**os.environ, "R": live.as_posix(), "PIP_LOG": log.as_posix(), "TMPDIR": tmp_path.as_posix()}
+    script = f"{functions}\nnightly_timer=0\npackage_pending={int(pending)}\ntrap on_exit EXIT\nexit 1\n"
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=5)
+    assert result.returncode == 1, result.stderr
+    assert sorted(p.name for p in live.iterdir()) == [".venv", "appshelf", "pyproject.toml"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["code"] + (["pip.log"] if pending else [])
+    if pending:
+        args, store = log.read_text(encoding="utf-8").splitlines()
+        assert args.split()[:-1] == ["install", "--quiet", "--root-user-action=ignore", "--no-deps", "--force-reinstall"]
+        assert store == "SCHEMA_VERSION = 11"
+
+
+def test_package_flag_covers_every_failed_exit():
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    armed = text.index("\npackage_pending=1\n")
+    assert text.index("trap on_exit EXIT") < armed < text.index('pip" install --quiet --root-user-action=ignore "${NEW}')
+    success = text.index("if restart_and_check; then\n")
+    assert text.index("  package_pending=0\n", success) < text.index("  exit 0\n", success)
+    # ручной откат: прежний пакет — из $OLD, пока прежний код ещё там (build/ остаётся в $OLD, не в $R)
+    hint = text.index("Автооткат невозможен")
+    assert text.index("--force-reinstall $OLD", hint) < text.index("mv $OLD/\\$p $R/", hint)
 
 
 def install_rollback_check():

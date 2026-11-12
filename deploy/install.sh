@@ -38,7 +38,22 @@ if systemctl is-active --quiet appshelf-nightly.timer; then
   nightly_timer=1
   systemctl stop appshelf-nightly.timer
 fi
+# CLI appshelf (login-link, check, backup) работает пакетом из site-packages, службы — кодом из $R. Пакет ставится до
+# подмены кода; не удалась выкладка — при выходе он снова ставится из $R (после отката там прежний код).
+package_pending=0
+reinstall_package() {  # из копии: в исходном каталоге pip оставляет build/ и appshelf.egg-info
+  local src rc
+  src="$(mktemp -d)" || return 1
+  cp -r "$R/pyproject.toml" "$R/appshelf" "$src/" &&
+    "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$src"
+  rc=$?
+  rm -rf "$src"
+  return "$rc"
+}
 on_exit() {
+  if [ "$package_pending" = 1 ] && [ -e "$R/pyproject.toml" ]; then
+    reinstall_package || echo "ВНИМАНИЕ: пакет appshelf в .venv (CLI) не совпадает с кодом $R — поставить его заново" >&2
+  fi
   if [ "$nightly_timer" = 1 ]; then
     systemctl start appshelf-nightly.timer || echo "ВНИМАНИЕ: не запустился appshelf-nightly.timer" >&2
   fi
@@ -66,6 +81,7 @@ if ! command -v apksigner >/dev/null || ! command -v javac >/dev/null; then
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apksigner default-jdk-headless
 fi
+package_pending=1
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
@@ -131,6 +147,7 @@ restart_and_check() {
   return 1
 }
 if restart_and_check; then
+  package_pending=0
   rm -rf "$OLD"
   echo "OK: appshelf-web отвечает на /run/appshelf/web.sock"
   exit 0
@@ -160,5 +177,6 @@ then
   exit 1
 fi
 echo "Автооткат невозможен (нет прежнего кода или база новее его). Прежний код — $OLD:" >&2
+echo "  $R/.venv/bin/pip install --no-deps --force-reinstall $OLD" >&2
 echo "  for p in ${PARTS[*]}; do rm -rf $R/\$p; mv $OLD/\$p $R/; done; systemctl restart appshelf-web" >&2
 exit 1
