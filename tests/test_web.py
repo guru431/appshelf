@@ -542,3 +542,10 @@ def test_reload_after_jobs_keeps_typed_text(web, conn, cfg, clock):
     set_session(conn, 1, "ok")
     text = web.client.get("/blocked").text                 # пока идёт задание, страница опрашивает /api/status
     assert "/api/status" in text and "обновить страницу" in text and "i.value !== i.defaultValue" in text
+
+
+def test_pwa_scripts_revalidate(web):
+    """Скрипты страниц браузер сверяет при каждой загрузке: их свежесть не держится на ручном ?v= в base.html."""
+    for path in ("/pwa/apk-transfers.js", "/pwa/device-profile.js"):
+        r = web.client.get(path)
+        assert r.status_code == 200 and r.headers.get("cache-control") == "no-cache", path

@@ -234,7 +234,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def device_profile_script():
         from pathlib import Path
         return Response((Path(__file__).parent / "templates" / "device-profile.js").read_text(encoding="utf-8"),
-                        media_type="application/javascript")
+                        media_type="application/javascript", headers={"Cache-Control": "no-cache"})
 
     @app.get("/pwa/manifest.webmanifest")
     def pwa_manifest():
