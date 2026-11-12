@@ -218,7 +218,8 @@
       catch (error) {
         if (error.status === 409) {
           var state = await request(record, '/' + record.session);
-          if (state.job_id) { await update(key, {state: 'done', blob: null, jobId: state.job_id}); localFiles.delete(key); return; }
+          // отменять поздно: сервер уже собрал файл — запись сообщает итог, а не прежнее «На паузе…»
+          if (state.job_id) { await update(key, {state: 'done', loaded: record.size, blob: null, jobId: state.job_id, message: 'Файл передан на обработку'}); localFiles.delete(key); return; }
         }
         if (error.status !== 404 && error.status !== 410) throw error;
       }
@@ -226,7 +227,7 @@
       // Ответ на создание мог не дойти (отмена сразу после выбора файла): сервер найдёт загрузку по client_id.
       var gone = await request(record, '/cancel', {method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({client_id: record.clientId})});
-      if (gone.job_id) { await update(key, {state: 'done', blob: null, jobId: gone.job_id}); localFiles.delete(key); return; }
+      if (gone.job_id) { await update(key, {state: 'done', loaded: record.size, blob: null, jobId: gone.job_id, message: 'Файл передан на обработку'}); localFiles.delete(key); return; }
     }
     await edit(key, function () { return null; }); localFiles.delete(key); await notify(key);
   }
