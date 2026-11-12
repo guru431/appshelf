@@ -312,6 +312,18 @@ def test_string_pool_bomb_refused(tmp_path):
         apk.read_apk(path)
 
 
+def test_icon_opens_only_png_and_webp(tmp_path):
+    """Формат Pillow выбирает по содержимому: под именем ic_launcher.png мог открыться и EPS (Ghostscript).
+    Картинки в APK — только PNG и WebP; годный BMP под этим именем тоже не открывается."""
+    bmp = io.BytesIO()
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(bmp, "BMP")
+    webp = io.BytesIO()
+    Image.new("RGB", (32, 32), (255, 0, 0)).save(webp, "WEBP")
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-xxhdpi/ic_launcher.png": bmp.getvalue(),
+                                               "res/mipmap-mdpi/ic_launcher.webp": webp.getvalue()})
+    assert Image.open(io.BytesIO(apk.extract_icon(path))).size == (32, 32)
+
+
 def test_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):
     """Картинка-бомба (мало байт, много пикселей) не распаковывается: размер — из заголовка, до load()."""
     monkeypatch.setattr(apk, "ICON_PIXELS", 100 * 100)

@@ -105,6 +105,19 @@ def test_source_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):
     assert got.icon is None
 
 
+def test_source_icon_opens_only_web_image_formats(tmp_path):
+    """Иконки источников — PNG (RuStore, APKPure, Play), WebP (AppGallery) или JPEG; прочие декодеры Pillow
+    (EPS через Ghostscript и т. п.) на недоверенный ответ не запускаются."""
+    import io
+    from PIL import Image
+    for fmt, accepted in (("BMP", False), ("WEBP", True), ("JPEG", True)):
+        out = io.BytesIO()
+        Image.new("RGB", (16, 16), (255, 0, 0)).save(out, fmt)
+        got = sources.Sources(rustore_http(**{ICON: out.getvalue()}), sleep=lambda s: None).fetch(
+            "rustore", "ru.sberbankmobile", tmp_path / "a.apk")
+        assert (got.icon is not None) == accepted, fmt
+
+
 def test_paid_app_refused(tmp_path):
     data = fixture("overall")
     data["body"]["price"] = 19900

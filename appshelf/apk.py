@@ -280,7 +280,8 @@ def _largest(z: zipfile.ZipFile, names: list[str]) -> bytes | None:
         try:
             if z.getinfo(name).file_size > ICON_MAX:
                 continue
-            img = Image.open(io.BytesIO(z.read(name)))
+            # Формат — по содержимому, а не по имени: без formats= под ic_launcher.png открылся бы и EPS (Ghostscript)
+            img = Image.open(io.BytesIO(z.read(name)), formats=("PNG", "WEBP"))
             if img.width * img.height > ICON_PIXELS:
                 continue
             img.load()
