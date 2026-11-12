@@ -35,6 +35,9 @@ ACCOUNT_GONE = "Apple ID удалён"
 FAILED_MAX = 50          # id с технической ошибкой в ходе проверки справочника — не больше
 INTERACTIVE_BATCH = 8   # после восьми действий — один шаг фоновой проверки, чтобы она тоже продвигалась
 DELETED_HOME = ".deleted-"  # accounts/.deleted-<id> — HOME удаляемого Apple ID (_remove, Worker.recover)
+# state: надгробие Apple ID, удалённого этой базой (id не повторяются — AUTOINCREMENT): его HOME, появившийся после
+# удаления (вызов ipatool, начатый раньше), Worker.recover удаляет; HOME прочих id без строки — нет
+BURIED = "account_deleted:"
 
 
 class LowSpace(Exception):
@@ -341,6 +344,7 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
                 for a in fresh:
                     store.delete_shelf(c, a.id)
                     c.execute("DELETE FROM accounts WHERE id=?", (a.id,))
+                    c.execute("INSERT OR REPLACE INTO state(key, value) VALUES (?, '')", (f"{BURIED}{a.id}",))
                 gids = []
                 if user_id is not None:
                     gids = [g.id for g in people.google_of(c, user_id)]
@@ -356,6 +360,8 @@ def _remove(cfg: Config, c, accts, check: Callable[[], None] = lambda: None, use
                     home = cfg.accounts_dir / str(a.id)
                     mark = home.with_name(f"{DELETED_HOME}{a.id}")
                     if home.is_dir():
+                        if mark.exists():  # след прежнего неудачного удаления: учётка в HOME — новее
+                            shutil.rmtree(mark)
                         home.replace(mark)
                         marked.append((home, mark))
         except BaseException:
@@ -715,13 +721,16 @@ class Worker:
     def recover(self) -> None:
         """После перезапуска: прерванные задания — снова в очередь, свой tmp — прочь, как и временные HOME входов
         новых Apple ID (их пароли ушли вместе с прежним процессом) и HOME с меткой удаления (_remove), чьей строки
-        Apple ID нет; есть строка — удаление не дошло до COMMIT, имя возвращается. HOME без метки и без Apple ID не
-        трогаются: база могла их временно не видеть (не тот data_dir, старый снимок) — их показывает appshelf check.
+        Apple ID нет; есть строка — удаление не дошло до COMMIT, имя возвращается. HOME без метки удаляется, только
+        если этот Apple ID удалила сама база (надгробие BURIED): прочие без Apple ID не трогаются — база могла их
+        временно не видеть (не тот data_dir, старый снимок), их показывает appshelf check.
         Версии Android, ждущие решения по подписи под угадываемым именем каталога, — под случайное."""
         c = self.connect()
         try:
             store.requeue_running(c)
             known = {str(a.id) for a in people.all_accounts(c)}
+            buried = {r[0].removeprefix(BURIED) for r in
+                      c.execute("SELECT key FROM state WHERE key LIKE ?", (BURIED + "%",)).fetchall()}
             cfg = self.env.cfg
             shutil.rmtree(cfg.tmp_dir / "web", ignore_errors=True)
             from .android.uploads import Uploads
@@ -744,6 +753,11 @@ class Worker:
                     deleted.add(aid)
                 elif not (cfg.accounts_dir / aid).exists():  # сбой до COMMIT: Apple ID остался — и его учётка
                     home.replace(cfg.accounts_dir / aid)
+                else:  # Apple ID остался и уже вошёл заново в новый HOME — метка хранит прежнюю учётку
+                    shutil.rmtree(home, ignore_errors=True)
+            elif aid.isdigit() and aid in buried and aid not in known:  # HOME появился после удаления Apple ID
+                shutil.rmtree(home, ignore_errors=True)
+                deleted.add(aid)
         # Блокировки — как HOME: только временных входов и Apple ID с меткой удаления. Блокировку Apple ID, которого
         # база не видит, не трогаем: её может держать ночная проверка, а новый файл на том же пути её бы не заметил.
         for lock in [*cfg.locks_dir.glob("*.lock"), *cfg.locks_dir.glob("*.wait")]:

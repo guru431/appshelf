@@ -550,6 +550,35 @@ def test_failed_removal_puts_homes_back(ctx, cfg, conn, clock, monkeypatch):
     assert list(cfg.accounts_dir.iterdir()) == []
 
 
+def test_recover_removes_home_recreated_after_its_apple_id_was_deleted(ctx, cfg, conn, clock):
+    """Вызов ipatool, начатый до удаления Apple ID, записал HOME уже после него: учётка удалённого Apple ID не
+    остаётся на сервере — её id база удалила сама. HOME id, которых база не знает вовсе, по-прежнему не трогаются."""
+    owner(conn, clock)
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=1)
+    jobs.remove_account(cfg, conn, second)
+    (cfg.accounts_dir / str(second.id) / ".ipatool").mkdir(parents=True)   # поздняя запись ipatool
+    (cfg.accounts_dir / "77" / ".ipatool").mkdir(parents=True)             # id, которого эта база не знает
+    cfg.locks_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.locks_dir / f"{second.id}.lock").write_text("")
+    worker(ctx, cfg).recover()
+    assert sorted(p.name for p in cfg.accounts_dir.iterdir()) == ["77"]
+    assert not (cfg.locks_dir / f"{second.id}.lock").exists()
+
+
+def test_stale_deletion_mark_does_not_block_removal(ctx, cfg, conn, clock):
+    """Прежнее удаление не дошло до COMMIT и не вернуло имя, а Apple ID вошёл заново в новый HOME: устаревшая метка
+    не мешает ни старту, ни следующему удалению."""
+    owner(conn, clock)
+    second = make_account(conn, clock, email="second@example", legacy=False, user_id=1)
+    for name in (str(second.id), f".deleted-{second.id}"):
+        (cfg.accounts_dir / name / ".ipatool").mkdir(parents=True)
+    worker(ctx, cfg).recover()
+    assert [p.name for p in cfg.accounts_dir.iterdir()] == [str(second.id)]
+    (cfg.accounts_dir / f".deleted-{second.id}" / ".ipatool").mkdir(parents=True)   # тот же след — и при удалении
+    jobs.remove_account(cfg, conn, second)
+    assert list(cfg.accounts_dir.iterdir()) == [] and people.get_account(conn, second.id) is None
+
+
 def test_remove_one_of_two_apple_ids_keeps_person(ctx, cfg, conn, clock):
     acct = owner(conn, clock)
     second = make_account(conn, clock, email="second@example", legacy=False, user_id=acct.user_id)
