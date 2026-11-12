@@ -127,7 +127,7 @@ def test_catalog_shows_kept_and_pin_menu(web, conn, cfg, clock, acct):
     seed_app(conn, cfg, clock, versions=("1.0", "2.0"), make_dirs=True)
     v1, v2 = vid(conn, "1.0"), vid(conn, "2.0")
     r = web.client.post(f"/apps/123/versions/{v1}/pin", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert r.status_code == 303 and r.headers["location"] == "/?os=apple"
     text = web.client.get("/").text
     assert "закреплена" in text and f"/apps/123/versions/{v1}/unpin" in text and f"/apps/123/versions/{v2}/pin" in text
     update(conn, cfg, clock, acct, "3.0")

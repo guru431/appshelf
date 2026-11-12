@@ -34,6 +34,7 @@ NEW_VERSION_DAYS = 7  # метка «новая версия» в каталог
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
 SHELF_BUSY = "Полка занята скачиванием — повторите через минуту"
+APPLE_HOME = "/?os=apple"  # каталог Apple после действий и «Отмена»: «/» с телефона Android ведёт в Android-раздел
 STATE_LINKS = (("recent", "новые за неделю"), ("errors", "ошибки"), ("active", "в очереди"))  # значения filter_shelf
 BLOCKED_FILTERS = {"owned": "Есть в аккаунте", "unknown": "Не проверено", "missing": "Нет в аккаунте",  # «Удалённые»
                    "failed": "Ошибка проверки", "all": "Все"}
@@ -105,7 +106,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         """Нет того, с чем работала страница (удалили в другой вкладке, чужое): 404 страницей с путём назад."""
         android = request.url.path.startswith("/android")
         return w.page(request, "confirm.html", "a_catalog" if android else "catalog", 404, refused=True,
-                      cancel="/android" if android else "/", question=text)
+                      cancel="/android" if android else APPLE_HOME, question=text)
 
     @app.exception_handler(store.AppGone)
     async def app_gone(request, error):
@@ -167,9 +168,10 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
     def not_found():
         return PlainTextResponse("not found", status_code=404)
 
-    def done(request: Request, path: str = "/"):
+    def done(request: Request, path: str = APPLE_HOME):
         """Действие выполнено на полке из ?account= — она и становится активной: иначе ответ показал бы полку из
-        cookie, которую могла переключить другая вкладка, и действие выглядело бы несработавшим."""
+        cookie, которую могла переключить другая вкладка, и действие выглядело бы несработавшим. Каталог — с ?os=apple:
+        «/» с телефона Android увёл бы в Android-раздел."""
         resp = back(path)
         w.set_cookie(resp, ACCT_COOKIE, str(request.state.acct.id), webauth.COOKIE_AGE)
         return resp
@@ -483,7 +485,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         with w.conn() as c:
             row = store.old_version(c, request.state.acct.id, app_id, version_id)
         if row is None:
-            return w.page(request, "confirm.html", "catalog", 404, refused=True, cancel="/",
+            return w.page(request, "confirm.html", "catalog", 404, refused=True, cancel=APPLE_HOME,
                           question="Версия не найдена: её уже удалили, или она стала текущей.")
         pinned = " Закрепление будет снято." if row["pinned"] else ""
         return w.page(request, "confirm.html", "catalog", 409 if changed else 200,
@@ -492,7 +494,7 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
                       error="Версия изменилась, пока страница была открыта, — проверьте и подтвердите снова."
                       if changed else "",
                       action=f"/apps/{app_id}/versions/{version_id}/remove", button="Удалить версию",
-                      cancel="/",
+                      cancel=APPLE_HOME,
                       hidden={"snapshot": store.version_snapshot(row)})
 
     @app.get("/apps/{app_id}/versions/{version_id}/remove", response_class=HTMLResponse)
