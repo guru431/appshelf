@@ -531,7 +531,7 @@ def test_remove_after_interrupted_rotation_clears_new_dir(web, conn, cfg, tmp_pa
     old = shelf(conn)
     db.set_shelf_next(conn, old.id, "e" * 32)
     (cfg.archive / old.shelf).rename(cfg.archive / ("e" * 32))
-    web.client.post(f"/android/apps/{PKG}/remove")
+    web.client.post(f"/android/apps/{PKG}/remove", data={"confirm": "1"})
     assert shelf(conn).shelf == "e" * 32 and db.list_apps(conn, old.id) == []
     assert not list((cfg.archive / ("e" * 32)).iterdir()) and not (cfg.archive / old.shelf).exists()
 
