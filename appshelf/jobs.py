@@ -732,6 +732,7 @@ class Worker:
             android_fetch.hide_pending(cfg, c)
         finally:
             c.close()
+        deleted = set()
         for home in cfg.accounts_dir.glob("*"):
             aid = home.name.removeprefix(DELETED_HOME)
             if home.name.startswith(".new-"):
@@ -739,10 +740,13 @@ class Worker:
             elif home.name.startswith(DELETED_HOME) and aid.isdigit():
                 if aid not in known:  # удаление Apple ID дошло до COMMIT, а каталог убрать не успели
                     shutil.rmtree(home, ignore_errors=True)
+                    deleted.add(aid)
                 elif not (cfg.accounts_dir / aid).exists():  # сбой до COMMIT: Apple ID остался — и его учётка
                     home.replace(cfg.accounts_dir / aid)
+        # Блокировки — как HOME: только временных входов и Apple ID с меткой удаления. Блокировку Apple ID, которого
+        # база не видит, не трогаем: её может держать ночная проверка, а новый файл на том же пути её бы не заметил.
         for lock in [*cfg.locks_dir.glob("*.lock"), *cfg.locks_dir.glob("*.wait")]:
-            if lock.stem.startswith(".new-") or (lock.stem.isdigit() and lock.stem not in known):
+            if lock.stem.startswith(".new-") or lock.stem in deleted:
                 lock.unlink(missing_ok=True)
 
     def tick(self) -> bool:

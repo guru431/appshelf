@@ -500,7 +500,7 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
     (cfg.accounts_dir / "1").mkdir()
     (cfg.accounts_dir / ".deleted-9" / ".ipatool").mkdir(parents=True)  # удаление Apple ID №9 дошло до COMMIT
     cfg.locks_dir.mkdir(parents=True)
-    for name in (".new-0123456789abcdef.lock", ".new-0123456789abcdef.wait", "1.lock", "1.wait", "7.lock", "7.wait",
+    for name in (".new-0123456789abcdef.lock", ".new-0123456789abcdef.wait", "1.lock", "1.wait", "9.lock", "9.wait",
                  "download.lock", "download.wait"):
         (cfg.locks_dir / name).write_text("")
     worker(ctx, cfg).recover()
@@ -510,11 +510,15 @@ def test_recover_removes_abandoned_new_logins(ctx, cfg, conn, clock):
 
 def test_recover_keeps_unmarked_homes_even_with_empty_database(ctx, cfg, conn, clock):
     """Не тот data_dir, пропавшая или старая база: учётки ipatool без строки Apple ID остаются — их покажет
-    appshelf check; удаляются только помеченные при удалении Apple ID."""
+    appshelf check; удаляются только помеченные при удалении Apple ID. Их блокировки тоже остаются: удалённый файл
+    блокировки, которую держит ночная проверка, пустил бы второй вызов ipatool того же Apple ID параллельно."""
+    cfg.locks_dir.mkdir(parents=True)
     for name in ("1", "7"):
         (cfg.accounts_dir / name / ".ipatool").mkdir(parents=True)
+        (cfg.locks_dir / f"{name}.lock").write_text("")
     worker(ctx, cfg).recover()
     assert sorted(p.name for p in cfg.accounts_dir.iterdir()) == ["1", "7"]
+    assert sorted(p.name for p in cfg.locks_dir.iterdir()) == ["1.lock", "7.lock"]
 
 
 def test_recover_returns_home_of_removal_interrupted_before_commit(ctx, cfg, conn, clock):
