@@ -643,6 +643,62 @@ def test_public_search_explains_skipped_fourpda_topic(web, local_chromium):
 
 
 @pytest.mark.integration
+def test_search_portions_keep_focus_and_row_in_place(web, local_chromium):
+    """Порция результатов не уводит фокус с «Добавить · …» и не сдвигает строку под ним; отложенная порция
+    показывается, когда фокус ушёл, а показанные строки остаются теми же узлами."""
+    import json
+
+    def rows(*names):
+        return ('<div class="card list source-results">' + ''.join(
+            f'<div class="row" data-result-key="rustore:{n}:"><div class="body"><b>{n}</b></div>'
+            f'<div class="act"><form class="source-choice"><button class="sm tint">Добавить · {n}</button></form></div></div>'
+            for n in names) + '</div>')
+
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            # поток поиска — подменный: порции приходят по команде теста
+            page.add_init_script("""window.streams = [];
+              window.EventSource = class extends EventTarget {
+                constructor(url) { super(); this.url = url; streams.push(this); }
+                close() { this.closed = true; }
+              };""")
+            page.route("https://apps.example/**", _route_to(web.client))
+            page.goto("https://apps.example/android/add?q=app")
+            page.wait_for_function("window.streams.length === 1")
+
+            def send(kind, data):
+                page.evaluate("([k, d]) => streams[0].dispatchEvent(new MessageEvent(k, {data: d}))", [kind, json.dumps(data)])
+
+            def keys():
+                return page.evaluate("[...document.querySelectorAll('#search-results [data-result-key]')].map(r => r.dataset.resultKey)")
+
+            send("results", {"html": rows("Alpha")})
+            button = page.get_by_role("button", name="Добавить · Alpha", exact=True)
+            button.focus()
+            top = button.bounding_box()["y"]
+            page.evaluate("window.alpha = document.querySelector('[data-result-key=\"rustore:Alpha:\"]')")
+            send("results", {"html": rows("Beta", "Alpha")})
+            assert page.evaluate("document.activeElement.textContent") == "Добавить · Alpha"
+            assert button.bounding_box()["y"] == top and keys() == ["rustore:Alpha:"]
+            send("done", {"html": rows("Beta", "Alpha", "Gamma"), "count": 3, "errors": 0})
+            assert page.evaluate("document.activeElement.textContent") == "Добавить · Alpha"
+            assert keys() == ["rustore:Alpha:"]
+            assert "найдено вариантов: 3" in page.locator("#search-summary").inner_text()
+            page.locator("#source-search input[name=q]").focus()   # фокус ушёл — отложенная порция встаёт на место
+            page.wait_for_function("document.querySelectorAll('#search-results [data-result-key]').length === 3")
+            assert keys() == ["rustore:Beta:", "rustore:Alpha:", "rustore:Gamma:"]
+            assert page.evaluate("window.alpha.isConnected")
+            assert not errors
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("path", ["/android", "/p"])
 def test_download_mark_remembers_version_in_this_browser(web, make_web, conn, cfg, clock, acct, path, local_chromium):
     pkg = "ru.example.mark"

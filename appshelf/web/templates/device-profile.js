@@ -104,7 +104,14 @@
     update();
   });
   var results = document.getElementById('search-results');
-  if (results) new MutationObserver(update).observe(results, {childList: true});
+  // Поиск вставляет новые строки внутрь списка; подсказки update() меняют только текст и сюда не попадают.
+  if (results) new MutationObserver(function (changes) {
+    if (changes.some(function (change) {
+      return Array.prototype.some.call(change.addedNodes, function (node) {
+        return node.nodeType === 1 && (node.matches('[data-fdroid-builds]') || node.querySelector('[data-fdroid-builds]'));
+      });
+    })) update();
+  }).observe(results, {childList: true, subtree: true});
   var effective = document.querySelector('[data-effective-theme]');
   if (effective) {
     var media = matchMedia('(prefers-color-scheme: dark)');
