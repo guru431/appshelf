@@ -21,11 +21,14 @@ from copy import copy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from ..apk import PACKAGE_RE
+from ..apk import PACKAGE_RE, zip_directory
 from ..ipatool import IpatoolError, hold
 from .net import FetchError, Http, SourceError
 
 MAX_JAR = 32 << 20
+# В entry.jar и index-v1.jar — JSON каталога и META-INF подписи: единицы файлов. Без предела оглавление в 32 МБ
+# раздуло бы zipfile до ~340 МБ ещё до проверки подписи.
+JAR_ENTRIES, JAR_DIRECTORY = 64, 64 << 10
 MAX_INDEX = 192 << 20
 TTL = 6 * 3600
 RETRY = 15 * 60  # после неудачного обновления каталога
@@ -146,8 +149,8 @@ class Catalog:
         if status != 200:
             raise FetchError(f"каталог F-Droid ответил {status}")
         verify(raw, self.signer)
-        entry = _index_data(raw)
-        timestamp = index_timestamp(raw)
+        entry = _index_data(raw)  # один разбор: каталог index-v1 — до 192 МиБ JSON, вторая копия удвоила бы пик
+        timestamp = _timestamp(entry)
         if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
                 or timestamp > (self.wall_clock() + 86400) * 1000:
             raise SourceError("устаревший каталог F-Droid или откат его версии")
@@ -170,7 +173,7 @@ class Catalog:
                 raise SourceError("каталог F-Droid не совпал с SHA-256 подписанного entry")
             apps = parse_v2(body)
         else:
-            apps = parse(raw)
+            apps = _parse_v1(entry)
         try:
             self._save_cache(apps, timestamp)
         except (OSError, IpatoolError, ValueError, KeyError):
@@ -253,19 +256,24 @@ def _index_entry(jar: zipfile.ZipFile) -> zipfile.ZipInfo:
     return entry
 
 
-def _index_data(raw: bytes) -> dict:
+def _open_jar(raw: bytes) -> zipfile.ZipFile:
     if len(raw) > MAX_JAR:
         raise SourceError("каталог F-Droid слишком большой")
-    with zipfile.ZipFile(io.BytesIO(raw)) as jar:
+    found = zip_directory(io.BytesIO(raw))
+    if found is not None and (found[0] > JAR_ENTRIES or found[1] > JAR_DIRECTORY):
+        raise SourceError("каталог F-Droid слишком большой")
+    return zipfile.ZipFile(io.BytesIO(raw))
+
+
+def _index_data(raw: bytes) -> dict:
+    with _open_jar(raw) as jar:
         return json.loads(jar.read(_index_entry(jar)))
 
 
 def verify(raw: bytes, signer: str | None = None) -> None:
     """Java's maintained JAR verifier; pinned certificate, signed JSON and full digest verification."""
     try:
-        if len(raw) > MAX_JAR:
-            raise SourceError("каталог F-Droid слишком большой")
-        with zipfile.ZipFile(io.BytesIO(raw)) as jar:
+        with _open_jar(raw) as jar:
             entry_name = _index_entry(jar).filename
         with tempfile.TemporaryDirectory(prefix="appshelf-fdroid-") as temp:
             path = Path(temp) / "index.jar"
@@ -285,6 +293,13 @@ def verify(raw: bytes, signer: str | None = None) -> None:
 def index_timestamp(raw: bytes) -> int:
     try:
         data = _index_data(raw)
+    except (KeyError, ValueError, TypeError):
+        raise SourceError("в каталоге F-Droid нет корректного времени публикации") from None
+    return _timestamp(data)
+
+
+def _timestamp(data: dict) -> int:
+    try:
         timestamp = int(data["timestamp"] if "index" in data else data["repo"]["timestamp"])
         if timestamp <= 0:
             raise ValueError()
@@ -296,6 +311,13 @@ def index_timestamp(raw: bytes) -> int:
 def parse(raw: bytes) -> dict[str, App]:
     try:
         data = _index_data(raw)
+    except (ValueError, KeyError, zipfile.BadZipFile, RuntimeError, NotImplementedError):
+        raise SourceError("каталог F-Droid ответил в неизвестном формате") from None
+    return _parse_v1(data)
+
+
+def _parse_v1(data: dict) -> dict[str, App]:
+    try:
         apps = {}
         for meta in data["apps"]:
             package = meta["packageName"]

@@ -66,34 +66,41 @@ class ApkInfo:
     signer: str                # SHA-256 DER сертификата, 64 hex
 
 
+def zip_directory(f) -> tuple[int, int] | None:
+    """(записей, байт) оглавления zip — до zipfile.ZipFile, который строит ZipInfo (~490 Б) на каждую запись
+    оглавления (от 46 Б) до любых проверок. EOCD и ZIP64 ищутся так же, как их находит zipfile (без комментария —
+    в конце, иначе последняя сигнатура); EOCD нет — None: не zip, решает сам zipfile."""
+    size = f.seek(0, 2)
+    start = max(size - 0xFFFF - 22, 0)
+    f.seek(start)
+    tail = f.read()
+    eocd = len(tail) - 22 if tail[-22:-18] == b"PK\x05\x06" and tail[-2:] == b"\0\0" \
+        else tail.rfind(b"PK\x05\x06")
+    if not 0 <= eocd <= len(tail) - 22:
+        return None
+    entries, cd_size = struct.unpack_from("<HI", tail, eocd + 10)
+    eocd += start
+    if eocd >= 20:
+        f.seek(eocd - 20)
+        locator = f.read(20)
+        if locator[:4] == b"PK\x06\x07":  # ZIP64: размеры — в записи перед указателем
+            record = eocd - 20 - 56
+            for pos in (struct.unpack_from("<Q", locator, 8)[0], record):
+                if 0 <= pos <= record:
+                    f.seek(pos)
+                    data = f.read(56)
+                    if data[:4] == b"PK\x06\x06":
+                        entries, cd_size = struct.unpack_from("<QQ", data, 32)
+                        break
+    return entries, cd_size
+
+
 def _open_zip(path: Path) -> zipfile.ZipFile:
-    """ZipFile после своей проверки оглавления. zipfile строит ZipInfo (~490 Б) на каждую запись оглавления (от 46 Б)
-    до любых проверок: файл в 1 ГиБ из одних записей занял бы ~9 ГиБ памяти. EOCD и ZIP64 ищутся так же, как их
-    находит zipfile (без комментария — в конце, иначе последняя сигнатура); не zip — решает сам zipfile."""
+    """ZipFile после своей проверки оглавления: файл в 1 ГиБ из одних записей занял бы ~9 ГиБ памяти."""
     with open(path, "rb") as f:
-        size = f.seek(0, 2)
-        start = max(size - 0xFFFF - 22, 0)
-        f.seek(start)
-        tail = f.read()
-        eocd = len(tail) - 22 if tail[-22:-18] == b"PK\x05\x06" and tail[-2:] == b"\0\0" \
-            else tail.rfind(b"PK\x05\x06")
-        if 0 <= eocd <= len(tail) - 22:
-            entries, cd_size = struct.unpack_from("<HI", tail, eocd + 10)
-            eocd += start
-            if eocd >= 20:
-                f.seek(eocd - 20)
-                locator = f.read(20)
-                if locator[:4] == b"PK\x06\x07":  # ZIP64: размеры — в записи перед указателем
-                    record = eocd - 20 - 56
-                    for pos in (struct.unpack_from("<Q", locator, 8)[0], record):
-                        if 0 <= pos <= record:
-                            f.seek(pos)
-                            data = f.read(56)
-                            if data[:4] == b"PK\x06\x06":
-                                entries, cd_size = struct.unpack_from("<QQ", data, 32)
-                                break
-            if entries > MAX_ENTRIES or cd_size > MAX_CD:
-                raise ApkError("в архиве слишком много файлов — это не похоже на приложение")
+        found = zip_directory(f)
+    if found is not None and (found[0] > MAX_ENTRIES or found[1] > MAX_CD):
+        raise ApkError("в архиве слишком много файлов — это не похоже на приложение")
     return zipfile.ZipFile(path)
 
 

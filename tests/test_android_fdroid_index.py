@@ -276,3 +276,27 @@ def test_java_verifies_the_same_file_the_catalog_is_read_from(monkeypatch):
     with pytest.raises(net.SourceError, match="подпись"):
         index.Catalog(FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, out.getvalue())}), archive=True).info(PKG)
     assert checked == ["entry.json"]
+
+
+def test_jar_with_oversized_directory_is_refused_before_zipfile(monkeypatch):
+    """В jar каталога — JSON и META-INF подписи; оглавление из тысяч записей zipfile раздул бы в память до проверки
+    подписи — отказ по EOCD, ZipFile не создаётся."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(catalog([build(2, "new")]))) as signed, zipfile.ZipFile(out, "w") as jar:
+        jar.writestr("index-v1.json", signed.read("index-v1.json"))
+        for n in range(index.JAR_ENTRIES):
+            jar.writestr(f"META-INF/{n}", b"")
+    raw = out.getvalue()
+    monkeypatch.undo()  # настоящий verify: подставной из conftest сам открывает ZipFile
+    monkeypatch.setattr(index.zipfile, "ZipFile", lambda *a, **kw: pytest.fail("ZipFile до проверки оглавления"))
+    for check in (index.verify, index.parse, index.index_timestamp):
+        with pytest.raises(net.SourceError, match="слишком большой"):
+            check(raw)
+
+
+def test_refresh_parses_catalog_json_once(monkeypatch):
+    """index-v1.json — до 192 МиБ: время, приложения и версии берутся из одного разбора."""
+    loads, calls = index.json.loads, []
+    monkeypatch.setattr(index.json, "loads", lambda *a, **kw: calls.append(1) or loads(*a, **kw))
+    cat = index.Catalog(FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, catalog([build(2, "new")]))}), archive=True)
+    assert cat.info(PKG)[1].code == 2 and len(calls) == 1
