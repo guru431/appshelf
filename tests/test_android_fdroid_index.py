@@ -300,3 +300,14 @@ def test_refresh_parses_catalog_json_once(monkeypatch):
     monkeypatch.setattr(index.json, "loads", lambda *a, **kw: calls.append(1) or loads(*a, **kw))
     cat = index.Catalog(FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, catalog([build(2, "new")]))}), archive=True)
     assert cat.info(PKG)[1].code == 2 and len(calls) == 1
+
+
+def test_signed_catalog_with_broken_json_is_a_source_error():
+    """Подпись верна, а JSON внутри битый или не UTF-8: ошибка источника с повтором позже, а не исключение наружу."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        z.comment = b"appshelf-test-index"
+        z.writestr("index-v1.json", b'{"repo": \xff')
+    cat = index.Catalog(FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, out.getvalue())}), archive=True)
+    with pytest.raises(net.SourceError, match="неизвестном формате"):
+        cat.info(PKG)

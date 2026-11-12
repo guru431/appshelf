@@ -149,7 +149,10 @@ class Catalog:
         if status != 200:
             raise FetchError(f"каталог F-Droid ответил {status}")
         verify(raw, self.signer)
-        entry = _index_data(raw)  # один разбор: каталог index-v1 — до 192 МиБ JSON, вторая копия удвоила бы пик
+        try:  # один разбор: каталог index-v1 — до 192 МиБ JSON, вторая копия удвоила бы пик
+            entry = _index_data(raw)
+        except (ValueError, KeyError, zipfile.BadZipFile, RuntimeError, NotImplementedError):
+            raise SourceError("каталог F-Droid ответил в неизвестном формате") from None
         timestamp = _timestamp(entry)
         if timestamp < self._timestamp or timestamp < (self.wall_clock() - MAX_AGE) * 1000 \
                 or timestamp > (self.wall_clock() + 86400) * 1000:
