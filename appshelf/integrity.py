@@ -242,7 +242,7 @@ def _shelf(cfg: Config, acct, versions: list, deep: bool, rep: Report) -> None:
 
 def _version(cfg: Config, acct, root: Path, v, deep: bool, rep: Report) -> None:
     d, aid = v["dir"], acct.id
-    if not store.DIR_RE.match(d):  # имя из базы — к пути не приклеиваем без проверки формы
+    if not store.DIR_RE.fullmatch(d):  # имя из базы — к пути не приклеиваем без проверки формы
         rep.add("bad_dir", aid, d)
         return
     vd = root / d
@@ -321,7 +321,7 @@ def _android_shelf(cfg: Config, shelf, versions: list, deep: bool, rep: Report) 
 
 def _apk(root: Path, sid: int, v, deep: bool, rep: Report) -> None:
     d = v["dir"]
-    if not android_db.ANDROID_DIR_RE.match(d):  # имя из базы — к пути не приклеиваем без проверки формы
+    if not android_db.ANDROID_DIR_RE.fullmatch(d):  # имя из базы — к пути не приклеиваем без проверки формы
         rep.add("bad_dir", None, d, shelf=sid)
         return
     vd = root / d
@@ -389,7 +389,7 @@ def daily_backup(db: Path, dest: Path, work: Path, day: str, keep: int) -> Path:
         raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    for old in sorted(p for p in dest.iterdir() if DAILY_RE.match(p.name))[:-keep]:
+    for old in sorted(p for p in dest.iterdir() if DAILY_RE.fullmatch(p.name))[:-keep]:
         old.unlink()
     return final
 

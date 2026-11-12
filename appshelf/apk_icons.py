@@ -13,6 +13,8 @@ from . import apk
 SIZE = 192
 MAX_NODES = 256
 MAX_SVG = 256 << 10
+MAX_STEPS = 2000      # переходы по ссылкам, слои и узлы одной иконки; у настоящих — сотни
+MAX_CHUNKS = 100_000  # чанки ResTable_type, просмотренные поиском ресурсов одной иконки (конфигурации × ресурсы)
 
 
 def _tree(raw):
@@ -72,15 +74,30 @@ def render_icon(archive, name):
     if archive.getinfo("resources.arsc").file_size > apk.MAX_ARSC:
         raise ValueError("resources too large")
     resources = archive.read("resources.arsc")
-    budget = [apk.ICON_MAX]
+    pool, types = apk._arsc_index(resources)  # таблица разбирается один раз на иконку
+    # Общий бюджет иконки: байты файлов, шаги (ссылки, файлы, узлы), просмотренные чанки типов, размер SVG.
+    # Ветвящиеся слои и цепочки ссылок иначе множат работу: маленький APK держал бы обработчик часами.
+    budget = {"files": apk.ICON_MAX, "steps": MAX_STEPS, "chunks": MAX_CHUNKS, "svg": MAX_SVG}
+    found, built = {}, {}  # id → значения ресурса; файл → (узел, его доля SVG)
+
+    def spend(kind, amount=1):
+        budget[kind] -= amount
+        if budget[kind] < 0:
+            raise ValueError(f"drawable {kind} budget exceeded")
 
     def resolve(value):
         seen = set()
         while isinstance(value, apk.Ref):
+            spend("steps")
             if value.id in seen or len(seen) >= 8:
                 raise ValueError("drawable resource cycle")
             seen.add(value.id)
-            values = sorted(apk._arsc_values(resources, value.id), key=lambda v: (v[0] != "", -v[1]))
+            if value.id not in found:
+                chunks = types.get((value.id >> 24, (value.id >> 16) & 0xFF), ())
+                spend("chunks", len(chunks))
+                found[value.id] = sorted(apk._arsc_lookup(resources, pool, chunks, value.id),
+                                         key=lambda v: (v[0] != "", -v[1]))
+            values = found[value.id]
             if not values:
                 raise ValueError("missing drawable resource")
             value = values[0][2]
@@ -94,6 +111,8 @@ def render_icon(archive, name):
 
     def vector_children(parent, children):
         for tag, attrs, nested in children:
+            spend("steps")
+            spend("svg", 256 + len(str(attrs.get("pathData", ""))))  # оценка узла в SVG; точная — в конце
             if tag == "group":
                 px, py = (_number(attrs.get(k, 0)) for k in ("pivotX", "pivotY"))
                 tx, ty = (_number(attrs.get(k, 0)) for k in ("translateX", "translateY"))
@@ -121,21 +140,32 @@ def render_icon(archive, name):
                 raise ValueError("unsupported vector element")
 
     def drawable(value, seen=()):
+        spend("steps")
+        spend("svg", 256)
         value = resolve(value)
         if isinstance(value, int):
             paint, alpha = color(value)
             return ET.Element("rect", width="108", height="108", fill=paint, opacity=str(alpha))
         if not isinstance(value, str) or value in seen or len(seen) >= 8:
             raise ValueError("drawable file cycle")
-        size = archive.getinfo(value).file_size
-        budget[0] -= size
-        if budget[0] < 0:
-            raise ValueError("drawable files too large")
+        if value in built:  # общий слой не собирается заново, но его копия в SVG занимает место
+            node, size = built[value]
+            spend("svg", size)
+            return node
+        before = budget["svg"]
+        node = file_drawable(value, seen)
+        built[value] = node, before - budget["svg"]
+        return node
+
+    def file_drawable(value, seen):
+        spend("files", archive.getinfo(value).file_size)
         if value.endswith(apk.RASTER):
             png = apk._largest(archive, [value])
             if png is None:
                 raise ValueError("invalid drawable bitmap")
-            return ET.Element("image", width="108", height="108", href="data:image/png;base64," + base64.b64encode(png).decode())
+            href = "data:image/png;base64," + base64.b64encode(png).decode()
+            spend("svg", len(href))
+            return ET.Element("image", width="108", height="108", href=href)
         tag, attrs, children = _tree(archive.read(value))
         if tag == "vector":
             width, height = (_number(attrs[k]) for k in ("viewportWidth", "viewportHeight"))

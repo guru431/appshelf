@@ -89,7 +89,7 @@ def play_package(text: str) -> str:
         if u.scheme != "https" or u.hostname != "play.google.com" or u.path.rstrip("/") != "/store/apps/details":
             return ""
         text = urllib.parse.parse_qs(u.query).get("id", [""])[0]
-    return text if apk.PACKAGE_RE.match(text) else ""
+    return text if apk.PACKAGE_RE.fullmatch(text) else ""
 
 
 def nightly_part(result: str) -> str:
@@ -281,7 +281,7 @@ def register_routes(app, w) -> None:
         """Ссылка на приложение: последняя версия либо явно выбранная сохранённая. Без входа,
         как сами файлы /d/: секрет — токен каталога полки, его смена (rotate-token, смена PIN) гасит и ссылку."""
         package = file.removesuffix(".apk")
-        if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
+        if not file.endswith(".apk") or not apk.PACKAGE_RE.fullmatch(package) or not TOKEN_RE.fullmatch(token):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
@@ -294,7 +294,7 @@ def register_routes(app, w) -> None:
     @app.get("/apk/{token}/{file}/qr.png")
     def app_qr(token: str, file: str, version: int = 0):
         package = file.removesuffix(".apk")
-        if not file.endswith(".apk") or not apk.PACKAGE_RE.match(package) or not TOKEN_RE.match(token):
+        if not file.endswith(".apk") or not apk.PACKAGE_RE.fullmatch(package) or not TOKEN_RE.fullmatch(token):
             return PlainTextResponse("not found", status_code=404)
         with w.conn() as c:
             shelf = db.shelf_by_token(c, token)
@@ -612,7 +612,7 @@ def _register_scope(app, w, scope: Scope):
 
     @app.post(f"{p}/add/rustore", response_class=HTMLResponse, dependencies=deps)
     def add_rustore(request: Request, package: str = Form(""), name: str = Form("")):
-        if not apk.PACKAGE_RE.match(package):
+        if not apk.PACKAGE_RE.fullmatch(package):
             return add_page(request, status_code=400, error="Не похоже на имя пакета Android")
         name = name.strip()[:200]
         return add_package(request, "rustore", package, name, {"name": name})

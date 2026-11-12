@@ -38,8 +38,13 @@ def search(http: Http, query: str, limit: int = 20) -> list[StoreApp]:
 
 
 def info(http: Http, package: str) -> StoreApp:
-    return _app(_body(http.json(f"{BASE}/applicationData/overallInfo/{urllib.parse.quote(package)}",
-                                headers=HEADERS)))
+    """Без целого versionCode > 0 — неизвестный формат: проверка обновлений иначе молча отвечала бы «новее нет».
+    Поиск разбирается мягко."""
+    body = _body(http.json(f"{BASE}/applicationData/overallInfo/{urllib.parse.quote(package)}", headers=HEADERS))
+    code = body.get("versionCode")
+    if not isinstance(code, int) or isinstance(code, bool) or code <= 0:
+        raise SourceError(UNKNOWN)
+    return _app(body)
 
 
 def apk_url(http: Http, app_id: int) -> str:

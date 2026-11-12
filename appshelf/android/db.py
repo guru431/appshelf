@@ -509,7 +509,7 @@ def remove_version(c, root: Path, shelf_id: int, package: str, version_id: int, 
 
 def remove_dirs(root: Path, names) -> None:
     for name in names:
-        if ANDROID_DIR_RE.match(name):  # имя из базы, но rmtree без проверки формы не делаем
+        if ANDROID_DIR_RE.fullmatch(name):  # имя из базы, но rmtree без проверки формы не делаем
             rmtree_logged(root / name)
 
 

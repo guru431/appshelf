@@ -62,6 +62,12 @@ def test_rejects_split_xapk_and_garbage(tmp_path):
         apk.read_apk(make_apk(tmp_path / "u.apk", scheme=None))
 
 
+def test_package_with_trailing_newline_refused(tmp_path):
+    """«$» совпадает и перед хвостовым «\\n»: такой пакет попадал в имена каталога и файла."""
+    with pytest.raises(apk.ApkError, match="имени пакета"):
+        apk.read_apk(make_apk(tmp_path / "n.apk", package="ru.example.app\n"))
+
+
 def test_broken_manifest_is_apk_error(tmp_path):
     import zipfile
     path = tmp_path / "b.apk"
@@ -173,6 +179,62 @@ def test_adaptive_icon_rejects_resource_cycles(tmp_path, cycle):
     assert apk.resource_icon(path) is None
 
 
+def test_icon_reference_chains_are_resolved_from_one_table_pass_within_budget(tmp_path, monkeypatch):
+    """250 путей, у каждого цвет — цепочка из 8 ссылок: прежде каждый переход заново проходил resources.arsc
+    (таблица в 30 МБ — часы под download_lock). Таблица разбирается один раз, а сверх бюджета шагов — без иконки."""
+    color, hops, paths = 0x7f050000, 8, 250
+    resources = {ICON: [("", 0, "res/a.xml")]}
+    for rid in range(color, color + paths * hops):
+        last = (rid - color) % hops == hops - 1
+        resources[rid] = [("", 0, 0xFF102030 if last else ("ref", rid + 1))]
+    tree = ("vector", vector_drawable()[1], [("path", {"fillColor": ("ref", color + p * hops),
+                                                       "pathData": ("str", "M0,0h1v1h-1z")}, []) for p in range(paths)])
+    path = make_apk(tmp_path / "chains.apk", icon_ref=ICON, resources=resources,
+                    files={"res/a.xml": drawable_xml(tree)})
+    chunks, walks = apk._chunks, []
+    monkeypatch.setattr(apk, "_chunks", lambda data, pos, end: walks.append(pos) or chunks(data, pos, end))
+    assert apk.resource_icon(path) is None
+    assert len([w for w in walks if w == 12]) == 2  # заголовок таблицы: _resolve в resource_icon и render_icon
+    monkeypatch.setattr(apk, "_chunks", chunks)
+    short = make_apk(tmp_path / "short.apk", icon_ref=ICON, files={"res/a.xml": drawable_xml(tree)},
+                     resources={**resources, **{color + p * hops: [("", 0, 0xFF102030)] for p in range(paths)}})
+    assert Image.open(io.BytesIO(apk.resource_icon(short))).size == (192, 192)
+
+
+def test_sparse_type_entries_found_by_binary_search():
+    import struct
+    indexes = list(range(0, 3000, 3))
+    header, count = 20, len(indexes)
+    entries = header + 4 * count
+    pairs = b"".join(struct.pack("<HH", i, 4 * n) for n, i in enumerate(indexes))  # смещение ×4: 16 байт записи
+    data = b"".join(struct.pack("<HHI", 8, 0, 0) + struct.pack("<HBBI", 8, 0, 0x1C, i) for i in indexes)
+    chunk = struct.pack("<HHIBBHII", 0x0201, header, entries + len(data), 5, 0x01, 0, count, entries) + pairs + data
+    assert [apk._type_entry(chunk, header, i) for i in (0, 1500, 2997)] == [(0x1C, 0), (0x1C, 1500), (0x1C, 2997)]
+    assert [apk._type_entry(chunk, header, i) for i in (1, 2998, 5000)] == [None, None, None]
+
+
+def test_branching_adaptive_layers_are_built_once_and_svg_budget_stops_copies(tmp_path, monkeypatch):
+    """Каждый уровень adaptive-icon ссылается на следующий дважды: 2^7 копий слоя. Файл разбирается один раз,
+    а копии в SVG считаются по ходу построения."""
+    from appshelf import apk_icons
+    leaf = ("vector", vector_drawable()[1], [("path", {"fillColor": ("color", 0xFF29C1E1),
+                                                       "pathData": ("str", "M42,42h24v24h-24z" * 6)}, [])] * 200)
+    files = {"res/l.xml": drawable_xml(leaf)}
+    resources = {ICON: [("", 0, "res/f0.xml")], ICON + 7: [("", 0, "res/l.xml")]}
+    for level in range(7):
+        files[f"res/f{level}.xml"] = drawable_xml(("adaptive-icon", {}, [
+            (layer, {"drawable": ("ref", ICON + level + 1)}, []) for layer in ("background", "foreground")]))
+        if level:
+            resources[ICON + level] = [("", 0, f"res/f{level}.xml")]
+    path = make_apk(tmp_path / "branches.apk", icon_ref=ICON, resources=resources, files=files)
+    tree, parsed = apk_icons._tree, []
+    monkeypatch.setattr(apk_icons, "_tree", lambda raw: parsed.append(1) or tree(raw))
+    assert apk.resource_icon(path) is None
+    assert len(parsed) <= 8
+    same = adaptive_apk(tmp_path, resource_values={ICON + 1: [("", 0, "res/c.xml")]})  # оба слоя — один файл
+    assert Image.open(io.BytesIO(apk.resource_icon(same))).getpixel((96, 96)) == (41, 193, 225, 255)
+
+
 def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     huge = png_bytes(144) + b"\0" * (apk.ICON_MAX + 1)  # годный PNG с хвостом: без предела была бы выбрана она
     path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48),
@@ -184,6 +246,47 @@ def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     assert "res/mipmap-xxhdpi/ic_launcher.png" not in names
     only_huge = make_apk(tmp_path / "h.apk", files={"res/mipmap-xxhdpi/ic_launcher.png": huge})
     assert apk.extract_icon(only_huge) is None
+
+
+def test_oversized_central_directory_refused_before_zipfile(tmp_path, monkeypatch):
+    """Оглавление zip проверяется до ZipFile: файл в пределах MAX_APK из одних записей раздувал процесс до ~9 ГиБ."""
+    import zipfile
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48)})
+    opened, real = [], zipfile.ZipFile
+    monkeypatch.setattr(zipfile, "ZipFile", lambda *a, **kw: opened.append(a) or real(*a, **kw))
+    for limit, value in (("MAX_ENTRIES", 2), ("MAX_CD", 100)):
+        with monkeypatch.context() as m:
+            m.setattr(apk, limit, value)
+            for call in (apk.read_apk, apk.extract_icon, apk.resource_label, apk.resource_icon):
+                with pytest.raises(apk.ApkError, match="слишком много файлов"):
+                    call(path)
+    assert opened == [] and apk.read_apk(path).package == "ru.example.app"
+
+
+def test_central_directory_limit_reads_zip64_and_commented_archives(tmp_path, monkeypatch):
+    """ZIP64: в обычном EOCD число записей — 0xFFFF, настоящее — в записи ZIP64; комментарий сдвигает EOCD."""
+    import zipfile
+    path = tmp_path / "z.zip"
+    monkeypatch.setattr(zipfile, "ZIP_FILECOUNT_LIMIT", 1)  # zipfile пишет ZIP64 уже для двух файлов
+    with zipfile.ZipFile(path, "w") as z:
+        z.comment = b"archive comment"
+        for i in range(5):
+            z.writestr(f"f{i}", b"x")
+    monkeypatch.undo()
+    raw = bytearray(path.read_bytes())
+    eocd = raw.rfind(b"PK\x05\x06")
+    raw[eocd + 8:eocd + 12] = b"\xff" * 4  # как у писателей ZIP64: в обычном EOCD — 0xFFFF
+    path.write_bytes(raw)
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 5)
+    with apk._open_zip(path) as z:
+        assert len(z.namelist()) == 5
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 4)
+    with pytest.raises(apk.ApkError, match="слишком много файлов"):
+        apk._open_zip(path)
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 5)
+    monkeypatch.setattr(apk, "MAX_CD", 5 * 46)
+    with pytest.raises(apk.ApkError, match="слишком много файлов"):
+        apk._open_zip(path)
 
 
 def test_huge_v1_signature_file_refused_unread(tmp_path, monkeypatch):
@@ -213,6 +316,18 @@ def test_string_pool_bomb_refused(tmp_path):
         z.writestr("AndroidManifest.xml", manifest)
     with pytest.raises(apk.ApkError, match="не разбирается"):
         apk.read_apk(path)
+
+
+def test_icon_opens_only_png_and_webp(tmp_path):
+    """Формат Pillow выбирает по содержимому: под именем ic_launcher.png мог открыться и EPS (Ghostscript).
+    Картинки в APK — только PNG и WebP; годный BMP под этим именем тоже не открывается."""
+    bmp = io.BytesIO()
+    Image.new("RGB", (64, 64), (255, 0, 0)).save(bmp, "BMP")
+    webp = io.BytesIO()
+    Image.new("RGB", (32, 32), (255, 0, 0)).save(webp, "WEBP")
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-xxhdpi/ic_launcher.png": bmp.getvalue(),
+                                               "res/mipmap-mdpi/ic_launcher.webp": webp.getvalue()})
+    assert Image.open(io.BytesIO(apk.extract_icon(path))).size == (32, 32)
 
 
 def test_icon_with_too_many_pixels_skipped(tmp_path, monkeypatch):

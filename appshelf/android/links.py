@@ -27,7 +27,7 @@ NAMES = {"play": "Google Play", "appgallery": "AppGallery", "fdroid": "F-Droid",
 def parse(url: str) -> tuple[str, str]:
     """(источник, ref); страница магазина с негодным пакетом или ID — FetchError, чужой адрес — net.check_url."""
     text = url.strip()
-    if APPGALLERY_ID_RE.match(text):
+    if APPGALLERY_ID_RE.fullmatch(text):
         return "appgallery", text
     try:
         u = urllib.parse.urlsplit(text)
@@ -58,7 +58,7 @@ def parse(url: str) -> tuple[str, str]:
         except SourceError:
             raise FetchError(f"не похоже на страницу приложения {NAMES[source]}") from None
         return source, ref
-    if not (APPGALLERY_ID_RE if source == "appgallery" else PACKAGE_RE).match(ref):
+    if not (APPGALLERY_ID_RE if source == "appgallery" else PACKAGE_RE).fullmatch(ref):
         raise FetchError(f"не похоже на страницу приложения {NAMES[source]}: «{ref[:100]}» — не "
                          + ("ID приложения (C и цифры)" if source == "appgallery" else "имя пакета"))
     return source, ref

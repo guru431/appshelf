@@ -21,6 +21,7 @@ from .net import FetchError, Http, Meta, SourceError, StatusError
 __all__ = ["Got", "Latest", "SourceError", "Sources"]
 RELEASES = ("github", *forge.SOURCES)   # ref — репозиторий, версия — последний стабильный выпуск с APK
 ICON_MAX = 1 << 20
+ICON_FORMATS = ("PNG", "WEBP", "JPEG")  # JPEG — на случай фото-иконок Play: декодер общий и безопасный
 SPLIT_TEXT = "набором файлов — из браузера не ставится"
 RUSTORE_DOWN = "RuStore не ответил — подпись не с чем сверить, повторите позже"
 NOT_OWNED = "платное — не куплено этим аккаунтом"
@@ -329,7 +330,7 @@ class Sources:
 
     def _appgallery(self, ref: str) -> appgallery.AgApp:
         """ref — пакет или ID со страницы AppGallery (тогда сначала пакет по ID)."""
-        if links.APPGALLERY_ID_RE.match(ref):
+        if links.APPGALLERY_ID_RE.fullmatch(ref):
             self._wait()
             ref = appgallery.package_of(self.http, ref)
         self._wait()
@@ -378,7 +379,9 @@ class Sources:
         try:
             self._wait()
             self.http.download(url, tmp, max_bytes=ICON_MAX)
-            with Image.open(tmp) as img:
+            # RuStore, APKPure и Play отдают PNG, AppGallery — WebP; прочие декодеры Pillow (EPS и т. п.) — не для
+            # чужих ответов: формат Pillow выбирает по содержимому
+            with Image.open(tmp, formats=ICON_FORMATS) as img:
                 if img.width * img.height > apk.ICON_PIXELS:  # картинка-бомба: размер из заголовка, до load()
                     return None
                 img.load()

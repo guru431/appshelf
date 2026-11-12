@@ -752,7 +752,7 @@ def remove_version(c, aid: int, root: Path, app_id: int, version_id: int, snapsh
 
 def remove_dirs(root: Path, names) -> None:
     for name in names:
-        if DIR_RE.match(name):  # имя из базы, но rmtree без проверки формы не делаем
+        if DIR_RE.fullmatch(name):  # имя из базы, но rmtree без проверки формы не делаем
             rmtree_logged(root / name)
 
 

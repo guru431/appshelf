@@ -576,7 +576,7 @@ def _merge_shelves(cfg: Config, c, src, dst, moved: list) -> None:
             if (dst_root / name).exists() or c.execute("SELECT 1 FROM android_versions WHERE shelf_id=? AND dir=?",
                                                        (dst.id, name)).fetchone() is not None:
                 name = android_db.version_dir(c, dst.id, dst_root, pkg, v["version_code"])
-            if android_db.ANDROID_DIR_RE.match(v["dir"]) and (src_root / v["dir"]).is_dir():
+            if android_db.ANDROID_DIR_RE.fullmatch(v["dir"]) and (src_root / v["dir"]).is_dir():
                 dst_root.mkdir(exist_ok=True)
                 dst_root.chmod(0o711)  # UMask служб 0077, а в каталог полки заходит Apache (www-data)
                 os.replace(src_root / v["dir"], dst_root / name)
@@ -624,7 +624,7 @@ def _move_files(cfg: Config, c, acct) -> people.Account:
         os.replace(src, dst)
     elif src.is_dir():
         for d in src.iterdir():
-            if store.DIR_RE.match(d.name) and not (dst / d.name).exists():
+            if store.DIR_RE.fullmatch(d.name) and not (dst / d.name).exists():
                 os.replace(d, dst / d.name)
         with suppress(OSError):  # остались чужие файлы — их покажет appshelf check
             src.rmdir()

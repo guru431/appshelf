@@ -37,6 +37,8 @@ ICON_PIXELS = 4096 * 4096  # и картинка-бомба: мало байт, 
 MAX_V1 = 1 << 20     # файл подписи v1 (META-INF/*.RSA) — килобайты; больше — бомба
 MAX_SIG_BLOCK = 64 << 20
 MAX_ARSC = 32 << 20  # resources.arsc больших приложений — единицы МБ; больше — без названия и иконки из ресурсов
+MAX_CD = 16 << 20    # оглавление zip (central directory) больших APK — единицы МБ
+MAX_ENTRIES = 100_000  # файлов в больших APK — десятки тысяч
 RASTER = (".png", ".webp")
 VERSIONS = {21: "5", 22: "5.1", 23: "6", 24: "7", 25: "7.1", 26: "8", 27: "8.1", 28: "9", 29: "10", 30: "11",
             31: "12", 32: "12L", 33: "13", 34: "14", 35: "15", 36: "16"}
@@ -64,10 +66,41 @@ class ApkInfo:
     signer: str                # SHA-256 DER сертификата, 64 hex
 
 
+def _open_zip(path: Path) -> zipfile.ZipFile:
+    """ZipFile после своей проверки оглавления. zipfile строит ZipInfo (~490 Б) на каждую запись оглавления (от 46 Б)
+    до любых проверок: файл в 1 ГиБ из одних записей занял бы ~9 ГиБ памяти. EOCD и ZIP64 ищутся так же, как их
+    находит zipfile (без комментария — в конце, иначе последняя сигнатура); не zip — решает сам zipfile."""
+    with open(path, "rb") as f:
+        size = f.seek(0, 2)
+        start = max(size - 0xFFFF - 22, 0)
+        f.seek(start)
+        tail = f.read()
+        eocd = len(tail) - 22 if tail[-22:-18] == b"PK\x05\x06" and tail[-2:] == b"\0\0" \
+            else tail.rfind(b"PK\x05\x06")
+        if 0 <= eocd <= len(tail) - 22:
+            entries, cd_size = struct.unpack_from("<HI", tail, eocd + 10)
+            eocd += start
+            if eocd >= 20:
+                f.seek(eocd - 20)
+                locator = f.read(20)
+                if locator[:4] == b"PK\x06\x07":  # ZIP64: размеры — в записи перед указателем
+                    record = eocd - 20 - 56
+                    for pos in (struct.unpack_from("<Q", locator, 8)[0], record):
+                        if 0 <= pos <= record:
+                            f.seek(pos)
+                            data = f.read(56)
+                            if data[:4] == b"PK\x06\x06":
+                                entries, cd_size = struct.unpack_from("<QQ", data, 32)
+                                break
+            if entries > MAX_ENTRIES or cd_size > MAX_CD:
+                raise ApkError("в архиве слишком много файлов — это не похоже на приложение")
+    return zipfile.ZipFile(path)
+
+
 def read_apk(path: Path) -> ApkInfo:
     """Ограниченный разбор метаданных; доверие содержимому устанавливает только verify_apk перед публикацией."""
     try:
-        with zipfile.ZipFile(path) as z:
+        with _open_zip(path) as z:
             names = z.namelist()
             if "AndroidManifest.xml" not in names:
                 raise ApkError("в архиве нет AndroidManifest.xml — это не APK (наборы XAPK, APKS, APKM не подходят)")
@@ -90,7 +123,7 @@ def read_apk(path: Path) -> ApkInfo:
     if m.get("requiredSplitTypes") or _true(app.get("isSplitRequired")):
         raise ApkError("приложению нужен набор файлов (split APK) — одним файлом из браузера не ставится")
     package = m.get("package")
-    if not isinstance(package, str) or not PACKAGE_RE.match(package):
+    if not isinstance(package, str) or not PACKAGE_RE.fullmatch(package):
         raise ApkError("в манифесте нет годного имени пакета")
     code = m.get("versionCode")
     if not isinstance(code, int) or isinstance(code, bool):
@@ -204,7 +237,7 @@ def verified_rotation(path: Path, old_signer: str, new_signer: str) -> int:
 
 def extract_icon(path: Path) -> bytes | None:
     """PNG самой большой ic_launcher из res/mipmap-*, иначе из res/drawable-*; нет или не читается — None."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         names = z.namelist()
         for pattern in (MIPMAP_RE, DRAWABLE_RE):
             icon = _largest(z, [n for n in names if pattern.match(n)])
@@ -216,7 +249,7 @@ def extract_icon(path: Path) -> bytes | None:
 def resource_label(path: Path) -> str:
     """Название из resources.arsc, если android:label — ссылка: русское, иначе без языка, иначе любое; не ссылка, нет
     таблицы или она не разбирается — ""."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         values = _resolve(z, "label")
     ranked = sorted(values, key=lambda v: (v[0] != "ru", v[0] != ""))
     return next((s.strip()[:200] for _, _, s in ranked if s.strip()), "")
@@ -224,7 +257,7 @@ def resource_label(path: Path) -> str:
 
 def resource_icon(path: Path) -> bytes | None:
     """Иконка по android:icon: PNG/WebP либо скомпилированная векторная/адаптивная иконка."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         names = sorted({s for _, _, s in _resolve(z, "icon")})
         raster = _largest(z, [s for s in names if s.endswith(RASTER)])
         if raster is not None:
@@ -247,7 +280,8 @@ def _largest(z: zipfile.ZipFile, names: list[str]) -> bytes | None:
         try:
             if z.getinfo(name).file_size > ICON_MAX:
                 continue
-            img = Image.open(io.BytesIO(z.read(name)))
+            # Формат — по содержимому, а не по имени: без formats= под ic_launcher.png открылся бы и EPS (Ghostscript)
+            img = Image.open(io.BytesIO(z.read(name)), formats=("PNG", "WEBP"))
             if img.width * img.height > ICON_PIXELS:
                 continue
             img.load()
@@ -386,24 +420,39 @@ def _arsc(data: bytes, res_id: int) -> list[tuple[str, int, str]]:
 
 def _arsc_values(data: bytes, res_id: int) -> list[tuple[str, int, str | int | Ref]]:
     """Typed resource values: drawable filenames, aliases and colors used by adaptive icon layers."""
+    pool, types = _arsc_index(data)
+    return _arsc_lookup(data, pool, types.get((res_id >> 24, (res_id >> 16) & 0xFF), ()), res_id)
+
+
+def _arsc_index(data: bytes) -> tuple[bytes | None, dict[tuple[int, int], list[tuple[int, int, int]]]]:
+    """Один проход по таблице: пул значений и чанки ResTable_type по (пакет, тип) — (заголовок, начало, конец).
+    Иконка ищет в таблице сотни ресурсов: проход на каждый поиск по таблице в десятки МБ занимал бы часы."""
     typ, header = struct.unpack_from("<HH", data, 0)
     if typ != 0x0002:
         raise ValueError("не таблица ресурсов")
-    pool, out = None, []
+    pool, types = None, {}
     for ctype, chead, start, end in _chunks(data, header, len(data)):
         if ctype == 0x0001 and pool is None:  # пул значений — до пакетов
             pool = data[start:end]
-        elif ctype == 0x0200 and pool is not None and struct.unpack_from("<I", data, start + 8)[0] == res_id >> 24:
+        elif ctype == 0x0200 and pool is not None:
+            package = struct.unpack_from("<I", data, start + 8)[0]
             for t, th, ts, te in _chunks(data, start + chead, end):
-                if t != 0x0201 or data[ts + 8] != (res_id >> 16) & 0xFF:
-                    continue
-                value = _type_entry(data[ts:te], th, res_id & 0xFFFF)
-                if value is not None and (value[0] in (0x01, 0x03) or 0x1C <= value[0] <= 0x1F):
-                    config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
-                    lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
-                    (density,) = struct.unpack_from("<H", data, config + 14)
-                    resolved = _string(pool, value[1]) if value[0] == 0x03 else Ref(value[1]) if value[0] == 0x01 else value[1]
-                    out.append((lang, density, resolved))
+                if t == 0x0201:
+                    types.setdefault((package, data[ts + 8]), []).append((th, ts, te))
+    return pool, types
+
+
+def _arsc_lookup(data: bytes, pool: bytes | None, chunks, res_id: int) -> list[tuple[str, int, str | int | Ref]]:
+    """Значения res_id из чанков его типа (см. _arsc_index): [(язык, плотность, значение)]."""
+    view, out = memoryview(data), []
+    for th, ts, te in chunks:
+        value = _type_entry(view[ts:te], th, res_id & 0xFFFF)
+        if value is not None and (value[0] in (0x01, 0x03) or 0x1C <= value[0] <= 0x1F):
+            config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
+            lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
+            (density,) = struct.unpack_from("<H", data, config + 14)
+            resolved = _string(pool, value[1]) if value[0] == 0x03 else Ref(value[1]) if value[0] == 0x01 else value[1]
+            out.append((lang, density, resolved))
     return out
 
 
@@ -412,9 +461,16 @@ def _type_entry(t: bytes, header: int, index: int) -> tuple[int, int] | None:
     Смещения записей: u32, u16 ×4 (FLAG_OFFSET16) или пары (индекс, смещение ×4) (FLAG_SPARSE)."""
     flags = t[9]
     count, entries = struct.unpack_from("<II", t, 12)
-    if flags & 0x01:
-        pairs = (struct.unpack_from("<HH", t, header + 4 * i) for i in range(count))
-        off = next((o * 4 for i, o in pairs if i == index), None)
+    if flags & 0x01:  # пары упорядочены по индексу — двоичный поиск, как в AOSP: перебор шёл бы по всему чанку
+        low, high = 0, count
+        while low < high:
+            mid = (low + high) // 2
+            if struct.unpack_from("<H", t, header + 4 * mid)[0] < index:
+                low = mid + 1
+            else:
+                high = mid
+        i, o = struct.unpack_from("<HH", t, header + 4 * low) if low < count else (None, 0)
+        off = o * 4 if i == index else None
     elif index >= count:
         off = None
     elif flags & 0x02:
