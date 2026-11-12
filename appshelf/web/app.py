@@ -30,6 +30,7 @@ PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/", "/apk/")  # /apk/ — постоя�
 APPLE_PATHS = ("/history", "/blocked", "/api/status")
 APPLE_PREFIXES = ("/apps/", "/history/", "/blocked/", "/acct/")
 NO_APPLE_ID = "409: Нет Apple ID — добавьте его на странице «Аккаунты» (/apple)"
+UPLOAD_FORM_RE = re.compile(r"/android(/public)?/(add|apps/[^/]+)/upload")  # как LocationMatch в deploy/apache-appshelf.conf
 NEW_VERSION_DAYS = 7  # метка «новая версия» в каталоге: удалённое из App Store обновляют только отсюда
 UNPUBLISH_ARCHIVE_DOWN = "Архив недоступен — снять с публикации сейчас нельзя"
 PIN_ARCHIVE_DOWN = "Архив недоступен — изменить закрепление сейчас нельзя"
@@ -112,6 +113,26 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return gone(request, "Полка или приложение больше не существует.")
 
     site = urlsplit(cfg.public_base).netloc.lower()
+    app.state.uploading = set()  # участники, чей файл сейчас идёт запасной формой
+
+    @app.middleware("http")
+    async def upload_form_gate(request: Request, call_next):
+        # Запасная форма без JS (multipart): Starlette кладёт файл во TMPDIR ещё до обработчика, квоты докачки его не
+        # видят. Добавлен первым — выполняется после auth. Участнику — один такой запрос за раз; места — на спул и копию.
+        if request.method != "POST" or not UPLOAD_FORM_RE.fullmatch(request.url.path):
+            return await call_next(request)
+        who = request.state.who.id
+        if who in app.state.uploading:
+            return PlainTextResponse("Предыдущий файл ещё загружается — дождитесь его", status_code=429)
+        length = request.headers.get("content-length", "")
+        size = min(int(length), net.MAX_APK) if length.isdigit() else net.MAX_APK
+        if await run_in_threadpool(env.disk_free, cfg.data_dir) - 2 * size < jobs.RESERVE:
+            return PlainTextResponse(android.NO_ROOM, status_code=507)
+        app.state.uploading.add(who)
+        try:
+            return await call_next(request)
+        finally:
+            app.state.uploading.discard(who)
 
     @app.middleware("http")
     async def csrf_guard(request: Request, call_next):

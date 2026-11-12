@@ -7,8 +7,9 @@ from PIL import Image
 from starlette.testclient import TestClient
 
 from apk_factory import cert_sha, make_apk
-from appshelf import people
+from appshelf import jobs, people
 from appshelf.android import db, fetch, net, rustore
+from appshelf.config import GB
 from appshelf.android.sources import Latest
 from appshelf.web.app import create_app
 from helpers import HOST, make_account
@@ -403,6 +404,29 @@ def test_upload_too_big_and_empty(web, conn, cfg, monkeypatch):
     assert r.status_code == 400
     assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 0
     assert not list((cfg.tmp_dir / "web").glob("up-*"))
+
+
+def test_fallback_upload_checks_disk_and_allows_one_request_per_person(web, conn, cfg):
+    # запасная форма шла мимо квот докачки: спул Starlette и копия в tmp/web, без предела числа запросов
+    files = {"file": ("a.apk", b"x" * 100)}
+    web.free["bytes"] = jobs.RESERVE + 150      # до разбора: места нет и на спул, и на копию
+    r = web.client.post("/android/add/upload", data={"name": ""}, files=files)
+    assert r.status_code == 507 and "мало места" in r.text
+    answers = iter([50 * GB, jobs.RESERVE + 99])  # спул прошёл, а на копию места уже нет
+    env = web.app.state.w.env
+    env.disk_free = lambda path: next(answers)
+    r = web.client.post("/android/add/upload", data={"name": ""}, files=files)
+    assert r.status_code == 507 and "мало места" in r.text
+    env.disk_free = lambda path: 50 * GB
+    web.app.state.uploading.add(1)                # файл участника уже идёт этой формой
+    for path in ("/android/add/upload", f"/android/apps/{PKG}/upload", "/android/public/add/upload"):
+        assert web.client.post(path, data={"name": ""}, files=files).status_code == 429, path
+    web.app.state.uploading.discard(1)
+    assert web.client.post("/android/add/upload", data={"name": ""}, files=files,
+                           follow_redirects=False).status_code == 303
+    assert web.app.state.uploading == set()
+    assert conn.execute("SELECT COUNT(*) FROM android_jobs").fetchone()[0] == 1
+    assert len(list((cfg.tmp_dir / "web").glob("up-*"))) == 1
 
 
 def test_other_person_package_is_404(web, conn, clock, tmp_path):

@@ -393,7 +393,8 @@ Play — free apps that come as one APK, AppGallery, F-Droid, APKPure).
   are supported; after a drop only the undelivered chunk is repeated. Received chunks are kept for 7 days after the
   last one; an upload without a single chunk expires after an hour, and one silent for an hour keeps only what it
   received in reserve. Space reserve: up to 1 GB and at most two unfinished uploads per person, 2 GB per server;
-  with no room to continue the browser waits. The "Незавершённые загрузки" (Unfinished uploads) block on "Add"
+  besides, 3 GB must remain on the data disk after the chunks and the assembly, as for downloads. With no room to
+  continue the browser waits. The no-JS fallback form takes one file per person at a time, with the same space check. The "Незавершённые загрузки" (Unfinished uploads) block on "Add"
   cancels abandoned ones (the owner sees and cancels everyone's). To continue after the page is closed the browser
   keeps a copy of the file until completion or cancellation; if it has no room, choose the same APK again — the
   server's chunks are kept. The service worker sends in the background while the browser allows it. If Android puts
