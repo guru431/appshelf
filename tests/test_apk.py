@@ -173,6 +173,62 @@ def test_adaptive_icon_rejects_resource_cycles(tmp_path, cycle):
     assert apk.resource_icon(path) is None
 
 
+def test_icon_reference_chains_are_resolved_from_one_table_pass_within_budget(tmp_path, monkeypatch):
+    """250 путей, у каждого цвет — цепочка из 8 ссылок: прежде каждый переход заново проходил resources.arsc
+    (таблица в 30 МБ — часы под download_lock). Таблица разбирается один раз, а сверх бюджета шагов — без иконки."""
+    color, hops, paths = 0x7f050000, 8, 250
+    resources = {ICON: [("", 0, "res/a.xml")]}
+    for rid in range(color, color + paths * hops):
+        last = (rid - color) % hops == hops - 1
+        resources[rid] = [("", 0, 0xFF102030 if last else ("ref", rid + 1))]
+    tree = ("vector", vector_drawable()[1], [("path", {"fillColor": ("ref", color + p * hops),
+                                                       "pathData": ("str", "M0,0h1v1h-1z")}, []) for p in range(paths)])
+    path = make_apk(tmp_path / "chains.apk", icon_ref=ICON, resources=resources,
+                    files={"res/a.xml": drawable_xml(tree)})
+    chunks, walks = apk._chunks, []
+    monkeypatch.setattr(apk, "_chunks", lambda data, pos, end: walks.append(pos) or chunks(data, pos, end))
+    assert apk.resource_icon(path) is None
+    assert len([w for w in walks if w == 12]) == 2  # заголовок таблицы: _resolve в resource_icon и render_icon
+    monkeypatch.setattr(apk, "_chunks", chunks)
+    short = make_apk(tmp_path / "short.apk", icon_ref=ICON, files={"res/a.xml": drawable_xml(tree)},
+                     resources={**resources, **{color + p * hops: [("", 0, 0xFF102030)] for p in range(paths)}})
+    assert Image.open(io.BytesIO(apk.resource_icon(short))).size == (192, 192)
+
+
+def test_sparse_type_entries_found_by_binary_search():
+    import struct
+    indexes = list(range(0, 3000, 3))
+    header, count = 20, len(indexes)
+    entries = header + 4 * count
+    pairs = b"".join(struct.pack("<HH", i, 4 * n) for n, i in enumerate(indexes))  # смещение ×4: 16 байт записи
+    data = b"".join(struct.pack("<HHI", 8, 0, 0) + struct.pack("<HBBI", 8, 0, 0x1C, i) for i in indexes)
+    chunk = struct.pack("<HHIBBHII", 0x0201, header, entries + len(data), 5, 0x01, 0, count, entries) + pairs + data
+    assert [apk._type_entry(chunk, header, i) for i in (0, 1500, 2997)] == [(0x1C, 0), (0x1C, 1500), (0x1C, 2997)]
+    assert [apk._type_entry(chunk, header, i) for i in (1, 2998, 5000)] == [None, None, None]
+
+
+def test_branching_adaptive_layers_are_built_once_and_svg_budget_stops_copies(tmp_path, monkeypatch):
+    """Каждый уровень adaptive-icon ссылается на следующий дважды: 2^7 копий слоя. Файл разбирается один раз,
+    а копии в SVG считаются по ходу построения."""
+    from appshelf import apk_icons
+    leaf = ("vector", vector_drawable()[1], [("path", {"fillColor": ("color", 0xFF29C1E1),
+                                                       "pathData": ("str", "M42,42h24v24h-24z" * 6)}, [])] * 200)
+    files = {"res/l.xml": drawable_xml(leaf)}
+    resources = {ICON: [("", 0, "res/f0.xml")], ICON + 7: [("", 0, "res/l.xml")]}
+    for level in range(7):
+        files[f"res/f{level}.xml"] = drawable_xml(("adaptive-icon", {}, [
+            (layer, {"drawable": ("ref", ICON + level + 1)}, []) for layer in ("background", "foreground")]))
+        if level:
+            resources[ICON + level] = [("", 0, f"res/f{level}.xml")]
+    path = make_apk(tmp_path / "branches.apk", icon_ref=ICON, resources=resources, files=files)
+    tree, parsed = apk_icons._tree, []
+    monkeypatch.setattr(apk_icons, "_tree", lambda raw: parsed.append(1) or tree(raw))
+    assert apk.resource_icon(path) is None
+    assert len(parsed) <= 8
+    same = adaptive_apk(tmp_path, resource_values={ICON + 1: [("", 0, "res/c.xml")]})  # оба слоя — один файл
+    assert Image.open(io.BytesIO(apk.resource_icon(same))).getpixel((96, 96)) == (41, 193, 225, 255)
+
+
 def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     huge = png_bytes(144) + b"\0" * (apk.ICON_MAX + 1)  # годный PNG с хвостом: без предела была бы выбрана она
     path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48),

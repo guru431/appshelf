@@ -386,24 +386,39 @@ def _arsc(data: bytes, res_id: int) -> list[tuple[str, int, str]]:
 
 def _arsc_values(data: bytes, res_id: int) -> list[tuple[str, int, str | int | Ref]]:
     """Typed resource values: drawable filenames, aliases and colors used by adaptive icon layers."""
+    pool, types = _arsc_index(data)
+    return _arsc_lookup(data, pool, types.get((res_id >> 24, (res_id >> 16) & 0xFF), ()), res_id)
+
+
+def _arsc_index(data: bytes) -> tuple[bytes | None, dict[tuple[int, int], list[tuple[int, int, int]]]]:
+    """Один проход по таблице: пул значений и чанки ResTable_type по (пакет, тип) — (заголовок, начало, конец).
+    Иконка ищет в таблице сотни ресурсов: проход на каждый поиск по таблице в десятки МБ занимал бы часы."""
     typ, header = struct.unpack_from("<HH", data, 0)
     if typ != 0x0002:
         raise ValueError("не таблица ресурсов")
-    pool, out = None, []
+    pool, types = None, {}
     for ctype, chead, start, end in _chunks(data, header, len(data)):
         if ctype == 0x0001 and pool is None:  # пул значений — до пакетов
             pool = data[start:end]
-        elif ctype == 0x0200 and pool is not None and struct.unpack_from("<I", data, start + 8)[0] == res_id >> 24:
+        elif ctype == 0x0200 and pool is not None:
+            package = struct.unpack_from("<I", data, start + 8)[0]
             for t, th, ts, te in _chunks(data, start + chead, end):
-                if t != 0x0201 or data[ts + 8] != (res_id >> 16) & 0xFF:
-                    continue
-                value = _type_entry(data[ts:te], th, res_id & 0xFFFF)
-                if value is not None and (value[0] in (0x01, 0x03) or 0x1C <= value[0] <= 0x1F):
-                    config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
-                    lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
-                    (density,) = struct.unpack_from("<H", data, config + 14)
-                    resolved = _string(pool, value[1]) if value[0] == 0x03 else Ref(value[1]) if value[0] == 0x01 else value[1]
-                    out.append((lang, density, resolved))
+                if t == 0x0201:
+                    types.setdefault((package, data[ts + 8]), []).append((th, ts, te))
+    return pool, types
+
+
+def _arsc_lookup(data: bytes, pool: bytes | None, chunks, res_id: int) -> list[tuple[str, int, str | int | Ref]]:
+    """Значения res_id из чанков его типа (см. _arsc_index): [(язык, плотность, значение)]."""
+    view, out = memoryview(data), []
+    for th, ts, te in chunks:
+        value = _type_entry(view[ts:te], th, res_id & 0xFFFF)
+        if value is not None and (value[0] in (0x01, 0x03) or 0x1C <= value[0] <= 0x1F):
+            config = ts + 20  # ResTable_config: язык — с 8-го байта, плотность — с 14-го
+            lang = data[config + 8:config + 10].rstrip(b"\0").decode("ascii", "replace")
+            (density,) = struct.unpack_from("<H", data, config + 14)
+            resolved = _string(pool, value[1]) if value[0] == 0x03 else Ref(value[1]) if value[0] == 0x01 else value[1]
+            out.append((lang, density, resolved))
     return out
 
 
@@ -412,9 +427,16 @@ def _type_entry(t: bytes, header: int, index: int) -> tuple[int, int] | None:
     Смещения записей: u32, u16 ×4 (FLAG_OFFSET16) или пары (индекс, смещение ×4) (FLAG_SPARSE)."""
     flags = t[9]
     count, entries = struct.unpack_from("<II", t, 12)
-    if flags & 0x01:
-        pairs = (struct.unpack_from("<HH", t, header + 4 * i) for i in range(count))
-        off = next((o * 4 for i, o in pairs if i == index), None)
+    if flags & 0x01:  # пары упорядочены по индексу — двоичный поиск, как в AOSP: перебор шёл бы по всему чанку
+        low, high = 0, count
+        while low < high:
+            mid = (low + high) // 2
+            if struct.unpack_from("<H", t, header + 4 * mid)[0] < index:
+                low = mid + 1
+            else:
+                high = mid
+        i, o = struct.unpack_from("<HH", t, header + 4 * low) if low < count else (None, 0)
+        off = o * 4 if i == index else None
     elif index >= count:
         off = None
     elif flags & 0x02:
