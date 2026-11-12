@@ -9,7 +9,7 @@ def test_unpublish_while_shelf_busy_says_so(web, conn, cfg, clock, monkeypatch):
     seed_app(conn, cfg, clock, versions=("1.0",))
     monkeypatch.setattr(jobs, "REMOVE_LOCK_WAIT", 0)
     with ipatool.hold(cfg.download_lock):                  # чьё-то скачивание IPA или APK
-        r = web.client.post("/apps/123/unpublish")
+        r = web.client.post("/apps/123/unpublish", data={"confirm": "1"})
     assert r.status_code == 503 and "Полка занята скачиванием" in r.text
     assert store.list_apps(conn, 1) and store.current_version(conn, 1, 123)
 

@@ -775,7 +775,7 @@ def test_help_tip_segments_and_removed_filter(web, conn, cfg, clock, acct, width
             assert dialog.is_hidden()
             page.get_by_label("Действия с Test App", exact=True).click()
             assert page.locator(".more[open]").get_by_role("button", name="Скопировать ссылку").is_visible()
-            danger = page.locator(".more[open]").get_by_role("button", name="Снять с публикации")
+            danger = page.locator(".more[open]").get_by_role("link", name="Снять с публикации")
             assert danger.evaluate(CONTRAST) >= 4.5   # тёмная тема: красный на подложке меню
             page.keyboard.press("Escape")
             if desktop:

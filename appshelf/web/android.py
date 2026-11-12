@@ -734,8 +734,41 @@ def _register_scope(app, w, scope: Scope):
             return catalog_page(request, 409, "Полка занята скачиванием — повторите через минуту")
         return shelf_back(request) if done else missing()
 
+    def remove_page(request: Request, package: str):
+        """Подтверждение «Снять с полки»: удаляются все версии, и закреплённые, и свои файлы, которых больше нигде
+        нет, — их список с размерами; с публичной приложение пропадёт и у гостей."""
+        with w.conn() as c:
+            shelf, app_row = own(c, request, package)
+            rows = c.execute("SELECT version_name, size, role, pinned, source FROM android_versions WHERE shelf_id=? "
+                             "AND package=? ORDER BY version_code DESC, id DESC",
+                             (shelf.id, package)).fetchall() if app_row is not None else []
+        cancel = p if scope.public else p + f"?person={request.state.who.id}"
+        if app_row is None:
+            return w.page(request, "confirm.html", scope.nav, 404, refused=True, cancel=cancel,
+                          question="Этого приложения уже нет на полке: его сняли в другой вкладке.")
+        roles = {"current": "текущая", "previous": "предыдущая", "kept": "сохранённая", "pending": "ждёт решения"}
+        versions = [{"name": r["version_name"], "size": r["size"],
+                     "notes": [roles.get(r["role"], r["role"])] + (["закреплена"] if r["pinned"] else [])
+                     + (["свой файл: единственная копия на этой полке"] if r["source"] == "upload" else [])}
+                    for r in rows]
+        name = app_row["name"]
+        return w.page(request, "confirm.html", scope.nav,
+                      question=f"Снять с полки «{name}»? Файлы APK и ссылки установки всех версий удалятся, включая "
+                               "закреплённые." if versions else f"Снять с полки «{name}»?",
+                      versions=versions, action=f"{p}/apps/{package}/remove", button="Снять с полки", cancel=cancel,
+                      warning="Приложение пропадёт с публичной полки и у гостей: их ссылки установки перестанут "
+                              "работать." if scope.public else "",
+                      hidden={"confirm": "1"})
+
+    @app.get(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
+    def confirm_remove(request: Request, package: str):
+        return remove_page(request, package)
+
     @app.post(p + "/apps/{package}/remove", response_class=HTMLResponse, dependencies=deps)
-    def remove(request: Request, package: str):
+    def remove(request: Request, package: str, confirm: str = Form("")):
+        if confirm != "1":  # форма открытой до подтверждения страницы — сначала вопрос
+            return remove_page(request, package)
+
         def drop(c, root, sid):
             db.remove_app(c, root, sid, package)
             return True

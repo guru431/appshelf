@@ -115,6 +115,17 @@ def test_owner_adds_to_public_and_worker_fills_it(web, conn, tmp_path):
     assert 'href="/android/public/add"' in page                                          # «Добавить в публичную»
 
 
+def test_remove_from_public_warns_about_guests(web, member, conn, tmp_path):
+    shelf = add_public(web, conn, tmp_path)
+    assert f'href="/android/public/apps/{PKG}/remove"' in web.client.get("/android/public").text
+    assert member.client.get(f"/android/public/apps/{PKG}/remove").status_code == 403
+    page = web.client.get(f"/android/public/apps/{PKG}/remove")
+    assert page.status_code == 200 and "пропадёт с публичной полки и у гостей" in page.text
+    assert 'href="/android/public"' in page.text and "<li>1.0 · " in page.text
+    r = web.client.post(f"/android/public/apps/{PKG}/remove", data={"confirm": "1"}, follow_redirects=False)
+    assert r.headers["location"] == "/android/public" and db.get_app(conn, shelf.id, PKG) is None
+
+
 def test_busy_public_shelf_polls_its_own_status(web, conn, tmp_path):
     """Адрес опроса — в <script>: там «&amp;» браузер не раскодирует, и сервер ответил бы о личной полке."""
     web.client.post("/android/public/add/rustore", data={"package": PKG, "name": "Пример"})
@@ -162,7 +173,8 @@ def test_copy_personal_apk_to_public_without_download(web, cfg, conn, tmp_path, 
     assert web.sources.calls == calls
     assert "Уже на публичной" in web.client.get("/android/public/add").text
     # Удаление личной копии не ломает публичную.
-    web.client.post(f"/android/apps/{PKG}/remove")
+    web.client.post(f"/android/apps/{PKG}/remove", data={"confirm": "1"})
+    assert db.get_app(conn, mine.id, PKG) is None
     assert (folder / fetch.apk_name(PKG, copied["version_name"])).is_file()
     assert db.current_version(conn, public.id, PKG) is not None
 
@@ -295,7 +307,7 @@ def test_copy_rechecks_source_when_worker_runs(web, cfg, conn, tmp_path, change)
     if change == "paid":
         db.set_paid(conn, mine.id, PKG, True)
     elif change == "removed":
-        web.client.post(f"/android/apps/{PKG}/remove")
+        web.client.post(f"/android/apps/{PKG}/remove", data={"confirm": "1"})
     else:
         version = db.current_version(conn, mine.id, PKG)
         path = fetch.shelf_root(cfg, mine) / version["dir"] / fetch.apk_name(PKG, version["version_name"])

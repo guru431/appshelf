@@ -16,6 +16,10 @@ def form_action(page, path):
     return html.unescape(next(a for a in re.findall(r'<form[^>]*action="([^"]+)"', page) if path in a))
 
 
+def link_to(page, path):
+    return html.unescape(next(h for h in re.findall(r'<a[^>]*href="([^"]+)"', page) if path in h))
+
+
 def android_app(conn, cfg, clock, uid):
     shelf = db.ensure_shelf(conn, uid, clock.iso())
     db.put_app(conn, shelf.id, PKG, "Shared app", "link", "https://example.org/app.apk", clock.iso())
@@ -31,9 +35,10 @@ def test_old_apple_tab_unpublishes_its_own_shelf(web, conn, cfg, clock, acct):
     sign_in(web.client, cfg, conn, clock, other.user_id)
     for target in (acct, other):
         seed_app(conn, cfg, clock, acct=target)
-    action = form_action(web.client.get("/?os=apple").text, "/apps/123/unpublish")
+    action = form_action(web.client.get(link_to(web.client.get("/?os=apple").text, "/apps/123/unpublish")).text,
+                         "/apps/123/unpublish")
     web.client.get(f"/acct/{other.id}", follow_redirects=False)
-    response = web.client.request("POST", action, follow_redirects=False)
+    response = web.client.request("POST", action, data={"confirm": "1"}, follow_redirects=False)
     assert response.status_code == 303
     assert not store.has_app(conn, acct.id, 123)
     assert store.has_app(conn, other.id, 123)
@@ -45,7 +50,10 @@ def test_old_android_tab_keeps_target_for_all_mutations(web, conn, cfg, clock, a
     sign_in(web.client, cfg, conn, clock, other.user_id)
     mine = android_app(conn, cfg, clock, acct.user_id)
     theirs = android_app(conn, cfg, clock, other.user_id)
-    action = form_action(web.client.get("/android").text, f"/apps/{PKG}/{operation}")
+    page = web.client.get("/android").text
+    if operation == "remove":                                   # «Снять с полки» — ссылка, форма — на подтверждении
+        page = web.client.get(link_to(page, f"/apps/{PKG}/remove")).text
+    action = form_action(page, f"/apps/{PKG}/{operation}")
     pending = db.list_apps(conn, mine.id)[0].pending
     web.client.get(f"/who/{other.user_id}", follow_redirects=False)
     response = web.client.request("POST", action, follow_redirects=False,

@@ -439,8 +439,30 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
             store.check_update(c, aid, app_id, now())
         return done(request)
 
+    def unpublish_page(request: Request, app_id: int):
+        """Подтверждение «Снять с публикации»: удаляются все версии, и закреплённые тоже, — их список с размерами."""
+        with w.conn() as c:
+            item = next((x for x in store.list_apps(c, request.state.acct.id) if x.app_id == app_id), None)
+        if item is None:
+            return gone(request)
+        roles = {"current": "текущая", "previous": "предыдущая", "kept": "сохранённая"}
+        versions = [{"name": v["version"], "size": v["size"],
+                     "notes": [roles[v["role"]]] + (["закреплена"] if v["pinned"] else [])}
+                    for v in (item.current, item.previous, item.kept) if v is not None]
+        return w.page(request, "confirm.html", "catalog",
+                      question=f"Снять с публикации «{item.name}»? Файлы IPA и ссылки установки всех версий удалятся, "
+                               "включая закреплённые." if versions else f"Снять с публикации «{item.name}»?",
+                      versions=versions, action=f"/apps/{app_id}/unpublish", button="Снять с публикации",
+                      cancel=APPLE_HOME, hidden={"confirm": "1"})
+
+    @app.get("/apps/{app_id}/unpublish", response_class=HTMLResponse)
+    def confirm_unpublish(request: Request, app_id: int):
+        return unpublish_page(request, app_id)
+
     @app.post("/apps/{app_id}/unpublish", response_class=HTMLResponse)
-    def unpublish(request: Request, app_id: int):
+    def unpublish(request: Request, app_id: int, confirm: str = Form("")):
+        if confirm != "1":  # форма открытой до подтверждения страницы — сначала вопрос
+            return unpublish_page(request, app_id)
         a = request.state.acct
         with w.conn() as c:
             if not store.has_app(c, a.id, app_id):

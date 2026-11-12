@@ -68,7 +68,7 @@
       <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/check') }}"><button class="secondary">Проверить обновление</button></form>
       {%- endif %}
       {% if a.current %}<button type="button" class="secondary" data-dialog="versions-{{ a.app_id }}">Версии и закрепления</button>{% endif %}
-      <form method="post" action="{{ post_url('/apps/' ~ a.app_id ~ '/unpublish') }}"><button class="danger">Снять с публикации</button></form></div>
+      <a class="btn danger" href="{{ post_url('/apps/' ~ a.app_id ~ '/unpublish') }}">Снять с публикации</a></div>
   </details>
   {% if a.current %}<dialog id="versions-{{ a.app_id }}" aria-labelledby="versions-title-{{ a.app_id }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>

@@ -125,7 +125,7 @@
       {%- endif %}
       {% if v %}<button type="button" class="secondary" data-dialog="versions-{{ a.package }}">Версии и закрепления</button>{% endif %}
       <button type="button" class="secondary" data-dialog="source-{{ a.package }}">Сменить источник</button>
-      <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/remove') }}"><button class="danger">Снять с полки</button></form></div>
+      <a class="btn danger" href="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/remove') }}">Снять с полки</a></div>
   </details>
   {% if v %}<dialog id="versions-{{ a.package }}" aria-labelledby="versions-title-{{ a.package }}">
     <button type="button" class="sm secondary close" data-close aria-label="Закрыть">Закрыть</button>
