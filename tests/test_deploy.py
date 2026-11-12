@@ -112,7 +112,8 @@ def test_install_refuses_while_nightly_check_runs():
     # ночная проверка (до 4 ч) со старым кодом в памяти догружала модули и пакеты уже после pip и подмены
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     check = text.index("systemctl show -P ActiveState appshelf-nightly.service")
-    assert check < text.index('pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"')
+    assert check < text.index('pip" install --quiet --root-user-action=ignore --upgrade --upgrade-strategy eager '
+                              '"${NEW}[fourpda]"')
     assert check < text.index('mv "$NEW/$p" "$R/$p"')
     assert "exit 1" in text[check:text.index("esac", check)]
 
@@ -199,7 +200,7 @@ def test_failed_deploy_reinstalls_package_from_live_code(tmp_path, pending):
 def test_package_flag_covers_every_failed_exit():
     text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     armed = text.index("\npackage_pending=1\n")
-    assert text.index("trap on_exit EXIT") < armed < text.index('pip" install --quiet --root-user-action=ignore "${NEW}')
+    assert text.index("trap on_exit EXIT") < armed < text.index('"${NEW}[fourpda]"')
     success = text.index("if restart_and_check; then\n")
     assert text.index("  package_pending=0\n", success) < text.index("  exit 0\n", success)
     # ручной откат: прежний пакет — из $OLD, пока прежний код ещё там (build/ остаётся в $OLD, не в $R)
@@ -464,3 +465,11 @@ def test_units_allow_google_dir():
     install = (DEPLOY / "install.sh").read_text(encoding="utf-8")
     made = install.index("install -d -o appshelf -g appshelf -m 0700 /etc/appshelf/accounts /etc/appshelf/google")
     assert made < install.index("systemctl restart appshelf-web")
+
+
+def test_install_upgrades_dependencies_like_ci():
+    # без --upgrade pip оставлял версии первой установки: исправления Pillow и python-multipart до сервера не доходили,
+    # а CI проверял свежие
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    deps = next(line for line in text.splitlines() if '"${NEW}[fourpda]"' in line)
+    assert "--upgrade --upgrade-strategy eager" in deps

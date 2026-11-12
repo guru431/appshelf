@@ -86,7 +86,9 @@ if ! command -v apksigner >/dev/null || ! command -v javac >/dev/null; then
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apksigner default-jdk-headless
 fi
 package_pending=1
-"$R/.venv/bin/pip" install --quiet --root-user-action=ignore "${NEW}[fourpda]"
+# Зависимости — свежие при каждой выкладке, как в CI (в pyproject только нижние границы): иначе исправления Pillow и
+# python-multipart, разбирающих недоверенный ввод, до сервера не доходили бы. Откат кода их не откатывает.
+"$R/.venv/bin/pip" install --quiet --root-user-action=ignore --upgrade --upgrade-strategy eager "${NEW}[fourpda]"
 "$R/.venv/bin/pip" install --quiet --root-user-action=ignore --no-deps --force-reinstall "$NEW"
 "$R/.venv/bin/python" -m compileall -q "$NEW/appshelf"   # __pycache__ appshelf сам не запишет
 rm -rf "$OLD"
