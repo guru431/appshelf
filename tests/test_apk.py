@@ -242,6 +242,47 @@ def test_huge_icon_entry_skipped(tmp_path, monkeypatch):
     assert apk.extract_icon(only_huge) is None
 
 
+def test_oversized_central_directory_refused_before_zipfile(tmp_path, monkeypatch):
+    """Оглавление zip проверяется до ZipFile: файл в пределах MAX_APK из одних записей раздувал процесс до ~9 ГиБ."""
+    import zipfile
+    path = make_apk(tmp_path / "a.apk", files={"res/mipmap-mdpi/ic_launcher.png": png_bytes(48)})
+    opened, real = [], zipfile.ZipFile
+    monkeypatch.setattr(zipfile, "ZipFile", lambda *a, **kw: opened.append(a) or real(*a, **kw))
+    for limit, value in (("MAX_ENTRIES", 2), ("MAX_CD", 100)):
+        with monkeypatch.context() as m:
+            m.setattr(apk, limit, value)
+            for call in (apk.read_apk, apk.extract_icon, apk.resource_label, apk.resource_icon):
+                with pytest.raises(apk.ApkError, match="слишком много файлов"):
+                    call(path)
+    assert opened == [] and apk.read_apk(path).package == "ru.example.app"
+
+
+def test_central_directory_limit_reads_zip64_and_commented_archives(tmp_path, monkeypatch):
+    """ZIP64: в обычном EOCD число записей — 0xFFFF, настоящее — в записи ZIP64; комментарий сдвигает EOCD."""
+    import zipfile
+    path = tmp_path / "z.zip"
+    monkeypatch.setattr(zipfile, "ZIP_FILECOUNT_LIMIT", 1)  # zipfile пишет ZIP64 уже для двух файлов
+    with zipfile.ZipFile(path, "w") as z:
+        z.comment = b"archive comment"
+        for i in range(5):
+            z.writestr(f"f{i}", b"x")
+    monkeypatch.undo()
+    raw = bytearray(path.read_bytes())
+    eocd = raw.rfind(b"PK\x05\x06")
+    raw[eocd + 8:eocd + 12] = b"\xff" * 4  # как у писателей ZIP64: в обычном EOCD — 0xFFFF
+    path.write_bytes(raw)
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 5)
+    with apk._open_zip(path) as z:
+        assert len(z.namelist()) == 5
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 4)
+    with pytest.raises(apk.ApkError, match="слишком много файлов"):
+        apk._open_zip(path)
+    monkeypatch.setattr(apk, "MAX_ENTRIES", 5)
+    monkeypatch.setattr(apk, "MAX_CD", 5 * 46)
+    with pytest.raises(apk.ApkError, match="слишком много файлов"):
+        apk._open_zip(path)
+
+
 def test_huge_v1_signature_file_refused_unread(tmp_path, monkeypatch):
     """Файл подписи v1 — бомба (сжатые нули): без предела read_apk распаковал бы его целиком в память."""
     path = make_apk(tmp_path / "a.apk", files={"META-INF/A.RSA": b"\0" * (apk.MAX_V1 + 1)})

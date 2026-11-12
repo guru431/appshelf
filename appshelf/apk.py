@@ -37,6 +37,8 @@ ICON_PIXELS = 4096 * 4096  # и картинка-бомба: мало байт, 
 MAX_V1 = 1 << 20     # файл подписи v1 (META-INF/*.RSA) — килобайты; больше — бомба
 MAX_SIG_BLOCK = 64 << 20
 MAX_ARSC = 32 << 20  # resources.arsc больших приложений — единицы МБ; больше — без названия и иконки из ресурсов
+MAX_CD = 16 << 20    # оглавление zip (central directory) больших APK — единицы МБ
+MAX_ENTRIES = 100_000  # файлов в больших APK — десятки тысяч
 RASTER = (".png", ".webp")
 VERSIONS = {21: "5", 22: "5.1", 23: "6", 24: "7", 25: "7.1", 26: "8", 27: "8.1", 28: "9", 29: "10", 30: "11",
             31: "12", 32: "12L", 33: "13", 34: "14", 35: "15", 36: "16"}
@@ -64,10 +66,41 @@ class ApkInfo:
     signer: str                # SHA-256 DER сертификата, 64 hex
 
 
+def _open_zip(path: Path) -> zipfile.ZipFile:
+    """ZipFile после своей проверки оглавления. zipfile строит ZipInfo (~490 Б) на каждую запись оглавления (от 46 Б)
+    до любых проверок: файл в 1 ГиБ из одних записей занял бы ~9 ГиБ памяти. EOCD и ZIP64 ищутся так же, как их
+    находит zipfile (без комментария — в конце, иначе последняя сигнатура); не zip — решает сам zipfile."""
+    with open(path, "rb") as f:
+        size = f.seek(0, 2)
+        start = max(size - 0xFFFF - 22, 0)
+        f.seek(start)
+        tail = f.read()
+        eocd = len(tail) - 22 if tail[-22:-18] == b"PK\x05\x06" and tail[-2:] == b"\0\0" \
+            else tail.rfind(b"PK\x05\x06")
+        if 0 <= eocd <= len(tail) - 22:
+            entries, cd_size = struct.unpack_from("<HI", tail, eocd + 10)
+            eocd += start
+            if eocd >= 20:
+                f.seek(eocd - 20)
+                locator = f.read(20)
+                if locator[:4] == b"PK\x06\x07":  # ZIP64: размеры — в записи перед указателем
+                    record = eocd - 20 - 56
+                    for pos in (struct.unpack_from("<Q", locator, 8)[0], record):
+                        if 0 <= pos <= record:
+                            f.seek(pos)
+                            data = f.read(56)
+                            if data[:4] == b"PK\x06\x06":
+                                entries, cd_size = struct.unpack_from("<QQ", data, 32)
+                                break
+            if entries > MAX_ENTRIES or cd_size > MAX_CD:
+                raise ApkError("в архиве слишком много файлов — это не похоже на приложение")
+    return zipfile.ZipFile(path)
+
+
 def read_apk(path: Path) -> ApkInfo:
     """Ограниченный разбор метаданных; доверие содержимому устанавливает только verify_apk перед публикацией."""
     try:
-        with zipfile.ZipFile(path) as z:
+        with _open_zip(path) as z:
             names = z.namelist()
             if "AndroidManifest.xml" not in names:
                 raise ApkError("в архиве нет AndroidManifest.xml — это не APK (наборы XAPK, APKS, APKM не подходят)")
@@ -204,7 +237,7 @@ def verified_rotation(path: Path, old_signer: str, new_signer: str) -> int:
 
 def extract_icon(path: Path) -> bytes | None:
     """PNG самой большой ic_launcher из res/mipmap-*, иначе из res/drawable-*; нет или не читается — None."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         names = z.namelist()
         for pattern in (MIPMAP_RE, DRAWABLE_RE):
             icon = _largest(z, [n for n in names if pattern.match(n)])
@@ -216,7 +249,7 @@ def extract_icon(path: Path) -> bytes | None:
 def resource_label(path: Path) -> str:
     """Название из resources.arsc, если android:label — ссылка: русское, иначе без языка, иначе любое; не ссылка, нет
     таблицы или она не разбирается — ""."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         values = _resolve(z, "label")
     ranked = sorted(values, key=lambda v: (v[0] != "ru", v[0] != ""))
     return next((s.strip()[:200] for _, _, s in ranked if s.strip()), "")
@@ -224,7 +257,7 @@ def resource_label(path: Path) -> str:
 
 def resource_icon(path: Path) -> bytes | None:
     """Иконка по android:icon: PNG/WebP либо скомпилированная векторная/адаптивная иконка."""
-    with zipfile.ZipFile(path) as z:
+    with _open_zip(path) as z:
         names = sorted({s for _, _, s in _resolve(z, "icon")})
         raster = _largest(z, [s for s in names if s.endswith(RASTER)])
         if raster is not None:
