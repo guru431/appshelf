@@ -139,3 +139,18 @@ def test_old_cookie_names_read_only_for_long_lived_cookies(web):
     assert (w.cookie(old, webauth.COOKIE), w.cookie(old, pin.COOKIE)) == ("auth", "guest")
     new = SimpleNamespace(cookies={w.cookie_name(LOGIN_COOKIE): "flow2"})
     assert w.cookie(new, LOGIN_COOKIE) == "flow2"
+
+
+def test_old_cookie_names_stop_being_read_after_deadline(web, clock):
+    """Срок чтения старых имён — в коде, не в комментарии: после него подложенная без __Host- cookie не действует."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from appshelf import webauth
+    from appshelf.web.common import LEGACY_UNTIL
+    w = web.app.state.w
+    old = SimpleNamespace(cookies={webauth.COOKIE: "auth"})
+    clock.advance((LEGACY_UNTIL - datetime.fromisoformat(clock.iso())).total_seconds() - 1)
+    assert w.cookie(old, webauth.COOKIE) == "auth"
+    clock.advance(1)
+    assert w.cookie(old, webauth.COOKIE) == ""
+    assert w.cookie(SimpleNamespace(cookies={w.cookie_name(webauth.COOKIE): "new"}), webauth.COOKIE) == "new"
