@@ -102,6 +102,10 @@ func main() {
         fmt.Println(`{"success":true,"prepared":true}`)
         return
     }
+    if len(os.Args)==3 && os.Args[1]=="--store-headers" {
+        printCommerceHeaders(filepath.Join(filepath.Dir(exe),"ipatool"),os.Args[2])
+        return
+    }
     values:=map[string]string{}
     stdinPassword:=false
     for i:=1;i<len(os.Args);i++ {

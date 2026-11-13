@@ -41,6 +41,8 @@ docker run --rm --network host -v /etc/machine-id:/etc/machine-id:ro -v "$WORK:/
   timeout 90 g++ -std=c++20 -O0 -ffunction-sections -fdata-sections -I/work/src \
     /work/tests/bag_contract.cpp appstore.cpp plist.cpp -Wl,--gc-sections -lz -o /work/bag-contract
   timeout 30 /work/bag-contract
+  timeout 90 g++ -std=c++20 -O0 -I/work/src /work/tests/commerce_contract.cpp -o /work/commerce-contract
+  timeout 30 /work/commerce-contract
   # libcrypto.a Debian собран с zstd: статический libzstd — в самый конец строки линковки
   cmake -B build -DCMAKE_BUILD_TYPE=Release -DSTATIC_BUILD=ON -DCMAKE_CXX_STANDARD_LIBRARIES="-l:libzstd.a" \
     > /work/cmake.log 2>&1 || { tail -n 40 /work/cmake.log; exit 1; }

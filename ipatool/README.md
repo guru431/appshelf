@@ -24,6 +24,7 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 | `09-session-aware-bag` | Справочник для входа запрашивается с `ix=6`; конфигурация SAP читается и из вложенного `urlBag`, и из плоского ответа Apple. Запросы каталога сохраняют прежний формат |
 | `10-current-store-auth-format` | User-Agent Configurator 2.21 для справочника входа и authenticate выбирает современный native endpoint Apple; тип XML-тела входа — `application/x-apple-plist`, как в текущем ipatool |
 | `11-native-auth-adapter` | Linux-вход через stdin выполняет закреплённый современный ipatool; пароль не сохраняется, успешный результат импортируется в прежний шифрованный формат. Подробности — `auth/README.md` |
+| `12-native-commerce-proof` | Запросы скачивания после native-входа получают подпись устройства из того же `adi-state` через защищённый pipe к helper; старые сессии сохраняют прежний путь. Офлайн-контракт — `tests/commerce_contract.cpp` |
 
 ## Когда пересобирать
 
@@ -79,4 +80,5 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
    `deploy/build-ipatool-docker.sh` гоняет `go test` адаптера и собирает бинарник.
 3. Выкладка (`deploy/deploy.sh`), сборка (`deploy/build-ipatool.sh`: новый `--prepare` пополнит
    `bin/ipatool-auth-cache`), затем живой вход в панели (или консольный — README, «Вход и участники») и
-   `auth info` / `list-purchases` от `appshelf`.
+   `auth info` / `list-purchases` / `list-versions` и полное скачивание IPA от `appshelf`
+   с полученной сессией. Успешное чтение покупок само по себе не проверяет скачивание.

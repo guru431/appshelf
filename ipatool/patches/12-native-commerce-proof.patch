@@ -1,0 +1,194 @@
+diff --git a/appstore.cpp b/appstore.cpp
+index 58383b7..ddf9dbf 100644
+--- a/appstore.cpp
++++ b/appstore.cpp
+@@ -1,4 +1,5 @@
+ #include "appstore.h"
++#include "native_commerce.h"
+ #include "SapSigner.h"   // SAP signing (v2.4.0+)
+ #include "device_mac.h"  // device MAC / GUID
+ #include "StoreAgentMachine.h"
+@@ -1137,7 +1138,7 @@ PlistDict AppStore::send_ent_download(const Account& acc, const App& app,
+ 
+     std::string body = encode_plist_xml(p);
+     if (m_debug) debug_dump_request("ent/download", "POST", url, hdrs, body);
+-    HttpResponse res = m_http.post(url, body, hdrs);
++    HttpResponse res = m_http.post(url, body, native_commerce_headers(url,hdrs));
+     httpStatus = res.statusCode;
+     if (m_debug) debug_dump_response("ent/download", res);
+     return decode_plist(res.body);
+@@ -1223,7 +1224,7 @@ PlistDict AppStore::send_download_product(const Account& acc, const App& app,
+     // 1. Try volumeStore (primary — every app that works today keeps using this)
+     if (m_debug)
+         fprintf(stderr, "[DEBUG] volumeStore URL: %s\n", vsUrl.c_str());
+-    HttpResponse vsRes = m_http.post(vsUrl, encode_plist_xml(make_vs_payload()), hdrs);
++    HttpResponse vsRes = m_http.post(vsUrl, encode_plist_xml(make_vs_payload()), native_commerce_headers(vsUrl,hdrs));
+     if (m_debug) {
+         fprintf(stderr, "[DEBUG] volumeStore status: %d\n", vsRes.statusCode);
+         fprintf(stderr, "[DEBUG] volumeStore body:\n%s\n", vsRes.body.c_str());
+@@ -1251,7 +1252,7 @@ PlistDict AppStore::send_download_product(const Account& acc, const App& app,
+         if (isAuthDialog) {
+             auto auth_payload = make_vs_payload();
+             auth_payload["hasBeenAuthedForBuy"] = PlistValue::makeString("true");
+-            HttpResponse authRes = m_http.post(vsUrl, encode_plist_xml(auth_payload), hdrs);
++            HttpResponse authRes = m_http.post(vsUrl, encode_plist_xml(auth_payload), native_commerce_headers(vsUrl,hdrs));
+             if (m_debug) {
+                 fprintf(stderr, "[DEBUG] hasBeenAuthedForBuy retry status: %d\n", authRes.statusCode);
+                 fprintf(stderr, "[DEBUG] hasBeenAuthedForBuy retry body:\n%s\n", authRes.body.c_str());
+@@ -1287,7 +1288,7 @@ PlistDict AppStore::send_download_product(const Account& acc, const App& app,
+                 fprintf(stderr,
+                     "[DEBUG] redownload empty (msg: '%s') — retrying volumeStore\n",
+                     rdCustomerMsg.c_str());
+-            HttpResponse retryRes = m_http.post(vsUrl, encode_plist_xml(make_vs_payload()), hdrs);
++            HttpResponse retryRes = m_http.post(vsUrl, encode_plist_xml(make_vs_payload()), native_commerce_headers(vsUrl,hdrs));
+             if (m_debug) {
+                 fprintf(stderr, "[DEBUG] volumeStore retry status: %d\n", retryRes.statusCode);
+                 fprintf(stderr, "[DEBUG] volumeStore retry body (first 500):\n%.500s\n", retryRes.body.c_str());
+@@ -1361,11 +1362,19 @@ static PlistDict decode_plist_safe(const std::string& body) {
+ 
+ // Headers and payload exactly as upstream downloadProductRequest.
+ static std::map<std::string, std::string> go_download_headers(const Account& acc) {
+-    return {
++    std::map<std::string,std::string> headers{
+         {"Content-Type", "application/x-apple-plist"},
+         {"iCloud-DSID",  acc.directoryServicesID},
+         {"X-Dsid",       acc.directoryServicesID},
+     };
++#ifdef __linux__
++    const char* home=getenv("HOME");
++    if (home && std::filesystem::exists(std::filesystem::path(home)/".ipatool"/"adi-state")) {
++        headers["X-Token"]=acc.passwordToken.get();
++        headers["X-Apple-Store-Front"]=acc.storeFront;
++    }
++#endif
++    return headers;
+ }
+ 
+ static std::string go_download_payload(const std::string& guid, const App& app,
+@@ -1396,7 +1405,7 @@ PlistDict AppStore::redownload_product(const Account& acc, const App& app,
+     std::string url  = redownloadEndpoint + "?guid=" + guid;
+ 
+     if (m_debug) debug_dump_request(label, "POST", url, hdrs, body);
+-    HttpResponse res = m_http.post(url, body, hdrs);
++    HttpResponse res = m_http.post(url, body, native_commerce_headers(url,hdrs));
+     if (m_debug) debug_dump_response(label, res);
+ 
+     PlistDict data = decode_plist_safe(res.body);
+@@ -1445,7 +1454,7 @@ PlistDict AppStore::send_update_product(const Account& acc, const App& app,
+     std::string url  = m_updateEndpoint + "?guid=" + guid;
+ 
+     if (m_debug) debug_dump_request("updateProduct", "POST", url, hdrs, body);
+-    HttpResponse res = m_http.post(url, body, hdrs);
++    HttpResponse res = m_http.post(url, body, native_commerce_headers(url,hdrs));
+     if (m_debug) debug_dump_response("updateProduct", res);
+ 
+     PlistDict data = decode_plist_safe(res.body);
+diff --git a/native_commerce.h b/native_commerce.h
+new file mode 100644
+index 0000000..219727d
+--- /dev/null
++++ b/native_commerce.h
+@@ -0,0 +1,103 @@
++#pragma once
++// Native Store sessions require a per-request AMD device proof. Only commerce
++// POSTs carrying the saved token use it; legacy sessions retain their HTTP path.
++#include <map>
++#include <string>
++#include <stdexcept>
++#include <nlohmann/json.hpp>
++#include "ipatool.h"
++#ifdef __linux__
++#include <filesystem>
++#include <chrono>
++#include <cerrno>
++#include <cstdlib>
++#include <fcntl.h>
++#include <poll.h>
++#include <signal.h>
++#include <sys/stat.h>
++#include <sys/wait.h>
++#include <unistd.h>
++
++static std::map<std::string,std::string> parse_native_store_proof(const std::string& raw) {
++    const auto data=nlohmann::json::parse(raw,nullptr,false);
++    if (!data.is_object() || data.size()!=2)
++        throw std::runtime_error("native Store device proof unavailable");
++    std::map<std::string,std::string> result;
++    for (const char* key : {"X-Apple-AMD","X-Apple-AMD-M"}) {
++        if (!data.contains(key) || !data[key].is_string())
++            throw std::runtime_error("native Store device proof unavailable");
++        const auto value=data[key].get<std::string>();
++        if (value.empty() || value.size()>8192 || value.find_first_of("\r\n")!=std::string::npos
++            || value.find('\0')!=std::string::npos)
++            throw std::runtime_error("native Store device proof unavailable");
++        result.emplace(key,value);
++    }
++    return result;
++}
++
++static std::string read_native_store_proof(const std::string& helper,const std::string& url) {
++    struct stat metadata{};
++    const auto parent=std::filesystem::path(helper).parent_path();
++    if (lstat(helper.c_str(),&metadata)!=0 || !S_ISREG(metadata.st_mode) || metadata.st_uid!=0
++        || (metadata.st_mode&0002) || access(helper.c_str(),W_OK)==0 || access(parent.c_str(),W_OK)==0)
++        throw std::runtime_error("native Store helper permissions are unsafe");
++    int pipefd[2];
++    if (pipe2(pipefd,O_CLOEXEC)!=0) throw std::runtime_error("native Store proof pipe unavailable");
++    const auto pid=fork();
++    if (pid<0) {
++        close(pipefd[0]); close(pipefd[1]);
++        throw std::runtime_error("native Store helper unavailable");
++    }
++    if (pid==0) {
++        const int nullfd=open("/dev/null",O_RDWR);
++        if (nullfd<0 || dup2(nullfd,STDIN_FILENO)<0 || dup2(nullfd,STDERR_FILENO)<0
++            || dup2(pipefd[1],STDOUT_FILENO)<0) _exit(1);
++        close(nullfd); close(pipefd[0]); close(pipefd[1]);
++        execl(helper.c_str(),helper.c_str(),"--store-headers",url.c_str(),static_cast<char*>(nullptr));
++        _exit(1);
++    }
++    close(pipefd[1]);
++    std::string raw;
++    bool ok=true;
++    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(60);
++    while (true) {
++        const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-std::chrono::steady_clock::now()).count();
++        if (remaining<=0) { ok=false; break; }
++        pollfd pfd{pipefd[0],POLLIN,0};
++        const int ready=poll(&pfd,1,static_cast<int>(remaining));
++        if (ready<0 && errno==EINTR) continue;
++        if (ready<=0) { ok=false; break; }
++        char chunk[4096];
++        const auto size=read(pipefd[0],chunk,sizeof(chunk));
++        if (size<0 && errno==EINTR) continue;
++        if (size<0) { ok=false; break; }
++        if (size==0) break;
++        raw.append(chunk,static_cast<size_t>(size));
++        if (raw.size()>32768) { ok=false; break; }
++    }
++    close(pipefd[0]);
++    if (!ok) kill(pid,SIGKILL);
++    int status=0;
++    pid_t waited;
++    do { waited=waitpid(pid,&status,0); } while (waited<0 && errno==EINTR);
++    if (!ok || waited!=pid || !WIFEXITED(status) || WEXITSTATUS(status)!=0)
++        throw std::runtime_error("native Store device proof unavailable");
++    return raw;
++}
++#endif
++
++static std::map<std::string,std::string> native_commerce_headers(
++    const std::string& url,const std::map<std::string,std::string>& headers) {
++#ifdef __linux__
++    const char* home=getenv("HOME");
++    if (!home || !std::filesystem::exists(std::filesystem::path(home)/".ipatool"/"adi-state")) return headers;
++    const auto helper=std::filesystem::read_symlink("/proc/self/exe").parent_path()/"ipatool-auth";
++    const auto proof=parse_native_store_proof(read_native_store_proof(helper.string(),url));
++    auto result=headers;
++    for (const auto& [key,value] : proof) result[key]=value;
++    result["User-Agent"]=CONFIGURATOR_UA;
++    return result;
++#else
++    return headers;
++#endif
++}

@@ -258,6 +258,10 @@ provisioning state (key derived from `machine-id`, `0600`); an unreadable one (a
 not block sign-in — it runs as a first sign-in and rewrites the file. Apple and Unicorn libraries for sign-in are in
 `bin/ipatool-auth-cache` (root, appshelf only reads it), prepared by `build-ipatool.sh`.
 
+Downloads with a native session also use `adi-state`: the C++ client asks the helper
+for a device proof for each file request. After a sign-in change, verify purchase
+history, `list-versions`, and a complete IPA download using the new session.
+
 A console sign-in is only good for testing the fork: the site does not learn about it, so jobs and the nightly
 check stay idle until you sign in through the panel. If you need it anyway — use the service's path (without
 `--password-stdin` the old sign-in runs), only as `appshelf` and under that Apple ID's lock (otherwise the service
