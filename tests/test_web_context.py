@@ -128,9 +128,12 @@ def test_pending_accept_requires_confirmation_and_exact_version(web, conn, cfg, 
     shelf = android_app(conn, cfg, clock, acct.user_id)
     pending = db.list_apps(conn, shelf.id)[0].pending
     endpoint = f"/android/apps/{PKG}/accept-signer?person={acct.user_id}"
-    assert web.client.request("POST", endpoint, data={"version_id": pending["id"]}).status_code == 404
+    response = web.client.request("POST", endpoint, data={"version_id": pending["id"]})
+    assert response.status_code == 400 and "Подтвердите" in response.text
+    assert web.client.request("POST", endpoint, data={"version_id": pending["id"] + 1}).status_code == 404
     assert web.client.request("POST", endpoint, data={"version_id": pending["id"] + 1, "confirm": "1"}).status_code == 404
     assert db.current_version(conn, shelf.id, PKG)["version_code"] == 1
+    assert db.list_apps(conn, shelf.id)[0].pending["id"] == pending["id"]
 
 
 def test_saved_shelf_filters_keep_busy_state(web, conn, cfg, clock):

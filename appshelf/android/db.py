@@ -279,7 +279,7 @@ def _rotate(c, shelf_id: int, package: str, version_code: int) -> list[str]:
                                        "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))]
     c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? "
               "AND role IN ('previous', 'kept') AND NOT pinned", (shelf_id, package))
-    # Неприкреплённые previous уже удалены; закреплённую сохраняем, освобождая роль для бывшей current.
+    # Незакреплённые previous уже удалены; закреплённую сохраняем, освобождая роль для бывшей current.
     c.execute("UPDATE android_versions SET role='kept' WHERE shelf_id=? AND package=? AND role='previous' AND pinned",
               (shelf_id, package))
     if c.execute("UPDATE android_versions SET role='previous' WHERE shelf_id=? AND package=? AND role='current'",

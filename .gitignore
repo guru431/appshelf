@@ -11,6 +11,9 @@ __pycache__/
 .venv/
 *.egg-info/
 build/
+# Project-local task artifacts
+.tmp/
+output/
 # Claude / IDE (копии claude-switch, локальные настройки)
 .claude/
 .idea/
