@@ -60,11 +60,10 @@ def describe(e: Exception) -> str:
     return jobs.describe(e)
 
 
-def _space(env, c) -> None:
+def _space(env) -> None:
     free = jobs.free_space(env)
     if free < jobs.FREE_MIN:
         raise jobs.LowSpace(f"мало места: свободно {free / jobs.GB:.1f} ГБ, для скачивания нужно 4 ГБ")
-    notify.reset(c, notify.LOW_SPACE_KEY)  # место есть — эпизод «мало места» закончился
 
 
 def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: str, expected_package: str | None,
@@ -104,6 +103,7 @@ def store_apk(env, c, shelf: db.Shelf, path: Path, *, source: str, source_ref: s
     if free - size < jobs.RESERVE:
         raise jobs.LowSpace(f"мало места в архиве: свободно {free / jobs.GB:.1f} ГБ, APK — {size / jobs.GB:.1f} ГБ, "
                             f"запас — {jobs.RESERVE // jobs.GB} ГБ")
+    notify.reset(c, notify.LOW_SPACE_KEY)  # известный APK помещается с запасом; до скачивания это ещё неизвестно
     if app is None:
         if db.get_shelf(c, shelf.id) is None:  # участника удалили, пока качали: карточку в ничью полку не ставим
             raise store.AppGone(info.package)
@@ -185,7 +185,7 @@ def _download(env, c, shelf: db.Shelf, source: str, ref: str, work: Path, *, exp
         shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))  # токен мог смениться, пока ждали замок
         if shelf is None or expected_package and db.get_app(c, shelf.id, expected_package) is None:
             raise store.AppGone(expected_package or ref)
-        _space(env, c)
+        _space(env)
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         try:
@@ -379,7 +379,7 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
         shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))
         if shelf is None:
             raise store.AppGone(package)
-        _space(env, c)
+        _space(env)
         source = finish_move(env.cfg, c, db.get_shelf(c, source_id))
         user = people.get_user(c, source.user_id) if source is not None and source.user_id is not None else None
         original = db.get_app(c, source_id, package)
@@ -409,7 +409,7 @@ def _copy_to_public(env, c, shelf: db.Shelf, package: str, source_id: int, work:
                     "SELECT 1 FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                     (shelf.id, package)).fetchone():
                 continue
-            _space(env, c)
+            _space(env)
             folder = shelf_root(env.cfg, source) / version["dir"]
             try:
                 shutil.copyfile(folder / apk_name(package, version["version_name"]), path)
@@ -465,7 +465,7 @@ def run_job(env, c, job) -> None:
                 shelf = finish_move(env.cfg, c, db.get_shelf(c, shelf.id))  # токен мог смениться, пока ждали замок
                 if shelf is None:
                     raise store.AppGone(package)
-                _space(env, c)
+                _space(env)
                 _, result = store_apk(env, c, shelf, Path(payload["path"]), source="upload", source_ref="",
                                       expected_package=package or None, expected_signer="",
                                       name_hint=payload.get("name", ""), icon=None, allow_older=True)
@@ -475,7 +475,7 @@ def run_job(env, c, job) -> None:
             app = db.get_app(c, shelf.id, package)
             if app is None:
                 raise store.AppGone(package)
-            previous = payload.get("previous")  # «Сменить источник»: прежние (source, ref, etag) — откатить при отказе
+            previous = payload.get("previous")  # прежние (source, ref, etag, source_page) — откатить при отказе
             try:
                 check_app(env, c, shelf, app, work, force=bool(previous), retry_split=True)
             except (apk.ApkError, net.FetchError, SourceError) as e:

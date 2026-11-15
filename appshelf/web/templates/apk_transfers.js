@@ -381,10 +381,21 @@
     // «Добавить»: загрузки на сервере, которых нет в лотке этого браузера (другое устройство, очищенные данные).
     var section = document.querySelector('[data-pending-uploads]'), list = section && section.querySelector('[data-pending-list]');
     if (!list) return;
-    var response = await fetch(section.dataset.uploadApi, {cache: 'no-store', credentials: 'same-origin'});
-    if (!response.ok) return;
-    var local = new Set((await read()).map(function (r) { return r.session; }));
-    var items = (await response.json()).uploads.filter(function (item) { return !local.has(item.id); });
+    var failure = section.querySelector('[data-pending-error]'), items;
+    try {
+      var response = await fetch(section.dataset.uploadApi, {cache: 'no-store', credentials: 'same-origin'});
+      if (!response.ok) throw new Error('pending uploads unavailable');
+      var value = await response.json();
+      if (!value || !Array.isArray(value.uploads) || !value.uploads.every(function (item) {
+        return item && typeof item.id === 'string' && typeof item.filename === 'string' &&
+          typeof item.updated_at === 'string' && Number.isFinite(item.received) && Number.isFinite(item.size);
+      })) throw new Error('invalid pending uploads');
+      var local = new Set((await read()).map(function (r) { return r.session; }));
+      items = value.uploads.filter(function (item) { return !local.has(item.id); });
+    } catch (error) {
+      failure.hidden = false; section.hidden = false; return;
+    }
+    failure.hidden = true;
     var ids = new Set(items.map(function (item) { return item.id; }));
     pendingRows.forEach(function (row, id) { if (!ids.has(id)) { row.remove(); pendingRows.delete(id); } });
     items.forEach(function (item) {
@@ -415,7 +426,10 @@
     });
     section.hidden = !pendingRows.size;
   }
-  var chosen = /^#source-/.test(location.hash) && document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  var chosen = null;
+  try {
+    if (/^#source-/.test(location.hash)) chosen = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+  } catch (error) { /* Ignore malformed URL fragments. */ }
   if (chosen && chosen.tagName === 'DIALOG' && chosen.querySelector('form[data-apk-upload]') && !chosen.open) chosen.showModal();
   document.querySelectorAll('form[data-apk-upload]').forEach(function (form) {
     form.addEventListener('submit', async function (event) {
@@ -471,5 +485,7 @@
   });
   setInterval(function () { if (!document.hidden) restore().catch(function () {}); }, 10000);
   restore().catch(function () {});
+  var retryPending = document.querySelector('[data-pending-retry]');
+  if (retryPending) retryPending.onclick = renderPending;
   renderPending().catch(function () {});
 })(globalThis);

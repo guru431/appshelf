@@ -378,6 +378,18 @@ def test_pin_change_refused_while_downloading(web, cfg, conn, clock, tmp_path):
     assert pin.epoch(conn) == 1
 
 
+def test_pin_change_before_shelf_creation_revokes_guest_cookie(web, conn, clock):
+    assert db.public_shelf(conn) is None
+    assert web.client.post("/android/public/pin", data={"pin": "482913"}, follow_redirects=False).status_code == 303
+    key = web.app.state.w.key
+    old_cookie = pin.guest_cookie(key, pin.epoch(conn), clock.iso())
+    assert pin.guest_ok(key, old_cookie, pin.epoch(conn), clock.iso())
+    assert web.client.post("/android/public/pin", data={"pin": "111111"}, follow_redirects=False).status_code == 303
+    assert db.public_shelf(conn) is None and pin.epoch(conn) == 2
+    assert not pin.guest_ok(key, old_cookie, pin.epoch(conn), clock.iso())
+    assert pin.try_pin(conn, "ip:x", "111111", clock.iso()).result == "ok"
+
+
 def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, clock, tmp_path, make_web,
                                                                monkeypatch):
     shelf = add_public(web, conn, tmp_path)

@@ -99,6 +99,19 @@ def test_timeout_keeps_the_domain_for_network_exceptions(monkeypatch):
     assert any("api.pureapk.com" in e and "вовремя" in e for e in result.errors)
 
 
+def test_search_does_not_start_request_after_pause_exhausts_budget(monkeypatch):
+    src = setup_search(monkeypatch)
+    now, requested = [0.0], []
+    src.clock = lambda: now[0]
+    src.sleep = lambda seconds: now.__setitem__(0, now[0] + seconds)
+    monkeypatch.setattr(rustore, "search", lambda *args: requested.append(True) or [])
+    updates = src.search_events("Example")
+    now[0] = src._last = 89.5
+    result = list(updates)[-1].result
+    assert requested == []
+    assert any("слишком долго" in error for error in result.errors)
+
+
 def test_single_apk_does_not_query_github(monkeypatch):
     src = setup_search(monkeypatch)
     monkeypatch.setattr(apkpure, "info", lambda *a: SimpleNamespace(name="Example", version_name="3.0", kind="apk"))

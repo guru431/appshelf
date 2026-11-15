@@ -1,10 +1,10 @@
 diff --git a/main.cpp b/main.cpp
-index 1f987c5..62e98a8 100644
+index 37a9422..3ee065f 100644
 --- a/main.cpp
 +++ b/main.cpp
-@@ -42,10 +42,12 @@
- #include <nlohmann/json.hpp>
+@@ -43,10 +43,12 @@
  #include <filesystem>
+ #include "atomic_account.h"
  #include <cerrno>
 +#include <regex>
  #ifndef _WIN32
@@ -15,7 +15,7 @@ index 1f987c5..62e98a8 100644
  #else
  // windows.h was previously pulled in transitively via the old ipatool.h;
  // that header is now logic-free and no longer includes it, so main.cpp
-@@ -1461,6 +1463,57 @@ static void cmd_download(const Args& args) {
+@@ -1426,6 +1428,57 @@ static void cmd_download(const Args& args) {
  
  // appshelf (03-list-purchases): purchase history of the saved account.
  // JSON: [{"id":…,"bundleId":"…","name":"…","version":"…","purchaseDate":"2024-01-31T10:00:00Z"}]
@@ -73,7 +73,7 @@ index 1f987c5..62e98a8 100644
  static void cmd_list_purchases(const Args& args) {
      std::string passphrase = get(args, "keychain-passphrase", "");
  
-@@ -1625,7 +1678,27 @@ int main(int argc, char** argv) {
+@@ -1590,7 +1643,27 @@ int main(int argc, char** argv) {
  
      if (cmd == "auth info" || cmd == "account") {
          cmd_show_account(args);

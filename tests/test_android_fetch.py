@@ -442,11 +442,16 @@ def test_low_space_refuses_before_download(ctx, cfg, conn, clock, tmp_path):
 
 def test_reserve_checked_with_known_size(ctx, cfg, conn, clock, tmp_path):
     src = make_apk(tmp_path / "src.apk")
-    archive_free = iter([50 * GB, jobs.RESERVE + src.stat().st_size - 1])   # до скачивания и после: размер известен
+    archive_free = iter([50 * GB, jobs.RESERVE + src.stat().st_size - 1] * 2)  # до и после, две попытки
     ctx.env.disk_free = lambda path: next(archive_free) if path == cfg.archive else 50 * GB
     shelf, job = add_rustore(ctx, conn, clock, src)
     assert job["status"] == "error" and "запас" in job["error"]
     assert versions(conn, shelf) == {} and on_shelf(cfg, shelf) == []
+    run(ctx, conn, shelf, "add", clock, package=PKG, source="rustore", ref=PKG)
+    assert ctx.sent == [jobs.LOW_SPACE_SUBJECT]
+    ctx.env.disk_free = lambda path: 50 * GB
+    assert run(ctx, conn, shelf, "add", clock, package=PKG, source="rustore", ref=PKG)["status"] == "done"
+    assert store.get_state(conn, jobs.notify.LOW_SPACE_KEY) == ""
 
 
 def test_other_signer_becomes_pending(ctx, cfg, conn, clock, tmp_path):

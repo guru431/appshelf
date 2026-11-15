@@ -1,11 +1,89 @@
+diff --git a/atomic_account.h b/atomic_account.h
+new file mode 100644
+index 0000000..bd94495
+--- /dev/null
++++ b/atomic_account.h
+@@ -0,0 +1,71 @@
++#pragma once
++// Write a private temporary file beside account, flush it, then replace account.
++// Every writer owns a different file; a failed write leaves the previous account intact.
++#include <algorithm>
++#include <atomic>
++#include <cerrno>
++#include <cstdio>
++#include <cstdlib>
++#include <filesystem>
++#include <string>
++#include <vector>
++#ifndef _WIN32
++#include <unistd.h>
++#else
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#endif
++
++static bool write_account_file(const std::filesystem::path& dst, const std::vector<unsigned char>& blob) {
++    bool ok = false;
++#ifndef _WIN32
++    const auto pattern = dst.string() + ".tmp.XXXXXX";
++    std::vector<char> name(pattern.begin(), pattern.end());
++    name.push_back('\0');
++    const int fd = ::mkstemp(name.data());  // O_EXCL, mode 0600, no shared/truncated temporary file
++    if (fd < 0) return false;
++    size_t off = 0;
++    while (off < blob.size()) {
++        const ssize_t n = ::write(fd, blob.data() + off, blob.size() - off);
++        if (n < 0 && errno == EINTR) continue;
++        if (n <= 0) break;
++        off += static_cast<size_t>(n);
++    }
++    ok = off == blob.size() && ::fsync(fd) == 0;
++    if (::close(fd) != 0) ok = false;
++    if (ok && ::rename(name.data(), dst.c_str()) == 0) return true;
++    ::unlink(name.data());  // Only this writer's file is ours to remove.
++#else
++    std::filesystem::path tmp;
++    static std::atomic<unsigned long long> sequence{0};
++    HANDLE file = INVALID_HANDLE_VALUE;
++    for (int attempt = 0; attempt < 100; ++attempt) {
++        tmp = dst;
++        tmp += ".tmp." + std::to_string(GetCurrentProcessId()) + "." + std::to_string(sequence++);
++        file = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
++        if (file != INVALID_HANDLE_VALUE) break;
++        if (GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS) return false;
++    }
++    if (file == INVALID_HANDLE_VALUE) return false;
++    size_t off = 0;
++    while (off < blob.size()) {
++        DWORD written = 0;
++        const auto size = static_cast<DWORD>(std::min<size_t>(blob.size() - off, 1U << 20));
++        if (!WriteFile(file, blob.data() + off, size, &written, nullptr) || written == 0) break;
++        off += written;
++    }
++    ok = off == blob.size() && FlushFileBuffers(file);
++    if (!CloseHandle(file)) ok = false;
++    // Concurrent renames (or a briefly open reader) can put the destination in delete-pending state.
++    for (int attempt = 0; ok && attempt < 20; ++attempt) {
++        if (MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
++        const auto error = GetLastError();
++        if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) break;
++        Sleep(5);
++    }
++    DeleteFileW(tmp.c_str());
++#endif
++    return false;
++}
 diff --git a/main.cpp b/main.cpp
-index 573dcdb..1f987c5 100644
+index 573dcdb..37a9422 100644
 --- a/main.cpp
 +++ b/main.cpp
-@@ -41,9 +41,11 @@
+@@ -41,9 +41,12 @@
  #include <csignal>
  #include <nlohmann/json.hpp>
  #include <filesystem>
++#include "atomic_account.h"
 +#include <cerrno>
  #ifndef _WIN32
  #  include <sys/ioctl.h>
@@ -14,56 +92,13 @@ index 573dcdb..1f987c5 100644
  #else
  // windows.h was previously pulled in transitively via the old ipatool.h;
  // that header is now logic-free and no longer includes it, so main.cpp
-@@ -274,6 +276,42 @@ static std::string aes_gcm_decrypt(const std::vector<unsigned char>& blob,
- // Forward declaration — defined after color init below
- static void print_red_err(const std::string& msg);
- 
-+// appshelf (06-atomic-account-save): the account file is replaced atomically —
-+// written to a temp file next to it, flushed to disk, then renamed over
-+// `account`. A full disk or a kill mid-write keeps the old file intact instead
-+// of leaving an empty one, which reads as "not logged in".
-+static bool write_account_file(const std::vector<unsigned char>& blob) {
-+    namespace fs = std::filesystem;
-+    const fs::path dst = ipt::fs_path(ACCOUNT_FILE);
-+    const fs::path tmp = ipt::fs_path(ACCOUNT_FILE + ".tmp");
-+    bool ok;
-+#ifndef _WIN32
-+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
-+    if (fd < 0) return false;
-+    size_t off = 0;
-+    while (off < blob.size()) {
-+        ssize_t n = ::write(fd, blob.data() + off, blob.size() - off);
-+        if (n < 0 && errno == EINTR) continue;
-+        if (n <= 0) break;
-+        off += (size_t)n;
-+    }
-+    ok = off == blob.size() && ::fsync(fd) == 0;
-+    if (::close(fd) != 0) ok = false;
-+#else
-+    {
-+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-+        f.write((const char*)blob.data(), (std::streamsize)blob.size());
-+        f.flush();
-+        ok = (bool)f;
-+    }
-+#endif
-+    std::error_code ec;
-+    if (ok) fs::rename(tmp, dst, ec);   // replaces the old file in one step
-+    if (ok && !ec) return true;
-+    fs::remove(tmp, ec);
-+    return false;
-+}
-+
- static bool save_account(const Account& acc, const std::string& passphrase = "") {
-     ensure_config_dir();
- 
-@@ -295,12 +333,10 @@ static bool save_account(const Account& acc, const std::string& passphrase = "")
+@@ -295,12 +298,10 @@ static bool save_account(const Account& acc, const std::string& passphrase = "")
  
      try {
          auto blob = aes_gcm_encrypt(data, machine_id, passphrase);
 -        std::ofstream f(ipt::fs_path(ACCOUNT_FILE), std::ios::binary);
 -        if (!f) {
-+        if (!write_account_file(blob)) {
++        if (!write_account_file(ipt::fs_path(ACCOUNT_FILE), blob)) {
              print_red_err("Error: failed to write account file.\n");
              return false;
          }
@@ -71,7 +106,7 @@ index 573dcdb..1f987c5 100644
      } catch (const std::exception& e) {
          print_red_err(std::string("Error: failed to encrypt account file: ")
                        + e.what() + "\n");
-@@ -673,9 +709,10 @@ static void cmd_login(const Args& args) {
+@@ -673,9 +674,10 @@ static void cmd_login(const Args& args) {
                      && !prev.kbsync.empty())
                      acc.kbsync = prev.kbsync;
              }

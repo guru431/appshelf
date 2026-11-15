@@ -78,7 +78,9 @@ def _archive(cfg: Config) -> Path:
 
 def free_space(env: Env) -> int:
     """Меньшее из свободного места: локальный tmp (скачивание) и архив (может быть сетевой шарой)."""
-    return min(env.disk_free(env.cfg.data_dir), env.disk_free(_archive(env.cfg)))
+    # tmp может быть отдельной точкой монтирования; до первого скачивания каталога ещё нет.
+    local = env.cfg.tmp_dir if env.cfg.tmp_dir.is_dir() else env.cfg.data_dir
+    return min(env.disk_free(local), env.disk_free(_archive(env.cfg)))
 
 
 def check_user(cfg: Config) -> None:
@@ -201,7 +203,6 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
         free = free_space(env)
         if free < FREE_MIN:
             raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно {FREE_MIN / GB:g} ГБ")
-        notify.reset(c, notify.LOW_SPACE_KEY)  # место есть — эпизод «мало места» закончился
         root = cfg.shelf_root(acct)
         root.mkdir(exist_ok=True)
         root.chmod(0o711)  # UMask служб 0077, а в каталог Apple ID заходит Apache (www-data)
@@ -218,6 +219,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
             store.set_downloaded(c, acct.id, app_id, info.version, env.now())
             cur = store.current_version(c, acct.id, app_id)
             if cur is not None and cur["external_version_id"] == info.external_version_id:
+                notify.reset(c, notify.LOW_SPACE_KEY)  # архиву не нужна ещё одна копия
                 store.set_app_status(c, acct.id, app_id, "ok")
                 return "same"
             size = src.stat().st_size
@@ -226,6 +228,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
             if free - size < RESERVE:
                 raise LowSpace(f"мало места в архиве: свободно {free / GB:.1f} ГБ, IPA — {size / GB:.1f} ГБ, "
                                f"запас — {RESERVE // GB} ГБ")
+            notify.reset(c, notify.LOW_SPACE_KEY)  # tmp и архив вместят версию — эпизод закончился
             name = version_dir_name(c, acct.id, root, app_id, info.version, info.external_version_id)
             final, partial = root / name, root / f".{name}.partial"
             shutil.rmtree(partial, ignore_errors=True)

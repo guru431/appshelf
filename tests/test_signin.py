@@ -310,14 +310,17 @@ def test_failed_logins_limited_for_everyone(make_web, cfg, conn, acct, clock):
     # общий лимит — отказы Apple: неизвестные адреса и плохие ссылки его не тратят, иначе аноним закрыл бы вход всем
     wb = make_web(cfg, conn)
     client = wb.client
-    for i in range(10):
+    # Граничные количества самого Limiter проверяет test_login; здесь — маршруты и общий бюджет.
+    limiter = wb.app.state.w.limiter
+    limiter.fail_limit, limiter.email_limit = 4, 2
+    for i in range(limiter.fail_limit):
         assert client.post("/login", data={"email": f"x{i}@example", "password": "pw"}).status_code == 403
         assert client.get(f"/join/nope{i}").status_code == 400
         assert client.get(f"/l/nope{i}").status_code == 400 and client.post(f"/l/nope{i}").status_code == 400
-    for n in (2, 3):                                      # по 5 — больше на Apple ID закрывает его лимит
+    for n in (2, 3):                                      # два Apple ID вместе исчерпывают общий бюджет
         other = make_account(conn, clock, email=f"a{n}@example", legacy=False, user_id=acct.user_id)
         tool = wb.tools[other.id] = FakeTool()
-        for _ in range(5):
+        for _ in range(limiter.email_limit):
             tool.errors["login"] = IpatoolError("invalid_credentials", "")
             assert client.post("/login", data={"email": f"a{n}@example", "password": "bad"}).status_code == 400
     r = client.post("/login", data={"email": "owner@example", "password": "pw"})

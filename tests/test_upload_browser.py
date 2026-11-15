@@ -152,6 +152,40 @@ def test_resumable_browser_pause_reload_and_retry(upload_server, conn, tmp_path,
 
 @pytest.mark.integration
 @pytest.mark.timeout(30)
+def test_malformed_hash_and_pending_reply_do_not_break_uploads(upload_server, conn, tmp_path, local_chromium):
+    server = upload_server
+    server.state.hold = False
+    apk = make_apk(tmp_path / "malformed-hash.apk")
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser_context(browser, server).new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.add_init_script("Object.defineProperty(navigator, 'serviceWorker', {value: undefined})")
+            page.set_default_timeout(5000)
+            page.route("**/android/uploads?*", lambda route: route.fulfill(json={"uploads": None})
+                       if route.request.method == "GET" else route.continue_())
+            page.goto(server.base + "/android/add#source-%zz")
+            page.locator('[data-pending-error]').wait_for()
+            assert not errors
+            page.unroute("**/android/uploads?*")
+            page.locator('[data-pending-retry]').click()
+            page.wait_for_function("document.querySelector('[data-pending-error]').hidden")
+            page.get_by_role("link", name="Файл", exact=True).click()
+            form = page.locator('form[data-apk-upload]')
+            form.locator('input[type="file"]').set_input_files(apk)
+            form.get_by_role("button", name="Загрузить", exact=True).click()
+            assert server.state.finished.wait(5)
+            assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 1
+            assert not errors
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
+@pytest.mark.timeout(30)
 def test_inconsistent_parts_waits_for_explicit_retry(upload_server, conn, tmp_path, local_chromium):
     server = upload_server
     server.state.hold = False

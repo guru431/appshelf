@@ -165,6 +165,16 @@ def test_adaptive_icon_rejects_oversized_or_broken_xml(tmp_path, monkeypatch):
     assert apk.resource_icon(path) is None
 
 
+@pytest.mark.parametrize("children", [
+    [("foreground", {"drawable": ("color", 0xFF102030)}, [])],
+    [("background", {}, []), ("foreground", {"drawable": ("color", 0xFF102030)}, [])],
+])
+def test_incomplete_adaptive_layers_have_no_icon(tmp_path, children):
+    path = make_apk(tmp_path / "incomplete.apk", icon_ref=ICON, resources={ICON: [("", 0, "res/a.xml")]},
+                    files={"res/a.xml": drawable_xml(("adaptive-icon", {}, children))})
+    assert apk.resource_icon(path) is None
+
+
 @pytest.mark.parametrize("attributes", [
     {}, {"pathData": 1},
     {"pathData": "M0,0h10v10z", "strokeLineCap": -1},

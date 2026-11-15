@@ -272,11 +272,37 @@ def test_unmounted_share_fails_job_without_writing_locally(ctx, cfg, conn, clock
     assert all(c[0] != "download" for c in ctx.tool.calls)
 
 
-def test_low_space_on_share_counts_too(ctx, cfg, conn, clock):
+@pytest.mark.parametrize("location", ["archive", "tmp_dir"])
+def test_low_space_on_share_or_tmp_mount_counts_too(ctx, cfg, conn, clock, location):
     published(conn, clock)
-    ctx.env.disk_free = lambda path: 1 * GB if path == cfg.archive else 50 * GB
+    cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
+    ctx.env.disk_free = lambda path: 1 * GB if path == getattr(cfg, location) else 50 * GB
     worker(ctx, cfg).tick()
     assert "мало места" in store.list_apps(conn, 1)[0].last_error
+
+
+def test_archive_space_after_download_keeps_one_mail_per_episode(ctx, cfg, conn, clock, tmp_path):
+    published(conn, clock)
+    ctx.tool.ipas[123] = make_ipa(tmp_path / "src.ipa", item_id=123)
+    archive_checks = []
+
+    def free(path):
+        if path == cfg.archive:
+            archive_checks.append(path)
+            return 50 * GB if len(archive_checks) % 2 else jobs.RESERVE
+        return 50 * GB
+
+    ctx.env.disk_free = free
+    w = worker(ctx, cfg)
+    w.tick()
+    store.retry(conn, 1, 123, clock.iso())
+    w.tick()
+    assert "мало места в архиве" in store.list_apps(conn, 1)[0].last_error
+    assert ctx.sent == [jobs.LOW_SPACE_SUBJECT]
+    ctx.env.disk_free = lambda path: 50 * GB
+    store.retry(conn, 1, 123, clock.iso())
+    w.tick()
+    assert store.get_state(conn, jobs.notify.LOW_SPACE_KEY) == ""
 
 
 def test_license_not_found_shows_text(ctx, cfg, conn, clock):

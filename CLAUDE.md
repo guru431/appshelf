@@ -40,6 +40,11 @@ google-play-protocol; форматы источников — `tests/data/*/READ
 
 ## Команды
 - Тесты (Windows): `.venv/Scripts/python -m pytest -q`; живые на сервере: `.venv/Scripts/python -m pytest -q -m integration`.
+- Офлайн-контракт записи учётки ipatool (Linux/WSL, g++, исходники с применёнными патчами):
+  `g++ -std=c++20 -pthread -I<patched-upstream> ipatool/tests/account_contract.cpp -o <task-dir>/account-contract`,
+  затем `timeout 30 <task-dir>/account-contract <task-dir>/account-data`; полный — также шаг `build-ipatool-docker.sh`.
+  На Windows: `zig c++ -std=c++20 -I <patched-upstream> ipatool/tests/account_contract.cpp -o <task-dir>/account-contract.exe`,
+  затем `.venv/Scripts/python -c "import subprocess; subprocess.run([r'<task-dir>/account-contract.exe', r'<task-dir>/account-data'], check=True, timeout=30)"`.
 - Проверка браузерного ввода 4PDA (Windows, локальный Chromium и extra `fourpda`, без внешней сети):
   `.venv/Scripts/python -m pytest -q tests/test_fourpda.py -m integration`.
 - Реальные криптографические проверки APK и каталогов F-Droid (Windows, JDK и apksigner, без внешней сети):

@@ -500,7 +500,7 @@ def _register_scope(app, w, scope: Scope):
         """«Повторить» и «Проверить обновление»: есть текущая — проверка, нет — добавление заново (APKPure — с
         галочкой ack из «Сменить источник»); свой файл без источника, проверка вложения 4PDA и уже ждущее задание —
         ничего. previous —
-        прежние (source, ref, etag) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
+        прежние (source, ref, etag, source_page) после «Сменить источник»: проверка скачиванием, отказ возвращает их."""
         package = app["package"]
         with nullcontext() if c.in_transaction else store.tx(c):
             if app["source"] == "upload" or db.active_for(c, shelf.id, package):

@@ -107,6 +107,9 @@ class Sources:
                 raise FetchError("поиск занял слишком долго — повторите с именем пакета")
             self._wait()
 
+            if self.clock() >= deadline:
+                raise FetchError("поиск занял слишком долго — повторите с именем пакета")
+
         bounded._wait = wait
         return events(bounded, query, accounts=accounts, split_packages=split_packages, user_id=user_id)
 

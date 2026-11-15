@@ -18,7 +18,7 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 | `03-list-purchases` | `list-purchases [--format json]` → `[{"id","bundleId","name","version","purchaseDate"}]`; перенос `appstore_owned_apps.go` (ipatool v2.5.0, DAAP) на `SapSigner` и HTTP-клиент форка |
 | `04-exit-codes` | Коды выхода `0`/`3` `session_expired`/`4` `auth_code_required`/`5` `license_not_found`/`1`; при `--format json` ошибка — `{"error","message"}`; `edge_rejected`, `invalid_credentials`, `not_logged_in`; `list-versions` печатает `latestExternalVersionID`. Исключение — `get-version-metadata`: без учётки печатает `Not logged in.` в stderr и выходит с `1` (appshelf любую её ошибку пропускает — версия в «Истории» необязательна) |
 | `05-device-mac` | `IPATOOL_DEVICE_MAC` (12 hex, `:`/`-` допустимы) вместо MAC сетевой карты: из него `guid`, `kbsync`, `fserial` — свой «Mac» на каждый Apple ID; заглушка или мусор → выход `1`, `bad_device_mac`, к Apple не обращается |
-| `06-atomic-account-save` | Учётка пишется во временный файл, `fsync` и `rename` поверх `account`: ENOSPC или SIGKILL посреди записи оставляют прежний файл, а не пустой («вход истёк»); `auth login`, не сохранивший учётку, — выход `1`, `save_failed`, а не успех |
+| `06-atomic-account-save` | Учётка пишется в отдельный временный файл каждого процесса: `mkstemp`/`fsync`/`rename` на POSIX, `CREATE_NEW`/`FlushFileBuffers`/`MoveFileExW` на Windows. ENOSPC или SIGKILL посреди записи оставляют прежний `account`; параллельные записи не обрезают друг друга. Не сохранивший учётку `auth login` — выход `1`, `save_failed` |
 | `07-curl-update` | curl, вшиваемый в бинарник, — 8.22.0 с `URL_HASH SHA256` (сумма — `curl.se/info`) вместо 8.7.1 без проверки |
 | `08-login-transport-diagnostics` | Linux: этап подготовки входа, номера попыток, тип сервера, HTTP-статус, размер и тип ответа, наличие перенаправления, требования подготовки устройства и Retry-After — в syslog; только числа и фиксированные значения, без адреса Apple ID, пароля, cookies, подписи и тела ответа |
 | `09-session-aware-bag` | Справочник для входа запрашивается с `ix=6`; конфигурация SAP читается и из вложенного `urlBag`, и из плоского ответа Apple. Запросы каталога сохраняют прежний формат |
@@ -27,6 +27,9 @@ Upstream и закреплённый коммит — `UPSTREAM`. Наши из�
 | `12-native-commerce-proof` | Запросы скачивания после native-входа получают подпись устройства из того же `adi-state` через защищённый pipe к helper; старые сессии сохраняют прежний путь. Офлайн-контракт — `tests/commerce_contract.cpp` |
 
 ## Когда пересобирать
+
+Сборка выполняет `tests/account_contract.cpp`: конкурентные потоки и процессы, целая последняя запись,
+отказ замены с сохранением прежнего файла и уборка собственных временных файлов.
 
 Сборка также выполняет офлайн-контракт `tests/bag_contract.cpp`: вложенный и плоский справочники Apple,
 сохранение параметров SAP, изоляция настроек входа от каталога и отказ на пустой HTTP 204.

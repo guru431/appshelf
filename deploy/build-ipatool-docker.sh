@@ -36,6 +36,8 @@ docker run --rm --network host -v /etc/machine-id:/etc/machine-id:ro -v "$WORK:/
   cd /work/src
   git checkout -q "$COMMIT"
   for p in /work/patches/*.patch; do git apply "$p"; done
+  timeout 90 g++ -std=c++20 -O0 -pthread -I/work/src /work/tests/account_contract.cpp -o /work/account-contract
+  timeout 30 /work/account-contract /work/account-contract-data
   # Offline regression: flat native-client bags must retain SAP configuration,
   # and authentication routing must leave catalog requests unchanged.
   timeout 90 g++ -std=c++20 -O0 -ffunction-sections -fdata-sections -I/work/src \
