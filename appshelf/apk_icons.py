@@ -125,15 +125,22 @@ def render_icon(archive, name):
                 if any(attrs.get(k, default) != default for k, default in
                        (("trimPathStart", 0), ("trimPathEnd", 1), ("trimPathOffset", 0))):
                     raise ValueError("trimmed vector paths unsupported")
-                path = ET.SubElement(parent, "path", d=attrs["pathData"], fill="none", stroke="none")
+                data = attrs.get("pathData")
+                if not isinstance(data, str):
+                    raise ValueError("invalid drawable path")
+                path = ET.SubElement(parent, "path", d=data, fill="none", stroke="none")
                 for paint in ("fill", "stroke"):
                     if paint + "Color" in attrs:
                         rgb, alpha = color(attrs[paint + "Color"])
                         path.set(paint, rgb)
                         path.set(paint + "-opacity", str(alpha * _number(attrs.get(paint + "Alpha", 1))))
                 path.set("stroke-width", str(_number(attrs.get("strokeWidth", 0))))
-                path.set("stroke-linecap", ("butt", "round", "square")[int(attrs.get("strokeLineCap", 0))])
-                path.set("stroke-linejoin", ("miter", "round", "bevel")[int(attrs.get("strokeLineJoin", 0))])
+                for attr, name, values in (("strokeLineCap", "stroke-linecap", ("butt", "round", "square")),
+                                           ("strokeLineJoin", "stroke-linejoin", ("miter", "round", "bevel"))):
+                    value = attrs.get(attr, 0)
+                    if not isinstance(value, int) or not 0 <= value < len(values):
+                        raise ValueError("invalid drawable stroke")
+                    path.set(name, values[value])
                 path.set("stroke-miterlimit", str(_number(attrs.get("strokeMiterLimit", 4))))
                 path.set("fill-rule", "evenodd" if attrs.get("fillType") == 1 else "nonzero")
             else:

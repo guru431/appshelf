@@ -176,7 +176,7 @@
         if (failed) throw failed.reason;
         var current = await read(key);
         if (!current || current.state === 'paused') return;
-        if (confirmed() !== file.size) return;
+        if (confirmed() !== file.size) throw new Error('Список полученных частей не совпал с размером файла. Нажмите «Продолжить», чтобы проверить части снова');
         await update(key, {message: 'Файл передан. Собираем части на сервере…'});
         state = await request(record, '/' + state.id + '/finish', {method: 'POST'});
       }

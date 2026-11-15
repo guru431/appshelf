@@ -165,6 +165,25 @@ def test_adaptive_icon_rejects_oversized_or_broken_xml(tmp_path, monkeypatch):
     assert apk.resource_icon(path) is None
 
 
+@pytest.mark.parametrize("attributes", [
+    {}, {"pathData": 1},
+    {"pathData": "M0,0h10v10z", "strokeLineCap": -1},
+    {"pathData": "M0,0h10v10z", "strokeLineCap": 3},
+    {"pathData": "M0,0h10v10z", "strokeLineJoin": -1},
+    {"pathData": "M0,0h10v10z", "strokeLineJoin": 3},
+])
+def test_invalid_vector_path_attributes_are_rejected(tmp_path, monkeypatch, attributes):
+    import zipfile
+    from appshelf import apk_icons
+
+    path = adaptive_apk(tmp_path)
+    monkeypatch.setattr(apk_icons, "_tree", lambda raw: (
+        "vector", {"viewportWidth": 108, "viewportHeight": 108}, [("path", attributes, [])]))
+    with zipfile.ZipFile(path) as archive, pytest.raises(ValueError, match="invalid drawable"):
+        apk_icons.render_icon(archive, "res/c.xml")
+    assert apk.resource_icon(path) is None
+
+
 def test_adaptive_icon_resolves_color_and_drawable_alias(tmp_path):
     path = adaptive_apk(tmp_path, resource_values={ICON + 1: [("", 0, 0xFF102030)],
         ICON + 2: [("", 0, ("ref", ICON + 3))], ICON + 3: [("", 0, "res/c.xml")]})

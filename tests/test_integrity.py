@@ -269,6 +269,9 @@ def test_daily_backup_needs_backup_dir_setting(monkeypatch, tmp_path, clock, cap
     assert "APPSHELF_BACKUP_DIR" in capsys.readouterr().err
     with pytest.raises(SystemExit):                                    # набор восстановления или ночной — что-то одно
         cli.main(["backup", "--daily", "--out", str(tmp_path / "out")])
+    with pytest.raises(SystemExit):
+        cli.main(["backup", "--daily", "--keep", "0"])
+    assert "--keep — от 1" in capsys.readouterr().err
 
 
 def test_daily_backup_after_code_rollback(monkeypatch, tmp_path, clock, capsys):

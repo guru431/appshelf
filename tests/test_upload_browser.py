@@ -151,6 +151,45 @@ def test_resumable_browser_pause_reload_and_retry(upload_server, conn, tmp_path,
 
 
 @pytest.mark.integration
+@pytest.mark.timeout(30)
+def test_inconsistent_parts_waits_for_explicit_retry(upload_server, conn, tmp_path, local_chromium):
+    server = upload_server
+    server.state.hold = False
+    apk = make_apk(tmp_path / "parts.apk")
+    playwright, executable = local_chromium
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(executable_path=executable, headless=True, args=["--disable-gpu"])
+        try:
+            page = browser_context(browser, server).new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'serviceWorker', {value: undefined})")
+            page.set_default_timeout(5000)
+
+            def corrupt_parts(route):
+                if route.request.method != "POST":
+                    route.continue_()
+                    return
+                response = route.fetch()
+                state = response.json()
+                state["parts"][str(state["size"] // state["chunk_size"] + 1)] = "a" * 64
+                route.fulfill(response=response, json=state)
+
+            page.route("**/android/uploads?*", corrupt_parts)
+            page.goto(server.base + "/android/add#add-file")
+            form = page.locator("form[data-apk-upload]")
+            form.locator('input[type="file"]').set_input_files(apk)
+            form.get_by_role("button", name="Загрузить", exact=True).click()
+            page.get_by_text("Список полученных частей не совпал с размером файла", exact=False).first.wait_for()
+            assert not server.state.finished.is_set()
+            assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='upload'").fetchone()[0] == 0
+            page.unroute("**/android/uploads?*", corrupt_parts)
+            form.get_by_role("button", name="Продолжить", exact=True).click()
+            assert server.state.finished.wait(5)
+            assert server.state.accepted == Counter({0: 1})  # подтверждённая часть не пересылается
+        finally:
+            browser.close()
+
+
+@pytest.mark.integration
 @pytest.mark.timeout(45)
 def test_service_worker_upload_continues_without_open_page(upload_server, conn, tmp_path, local_chromium):
     server = upload_server

@@ -86,6 +86,10 @@ def test_proxy_select_owner_only(pweb, connects, make_web, cfg, conn, clock):
     r = pweb.client.post(f"/google/{pweb.gid}/play", data={"oauth_token": OAUTH, "proxy": "de"}, follow_redirects=False)
     assert r.status_code == 303 and connects.calls[-1][3] == "de" and people.get_google(conn, pweb.gid).proxy == "de"
     assert "прокси de" in pweb.client.get("/apple").text
+    page = pweb.client.get(f"/google/{pweb.gid}/play").text
+    assert '<option value="de" selected>' in page
+    r = pweb.client.post(f"/google/{pweb.gid}/play", data={"oauth_token": OAUTH, "proxy": ""}, follow_redirects=False)
+    assert r.status_code == 303 and connects.calls[-1][3] == "" and people.get_google(conn, pweb.gid).proxy == ""
     uid, gid = google_only(conn, clock)                                         # участник без владельца в браузере
     member = TestClient(pweb.app, base_url=f"https://{HOST}")
     sign_in(member, cfg, conn, clock, uid)

@@ -84,6 +84,20 @@ def test_link_merges_shelves_conflict_keeps_keeper(ctx, cfg, conn, clock):
         [("add", ""), ("check", "ru.y")]                                         # ждущие задания — за полкой
 
 
+def test_link_merges_into_existing_empty_shelf(ctx, cfg, conn, clock):
+    own = owner(conn, clock)
+    g = google_only(conn, clock, "g1")
+    keep = db.ensure_shelf(conn, own.user_id, clock.iso())
+    gone = put_version(cfg, conn, clock, g, "ru.x", 5)
+    db.enqueue(conn, gone.id, "check", clock.iso(), package="ru.x")
+    jobs.link_users(cfg, conn, own.user_id, g)
+    assert rows(conn, keep) == [("ru.x", 5, "ru.x-5")]
+    assert files(cfg, keep) == {"ru.x-5": f"{g}:ru.x:5"}
+    assert db.get_shelf(conn, gone.id) is None
+    queued = conn.execute("SELECT shelf_id, package FROM android_jobs WHERE status='queued'").fetchone()
+    assert tuple(queued) == (keep.id, "ru.x")
+
+
 def test_link_carries_signature_decisions_with_package(ctx, cfg, conn, clock):
     own = owner(conn, clock)
     g = google_only(conn, clock, "g1")

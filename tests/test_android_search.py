@@ -130,8 +130,11 @@ def test_github_release_is_cached_between_searches(monkeypatch):
     assert src.github_app("example/android") == release
     assert src.github_app("example/android") == release and calls == ["example/android"]
     now[0] = 901
+    src.github_app("example/other")
+    assert ("github", "example/android") not in src._github_cache
+    assert src.github_app("EXAMPLE/OTHER") == release and len(calls) == 2
     src.github_app("example/android")
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_known_split_still_checks_author_when_apkpure_is_unavailable(monkeypatch):

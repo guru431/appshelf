@@ -117,9 +117,12 @@ class Sources:
         """Выпуск GitHub, Codeberg или GitLab; повторный поиск и ночная проверка не расходуют квоту для того же
         выпуска."""
         with self._github_lock:
+            now = self.clock()
+            for expired in [key for key, (until, _) in self._github_cache.items() if until <= now]:
+                del self._github_cache[expired]
             key = (source, ref.lower())
             cached = self._github_cache.get(key)
-            if cached is not None and self.clock() < cached[0]:
+            if cached is not None:
                 return cached[1]
             if source == "github":
                 app = github.info(self.http, ref, wait=self._wait)

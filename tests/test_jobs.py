@@ -224,7 +224,8 @@ def test_failed_android_upload_result_is_recovered_without_missing_file(ctx, cfg
     assert job["status"] == "error" and job["error"] == jobs.android_fetch.UPLOAD_LOST
 
 
-def test_low_space_fails_job_and_mails_once(ctx, cfg, conn, clock, tmp_path):
+def test_low_space_fails_job_and_mails_once(ctx, cfg, conn, clock, tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "FREE_MIN", 5 * GB)
     published(conn, clock, 1)
     published(conn, clock, 2)
     ctx.free["bytes"] = 3 * GB
@@ -233,6 +234,7 @@ def test_low_space_fails_job_and_mails_once(ctx, cfg, conn, clock, tmp_path):
     w.tick()
     apps = store.list_apps(conn, 1)
     assert [a.status for a in apps] == ["error", "error"] and "мало места" in apps[0].last_error
+    assert "нужно 5 ГБ" in apps[0].last_error
     assert ctx.sent == [f"appshelf: мало места на {socket.gethostname()}"]
     assert all(c[0] != "download" for c in ctx.tool.calls)
     ctx.free["bytes"] = 50 * GB

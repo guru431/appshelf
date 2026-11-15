@@ -200,7 +200,7 @@ def fetch_version(env: Env, c, acct, app_id: int, work_root: Path) -> str:
             raise store.AppGone(app_id)
         free = free_space(env)
         if free < FREE_MIN:
-            raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно 4 ГБ")
+            raise LowSpace(f"мало места: свободно {free / GB:.1f} ГБ, для скачивания нужно {FREE_MIN / GB:g} ГБ")
         notify.reset(c, notify.LOW_SPACE_KEY)  # место есть — эпизод «мало места» закончился
         root = cfg.shelf_root(acct)
         root.mkdir(exist_ok=True)

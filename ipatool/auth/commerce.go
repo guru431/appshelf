@@ -16,6 +16,8 @@ import (
 	"github.com/majd/ipatool/v2/internal/storeauth"
 )
 
+var commerceBuyHost = regexp.MustCompile(`^(?:p[0-9]+-)?buy\.itunes\.apple\.com$`)
+
 // Match the pinned upstream's commerce allowlist. Proofs are bound to the
 // existing device identity and must never be returned for arbitrary URLs.
 func commerceURL(endpoint, guid string) bool {
@@ -29,7 +31,7 @@ func commerceURL(endpoint, guid string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	if regexp.MustCompile(`^(?:p[0-9]+-)?buy\.itunes\.apple\.com$`).MatchString(host) {
+	if commerceBuyHost.MatchString(host) {
 		return u.Path == "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
 	}
 	if host != "downloaddispatch.itunes.apple.com" {

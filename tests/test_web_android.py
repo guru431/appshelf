@@ -457,6 +457,12 @@ def test_pending_signer_card_and_accept(web, conn, tmp_path):
     page = web.client.get("/android").text
     assert "подпись сменилась" in page and "Принять новую подпись" in page and cert_sha(b"CERT-B")[-4:] in page
     pending = db.list_apps(conn, shelf(conn).id)[0].pending
+    endpoint = f"/android/apps/{PKG}/accept-signer"
+    assert web.client.post(endpoint, data={"version_id": pending["id"] + 1}).status_code == 404
+    response = web.client.post(endpoint, data={"version_id": pending["id"]})
+    assert response.status_code == 400 and "Подтвердите" in response.text
+    view = db.list_apps(conn, shelf(conn).id)[0]
+    assert view.pending["id"] == pending["id"] and view.signer == cert_sha(b"CERT-A")
     web.client.post(f"/android/apps/{PKG}/accept-signer", data={"version_id": pending["id"], "confirm": "1"})
     view = db.list_apps(conn, shelf(conn).id)[0]
     assert (view.current["version_code"], view.pending, view.signer) == (2, None, cert_sha(b"CERT-B"))

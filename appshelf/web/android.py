@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import Depends, File, Form, Request, UploadFile
+from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 
 from .. import apk, ipatool, jobs, notify, people, store, webauth
@@ -786,8 +786,10 @@ def _register_scope(app, w, scope: Scope):
         def accept(c, root, sid):
             pending = c.execute("SELECT id FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                                 (sid, package)).fetchone()
-            if pending is None or pending["id"] != version_id or confirm != "1":
+            if pending is None or pending["id"] != version_id:
                 return False
+            if confirm != "1":
+                raise HTTPException(400, "Подтвердите смену подписи")
             db.accept_pending(c, root, sid, package)  # принимать нечего (уже приняли) — просто назад
             return True
         return change(request, package, accept)
