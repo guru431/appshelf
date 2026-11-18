@@ -5,8 +5,13 @@
 <div class="card">
 <p>Личная полка: {% for row in plan.rows if row.v.role == 'current' %}{{ row.v.version_name }} ({{ row.v.version_code }}){% endfor %}.
 Публичная: {% for v in plan.saved if v.role == 'current' %}{{ v.version_name }} ({{ v.version_code }}){% else %}ещё нет{% endfor %}.</p>
+<form id="copy-versions" method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
+<input type="hidden" name="package" value="{{ package }}">
+<input type="hidden" name="snapshot" value="{{ plan.snapshot }}">
 {% for row in plan.rows %}<div class="card">
-<b>{{ row.v.version_name }} ({{ row.v.version_code }})</b>{{ ' · закреплена на личной полке' if row.v.pinned }}
+{% if row.add and not plan.original.paid %}<label><input type="checkbox" name="digest" value="{{ row.v.sha256 }}" data-size="{{ row.v.size }}" checked>
+{% endif %}<b>{{ row.v.version_name }} ({{ row.v.version_code }})</b> · {{ row.v.size | mb }} МБ
+{{ ' · закреплена на личной полке' if row.v.pinned }}{% if row.add and not plan.original.paid %}</label>{% endif %}
 <p class="meta">SHA-256: <code>{{ row.v.sha256 }}</code><br>Подпись: <code>{{ row.v.signer }}</code></p>
 <p>{{ row.state }}</p></div>{% endfor %}
 {% set source = plan.target.source if plan.target else plan.original.source %}
@@ -19,11 +24,21 @@
 Закрепления личной полки не переносятся. При другой подписи APK может ждать решения владельца и до него гостям недоступен.</p>
 <p>Pending-версии и купленные Play-приложения исключены. Новые личные загрузки автоматически гостям не передаются.</p>
 {% if plan.original.paid %}<p class="err">Купленное — только на своей полке.</p>
-{% elif plan.count %}<form method="post" action="{{ post_url('/android/public/add/from-shelf') }}">
-<input type="hidden" name="package" value="{{ package }}"><input type="hidden" name="sync_history" value="1">
-<input type="hidden" name="snapshot" value="{{ plan.snapshot }}">
-<button>Добавить версии: {{ plan.count }}</button></form>
+{% elif plan.count %}<p>Выбрано на <output aria-live="polite">{{ '%.1f' | format(plan.total / 1048576) }}</output> МБ</p>
+<button>Добавить выбранные версии</button>
 {% else %}<p>Версии совпадают или требуют решения по подписи; новых доступных для копирования APK нет.</p>{% endif %}
+</form>
+{% if plan.count and not plan.original.paid %}
+<script>
+const copyForm = document.getElementById('copy-versions');
+copyForm.addEventListener('change', () => {
+  const chosen = [...copyForm.querySelectorAll('input[name="digest"]:checked')];
+  const bytes = chosen.reduce((total, input) => total + Number(input.dataset.size), 0);
+  copyForm.querySelector('output').textContent = (bytes / 1048576).toFixed(1);
+  copyForm.querySelector('button').disabled = chosen.length === 0;
+});
+</script>
+{% endif %}
 <p class="install"><a href="/android/public">Открыть публичную полку</a><a href="/android/public/add">Отмена</a></p>
 </div>
 {% endblock %}

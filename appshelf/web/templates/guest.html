@@ -25,6 +25,9 @@
     Telegram или WhatsApp PIN придётся вводить снова.</p>{% endif %}
 </div>
 {% else %}
+{% if guest %}<form method="post" action="{{ post_url('/p/forget') }}">
+  <button class="secondary">Забыть доступ на этом устройстве</button>
+</form>{% endif %}
 {% include 'shelf_filter.html' %}
 {% include 'device_profile.html' %}
 {% if not apps and not total %}<p class="empty">На полке пока пусто.</p>{% endif %}

@@ -2,6 +2,7 @@ import io
 import re
 
 import pytest
+import zxingcpp
 from PIL import Image
 from starlette.testclient import TestClient
 
@@ -16,6 +17,18 @@ from ipa_factory import make_ipa
 def test_healthz_without_login(web):
     r = TestClient(web.app).get("/healthz")
     assert r.status_code == 200 and r.text == "ok"
+
+
+def test_apple_saved_version_has_its_own_qr(web, conn, cfg, clock, acct):
+    seed_app(conn, cfg, clock, versions=("1.0", "2.0"))
+    previous = store.list_apps(conn, acct.id)[0].previous
+    path = f"/apps/123/qr.png?account={acct.id}&version={previous['id']}"
+    assert path.replace("&", "&amp;") in web.client.get("/?os=apple").text
+    response = web.client.get(path)
+    assert response.status_code == 200
+    code = zxingcpp.read_barcode(Image.open(io.BytesIO(response.content)))
+    assert code.text == "itms-services://?action=download-manifest&url=" + cfg.shelf_url(acct, previous["dir"], "manifest.plist")
+    assert web.client.get(f"/apps/124/qr.png?account={acct.id}&version={previous['id']}").status_code == 404
 
 
 def test_privacy_without_login(web):

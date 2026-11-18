@@ -224,6 +224,9 @@ class Uploads:
             if moment - datetime.fromisoformat(row["updated_at"]) >= EMPTY_TTL:
                 # затихшая держала только полученное: продолжить — снова занять весь размер, если место есть
                 others = c.execute("SELECT * FROM android_uploads WHERE id<>?", (row["id"],)).fetchall()
+                mine = [item for item in others if item["user_id"] == row["user_id"] and item["job_id"] is None]
+                if sum(self.reserved(item, moment) for item in mine) + row["size"] > USER_RESERVED:
+                    raise UploadError(429, "Завершите или отмените другую загрузку перед продолжением этой")
                 if sum(self.reserved(item, moment) for item in others) + row["size"] > MAX_RESERVED:
                     raise UploadError(507, NO_ROOM_PART)
             self.room(row["size"] - self.received(row) + row["size"], NO_ROOM_PART)  # оставшиеся части и сборка

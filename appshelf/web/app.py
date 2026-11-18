@@ -23,7 +23,7 @@ from . import accounts, admin, android, google_signin, pwa, signin
 from .common import ACCT_COOKIE, THEMES, WebCtx, back, back_to, filter_shelf, mutation_kind, qr_png, safe_next
 from .login import Limiter, LoginFlow
 
-PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/theme",  # /p — гость публичной полки, по PIN
+PUBLIC = ("/healthz", "/login", "/login/code", "/login/cancel", "/p", "/p/forget", "/theme",
           "/google/start", "/google/callback", "/privacy")  # /privacy — ссылка с экрана входа Google
 PUBLIC_PREFIXES = ("/pwa/", "/join/", "/l/", "/apk/")  # /apk/ — постоянная ссылка на APK, секрет — токен полки
 # страницы и действия полки Apple ID: у вошедших нет Apple ID — GET уводит на «Аккаунты», остальное — 409
@@ -313,13 +313,16 @@ def create_app(cfg: Config, tools, *, new_tool=None, now=jobs.now_iso, clock=tim
         return resp
 
     @app.get("/apps/{app_id}/qr.png")
-    def apple_qr(request: Request, app_id: int):
+    def apple_qr(request: Request, app_id: int, version: int = 0):
+        if not 0 < app_id < 1 << 63 or not 0 <= version < 1 << 63:
+            return not_found()
         a = request.state.acct
         with w.conn() as c:
-            item = next((x for x in store.list_apps(c, a.id) if x.app_id == app_id), None)
-        if item is None or item.current is None:
+            saved = (store._version_row(c, a.id, app_id, version) if version else
+                     store.current_version(c, a.id, app_id))
+        if saved is None:
             return not_found()
-        url = "itms-services://?action=download-manifest&url=" + cfg.shelf_url(a, item.current["dir"], "manifest.plist")
+        url = "itms-services://?action=download-manifest&url=" + cfg.shelf_url(a, saved["dir"], "manifest.plist")
         return Response(qr_png(url), media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
     def matches(needle: str, alias: dict, app_id: int, *texts: str) -> bool:

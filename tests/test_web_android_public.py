@@ -11,6 +11,14 @@ from helpers import GUEST, make_account, sign_in
 
 PKG = "ru.example.app"
 URL = "https://bank.example/app.apk"
+COPY = "/android/public/add/from-shelf"
+
+
+def copy_data(web):
+    page = web.client.get(COPY, params={"package": PKG})
+    return {"package": PKG,
+            "snapshot": re.search(r'name="snapshot" value="([a-f0-9]+)"', page.text).group(1),
+            "digest": re.findall(r'name="digest" value="([a-f0-9]+)"', page.text)}
 
 
 def add_personal(web, conn, tmp_path, source="link"):
@@ -27,23 +35,42 @@ def add_personal(web, conn, tmp_path, source="link"):
 def test_public_copy_preview_compares_hashes_and_refuses_stale_versions(web, conn, tmp_path):
     mine = add_personal(web, conn, tmp_path)
     page = web.client.get('/android/public/add/from-shelf', params={'package': PKG})
-    assert page.status_code == 200 and 'Добавить версии: 1' in page.text
+    assert page.status_code == 200 and 'Добавить выбранные версии' in page.text
     assert 'Ночные обновления' in page.text and db.public_shelf(conn) is None  # Preview is read-only.
-    snapshot = re.search(r'name="snapshot" value="([a-f0-9]+)"', page.text).group(1)
+    data = copy_data(web)
     version = make_apk(tmp_path / 'newer.apk', version_code=2, version_name='2.0')
     web.client.post('/android/add/upload', files={'file': ('newer.apk', version.read_bytes())})
     work(web, conn)
-    result = web.client.post('/android/public/add/from-shelf', data={'package': PKG, 'snapshot': snapshot, 'sync_history': '1'})
+    result = web.client.post(COPY, data=data)
     assert result.status_code == 409 and 'подтвердите заново' in result.text
     assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='copy'").fetchone()[0] == 0
-    snapshot = re.search(r'name="snapshot" value="([a-f0-9]+)"', result.text).group(1)
-    result = web.client.post('/android/public/add/from-shelf', data={'package': PKG, 'snapshot': snapshot, 'sync_history': '1'},
-                             follow_redirects=False)
+    result = web.client.post(COPY, data=copy_data(web), follow_redirects=False)
     assert result.status_code == 303
     work(web, conn)
     page = web.client.get('/android/public/add/from-shelf', params={'package': PKG})
     assert 'Версии совпадают' in page.text and 'Уже есть по SHA-256' in page.text
-    assert 'name="snapshot"' not in page.text
+    assert 'name="digest"' not in page.text
+
+
+def test_copy_selected_version_rechecks_queued_plan(web, conn, tmp_path):
+    mine = add_personal(web, conn, tmp_path)
+    original = db.current_version(conn, mine.id, PKG)["sha256"]
+    assert web.client.post(COPY, data=copy_data(web), follow_redirects=False).status_code == 303
+    queued = db.take_job(conn)
+    path = make_apk(tmp_path / "new.apk", version_code=2, version_name="2.0")
+    web.client.post("/android/add/upload", files={"file": ("new.apk", path.read_bytes())})
+    work(web, conn)
+    fetch.run_job(web.app.state.w.env, conn, queued)
+    public = db.public_shelf(conn)
+    assert db.current_version(conn, public.id, PKG) is None
+    failed = conn.execute("SELECT status, error FROM android_jobs WHERE id=?", (queued["id"],)).fetchone()
+    assert failed["status"] == "error" and "подтвердите заново" in failed["error"]
+    data = copy_data(web)
+    assert len(data["digest"]) == 2 and original in data["digest"]
+    data["digest"] = [original]
+    assert web.client.post(COPY, data=data, follow_redirects=False).status_code == 303
+    work(web, conn)
+    assert [v["sha256"] for v in db.list_apps(conn, public.id)[0].versions] == [original]
 
 
 @pytest.fixture(autouse=True)
@@ -169,11 +196,12 @@ def test_copy_personal_apk_to_public_without_download(web, cfg, conn, tmp_path, 
     assert "Сравнить и добавить в публичную" in web.client.get("/android").text
     choices = web.client.get("/android/public/add").text
     assert "Из моей полки" in choices and "Личное приложение" in choices
-    response = web.client.post("/android/public/add/from-shelf", data={"package": PKG}, follow_redirects=False)
+    data = copy_data(web)
+    response = web.client.post(COPY, data=data, follow_redirects=False)
     assert (response.status_code, response.headers["location"]) == (303, "/android/public")
     public = db.public_shelf(conn)
     # Повторная отправка не затирает карточку и не создаёт второго задания.
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    web.client.post(COPY, data=data)
     assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE kind='copy'").fetchone()[0] == 1
     work(web, conn)
     copied = db.current_version(conn, public.id, PKG)
@@ -199,7 +227,7 @@ def test_copy_failure_does_not_reveal_owner_shelf_token(web, member, cfg, conn, 
     current = db.current_version(conn, mine.id, PKG)
     folder = fetch.shelf_root(cfg, mine) / current["dir"]
     (folder / (fetch.apk_name(PKG, current["version_name"]) if lost == "apk" else "icon.png")).unlink()
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    web.client.post(COPY, data=copy_data(web))
     work(web, conn)
     job = conn.execute("SELECT status, error FROM android_jobs WHERE kind='copy'").fetchone()
     app = db.get_app(conn, db.public_shelf(conn).id, PKG)
@@ -218,7 +246,7 @@ def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn
     assert "Личное приложение" in web.client.get("/android/public/add").text
     assert web.client.post("/android/public/add/from-shelf", data={"package": "ru.foreign"}).status_code == 404
     assert member.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 403
-    assert web.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 200
+    assert web.client.post(COPY, data=copy_data(web)).status_code == 200
     job = db.take_job(conn)
     assert json.loads(job["payload"])["from_shelf"] == mine.id
 
@@ -228,7 +256,7 @@ def test_copy_history_makes_old_versions_available_to_public_guests(web, member,
                                                                   tmp_path, existing):
     mine = add_personal(web, conn, tmp_path)
     if existing:
-        web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+        web.client.post(COPY, data=copy_data(web))
         work(web, conn)
     for code in (3, 2):
         path = make_apk(tmp_path / f"history-{code}.apk", version_code=code, version_name=f"{code}.0")
@@ -238,10 +266,10 @@ def test_copy_history_makes_old_versions_available_to_public_guests(web, member,
     path = make_apk(tmp_path / "pending.apk", version_code=4, cert=b"OTHER-KEY")
     web.client.post("/android/add/upload", files={"file": ("pending.apk", path.read_bytes())})
     work(web, conn)
-    data = {"package": PKG, "sync_history": "1"} if existing else {"package": PKG}
-    response = web.client.post("/android/public/add/from-shelf", data=data, follow_redirects=False)
+    data = copy_data(web)
+    response = web.client.post(COPY, data=data, follow_redirects=False)
     assert response.status_code == 303
-    web.client.post("/android/public/add/from-shelf", data=data)
+    web.client.post(COPY, data=data)
     work(web, conn)
     assert db.take_job(conn) is None
     public = db.public_shelf(conn)
@@ -271,8 +299,8 @@ def test_copy_history_makes_old_versions_available_to_public_guests(web, member,
         assert old.status_code == 302 and old.headers["location"].endswith(f"/{PKG}-1.0.apk")
         assert mine.shelf not in old.headers["location"]
     before = [dict(v) for v in view.versions]
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
-    work(web, conn)
+    assert web.client.post(COPY, data=copy_data(web)).status_code == 409
+    assert db.take_job(conn) is None
     assert [dict(v) for v in db.list_apps(conn, public.id)[0].versions] == before
 
 
@@ -288,7 +316,7 @@ def test_sync_history_preserves_public_source_latest_and_pending_decision(web, c
     add_public(web, conn, tmp_path, version_code=6, cert=b"PUBLIC-PENDING")
     before = db.list_apps(conn, public.id)[0]
     metadata = dict(db.get_app(conn, public.id, PKG))
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
+    web.client.post(COPY, data=copy_data(web))
     work(web, conn)
     after = db.list_apps(conn, public.id)[0]
     assert dict(after.current) == dict(before.current) and dict(after.pending) == dict(before.pending)
@@ -296,7 +324,7 @@ def test_sync_history_preserves_public_source_latest_and_pending_decision(web, c
     for key in ("name", "source", "source_ref", "source_page", "source_etag", "google_account_id"):
         assert db.get_app(conn, public.id, PKG)[key] == metadata[key]
     db.reject_pending(conn, fetch.shelf_root(cfg, public), public.id, PKG, after.pending["id"])
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG, "sync_history": "1"})
+    web.client.post(COPY, data=copy_data(web))
     work(web, conn)
     after = db.list_apps(conn, public.id)[0]
     assert after.pending["version_code"] == 2 and after.current["version_code"] == 5
@@ -321,7 +349,7 @@ def test_copy_free_play_apk_with_expired_connection(web, conn, clock, tmp_path):
     people.set_play(conn, gid, "expired", clock.iso())
     db.set_source(conn, mine.id, PKG, "play", PKG)
     conn.execute("UPDATE android_apps SET google_account_id=? WHERE shelf_id=?", (gid, mine.id))
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    web.client.post(COPY, data=copy_data(web))
     work(web, conn)
     public = db.public_shelf(conn)
     assert db.current_version(conn, public.id, PKG) is not None
@@ -332,7 +360,7 @@ def test_copy_free_play_apk_with_expired_connection(web, conn, clock, tmp_path):
 @pytest.mark.parametrize("change", ["paid", "removed", "corrupt"])
 def test_copy_rechecks_source_when_worker_runs(web, cfg, conn, tmp_path, change):
     mine = add_personal(web, conn, tmp_path)
-    web.client.post("/android/public/add/from-shelf", data={"package": PKG})
+    web.client.post(COPY, data=copy_data(web))
     if change == "paid":
         db.set_paid(conn, mine.id, PKG, True)
     elif change == "removed":
@@ -344,7 +372,8 @@ def test_copy_rechecks_source_when_worker_runs(web, cfg, conn, tmp_path, change)
     work(web, conn)
     public = db.public_shelf(conn)
     assert db.current_version(conn, public.id, PKG) is None
-    assert db.get_app(conn, public.id, PKG)["status"] == "error"
+    card = db.get_app(conn, public.id, PKG)
+    assert card is None or card["status"] == "error"
     assert not list(fetch.shelf_root(cfg, public).glob("*"))
 
 

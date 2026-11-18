@@ -1,3 +1,4 @@
+import hashlib
 import re
 import sqlite3
 
@@ -14,12 +15,14 @@ A, B = "a" * 64, "b" * 64
 
 def v(code: int, signer: str = A, dir: str = "") -> db.NewApk:
     return db.NewApk(version_name=f"{code}.0", version_code=code, min_sdk=26, target_sdk=34, abis="", signer=signer,
-                     source="rustore", size=10, sha256="0" * 64, dir=dir or f"ru.x-{code}")
+                     source="rustore", size=10, sha256=hashlib.sha256(b"sample APK").hexdigest(),
+                     dir=dir or f"ru.x-{code}")
 
 
 def add(conn, root, sid, ver: db.NewApk) -> str:
     """Каталог версии на диске — как после скачивания, затем строка."""
     (root / ver.dir).mkdir(parents=True)
+    (root / ver.dir / db.apk_name("ru.x", ver.version_name)).write_bytes(b"sample APK")
     return db.add_version(conn, root, sid, "ru.x", ver, NOW)
 
 
@@ -162,6 +165,33 @@ def test_new_pending_replaces_old_pending(conn, tmp_path):
     view = db.list_apps(conn, sid)[0]
     assert (view.current["version_code"], view.pending["version_code"]) == (1, 3)
     assert not (root / "ru.x-2").exists() and (root / "ru.x-3").exists()
+
+
+def test_missing_pending_file_cannot_rotate_accepted_versions(conn, tmp_path):
+    root, sid = shelf_with_app(conn, tmp_path)
+    add(conn, root, sid, v(1))
+    add(conn, root, sid, v(2))
+    add(conn, root, sid, v(3, signer=B))
+    (root / "ru.x-3" / db.apk_name("ru.x", "3.0")).unlink()
+    before = [tuple(r) for r in conn.execute("SELECT * FROM android_versions")]
+    with pytest.raises(db.PendingUnavailable):
+        db.accept_pending(conn, root, sid, "ru.x")
+    assert [tuple(r) for r in conn.execute("SELECT * FROM android_versions")] == before
+    assert db.get_app(conn, sid, "ru.x")["signer"] == A
+    assert (root / "ru.x-1").is_dir()
+
+
+def test_local_upload_runs_while_play_job_waits_for_reconnection(conn):
+    gid = people.create_google(conn, 1, "play-test", "play@example.test", "Play", NOW)
+    people.set_play(conn, gid, "expired", NOW)
+    shelf = db.ensure_shelf(conn, 1, NOW)
+    db.put_app(conn, shelf.id, "ru.x", "Икс", "play", "ru.x", NOW, google_account_id=gid)
+    check = db.enqueue(conn, shelf.id, "check", NOW, package="ru.x")
+    upload = db.enqueue(conn, shelf.id, "upload", NOW, package="ru.x", payload={"path": "local.apk"})
+    assert db.take_job(conn)["id"] == upload
+    assert db.take_job(conn) is None
+    people.set_play(conn, gid, "ok", NOW)
+    assert db.take_job(conn)["id"] == check
 
 
 def test_remove_app_drops_rows_dirs_and_queued_jobs(conn, tmp_path):

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from contextlib import closing
@@ -43,6 +44,8 @@ def main(argv=None) -> int:
     restore.add_argument("--secrets-dir", required=True, type=Path, help="защищённая копия конфигурации")
     restore.add_argument("--cookie-key", required=True, type=Path, help="защищённая копия cookie-key")
     restore.add_argument("--deep", action="store_true", help="проверять SHA-256 приложений")
+    restore_set = sub.add_parser("restore-set", help="подготовить проверенные снимок базы и копию архива")
+    restore_set.add_argument("--out", required=True, type=Path, help="новый каталог в закрытом хранилище")
     bak = sub.add_parser("backup", help="согласованный снимок базы: --out — набор восстановления (архив — копией, "
                                         "затем check), --daily — ночной снимок в APPSHELF_BACKUP_DIR")
     how = bak.add_mutually_exclusive_group(required=True)
@@ -64,13 +67,22 @@ def main(argv=None) -> int:
         return check(cfg, args)
     if args.cmd == "backup":
         return daily(cfg, args.keep) if args.daily else backup(cfg, args.out)
+    if args.cmd == "restore-set":
+        try:
+            out = integrity.prepare_restore(cfg, args.out)
+        except integrity.BackupError as e:
+            print(f"подготовка набора: {integrity.TOKEN_RE.sub('<токен>', str(e))}", file=sys.stderr)
+            return 2
+        except (integrity.DbError, jobs.ArchiveUnavailable, OSError, sqlite3.Error) as e:
+            return read_failure(e, "подготовка набора")
+        print(f"проверенный набор: {out}\nконфигурация и cookie-key восстанавливаются отдельно")
+        return 0
     if args.cmd == "restore-report":
         try:
             report = integrity.restore_report(replace(cfg, pub_dir=args.archive), args.db, args.secrets_dir,
                                               args.cookie_key, deep=args.deep)
-        except (integrity.DbError, jobs.ArchiveUnavailable, OSError) as e:
-            print(e, file=sys.stderr)
-            return 2
+        except (integrity.DbError, jobs.ArchiveUnavailable, OSError, sqlite3.Error) as e:
+            return read_failure(e, "отчёт о восстановлении")
         print(json.dumps(report, ensure_ascii=False, indent=1))
         return 0 if report["offline_ok"] else 1
     with closing(store.connect(cfg.db, cfg.owner_email)) as c:
@@ -130,15 +142,25 @@ def check(cfg, args) -> int:
     try:
         with closing(integrity.open_ro(args.db or cfg.db)) as c:
             rep = integrity.check(cfg, c, deep=args.deep, homes=args.db is None)
-    except (integrity.DbError, jobs.ArchiveUnavailable) as e:
-        print(e, file=sys.stderr)
-        return 2
-    builds = integrity.builds(cfg, date.fromisoformat(jobs.now_iso()[:10]))  # на код возврата не влияет
+        builds = integrity.builds(cfg, date.fromisoformat(jobs.now_iso()[:10]))
+    except (integrity.DbError, jobs.ArchiveUnavailable, OSError, sqlite3.Error) as e:
+        return read_failure(e, "проверка целостности")
     if args.json:
         print(json.dumps({**rep.as_dict(), "ipatool": builds}, ensure_ascii=False, indent=1))
     else:
         print("\n".join([rep.text(), *builds]))
     return 0 if rep.ok else 1
+
+
+def read_failure(error, operation: str) -> int:
+    if isinstance(error, (integrity.DbError, jobs.ArchiveUnavailable)):
+        detail = str(error)
+    elif isinstance(error, sqlite3.Error):
+        detail = "ошибка чтения базы SQLite"
+    else:
+        detail = "ошибка чтения файлов"
+    print(f"{operation}: {detail}", file=sys.stderr)
+    return 2
 
 
 def backup(cfg, out: Path) -> int:
@@ -165,12 +187,19 @@ def daily(cfg, keep: int) -> int:
     if cfg.backup_dir is None:
         print("не задан APPSHELF_BACKUP_DIR в appshelf.env — каталог ночных снимков", file=sys.stderr)
         return 2
-    now = jobs.now_iso()
     try:
         integrity.outside_archive(cfg, cfg.backup_dir)
-        dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", now[:10], keep)
-        cfg.status_dir.mkdir(parents=True, exist_ok=True)
-        (cfg.status_dir / integrity.STAMP).write_text(now + "\n", encoding="utf-8")
+        with jobs.hold(cfg.locks_dir / "backup.lock"):
+            now = jobs.now_iso()
+            dst = integrity.daily_backup(cfg.db, cfg.backup_dir, cfg.tmp_dir / "backup", now[:10], keep)
+            cfg.status_dir.mkdir(parents=True, exist_ok=True)
+            stamp = cfg.status_dir / integrity.STAMP
+            pending = stamp.with_suffix(".tmp")
+            try:
+                pending.write_text(jobs.now_iso() + "\n", encoding="utf-8")
+                os.replace(pending, stamp)
+            finally:
+                pending.unlink(missing_ok=True)
     except (integrity.DbError, integrity.BackupError, OSError) as e:
         print(e, file=sys.stderr)
         return 2

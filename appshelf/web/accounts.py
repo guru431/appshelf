@@ -13,7 +13,7 @@ from .. import jobs, people, store, webauth
 from ..android import db as android_db, net, play
 from ..config import GB
 from .common import ACCT_COOKIE, WHO_COOKIE, WebCtx, back, relogin_query
-from .signin import login_page, submit
+from .signin import label, login_page, submit
 
 ARCHIVE_DOWN = "Архив недоступен — удалить сейчас нельзя"
 ACCOUNT_BUSY = "Идёт скачивание или проверка Apple ID либо Android-полки — удалить можно, когда закончится"
@@ -71,16 +71,17 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
                        "google": people.google_of(c, u.id)}
                       for u in users]
             pairs = [people.link_roles(c, a.id, b.id, order) for i, a in enumerate(users) for b in users[i + 1:]]
-        by_id = {u.id: u for u in users}
-        links = [{"keep": by_id[k], "gone": by_id[g]} for k, g in filter(None, pairs)]
+            labels = {u.id: label(c, u) for u in users} if any(pairs) else {}
+        links = [{"keep": k, "gone": g, "keep_label": labels[k], "gone_label": labels[g]} for k, g in filter(None, pairs)]
         return w.page(request, "apple.html", "apple", groups=groups, links=links)
 
     def link_page(request: Request, keep, gone, error: str = "", status_code: int = 200, refused: bool = False):
         with w.conn() as c:
             conflicts, digest = jobs.link_conflicts(c, keep.id, gone.id)
+            keep_label, gone_label = label(c, keep), label(c, gone)
         return w.page(request, "confirm.html", "apple", status_code,
-                      question=f"Связать «{gone.name}» с «{keep.name}»? Google-аккаунты и Android-полка «{gone.name}» "
-                               f"перейдут к «{keep.name}», вход любым их аккаунтом откроет все полки «{keep.name}». "
+                      question=f"Связать {gone_label} с {keep_label}? Google-аккаунты и Android-полка {gone_label} "
+                               f"перейдут к {keep_label}. Вход любым из этих аккаунтов откроет полки {keep_label}. "
                                "Связку не отменить; аккаунт, которым пользуются несколько человек, не связывайте.",
                       action="/apple/link", button="Связать", cancel="/apple", error=error, refused=refused,
                       hidden={"a": keep.id, "b": gone.id, "conflicts": digest}, conflicts=conflicts)

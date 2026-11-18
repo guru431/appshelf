@@ -58,10 +58,10 @@
       if (!hint) return;
       if (!profile) { hint.textContent = ''; return; }
       var fits = Array.from(select.options).filter(function (o) {
-        return o.dataset.abis !== undefined && !assess(o.dataset, profile).limited;
+        return !o.disabled && o.dataset.abis !== undefined && !assess(o.dataset, profile).limited;
       });
       var choice = fits[0];
-      if (!select.dataset.userSelected && choice) select.value = choice.value;
+      if (!select.dataset.userSelected && choice) select.selectedIndex = choice.index;
       hint.textContent = choice ? 'Для профиля подходит: ' + choice.textContent.trim() + '. Выбор можно изменить.' :
         'Подходящая сборка по известным требованиям не найдена. Проверьте архитектуру и Android.';
       if (select.dataset.userSelected) hint.textContent += ' Сохранён ваш выбор.';
@@ -69,7 +69,9 @@
       if (selected && selected.dataset.abis !== undefined) {
         var result = assess(selected.dataset, profile);
         if (result.limited || result.label === 'Неизвестно') hint.textContent += ' Выбранная сборка: ' + result.label + '. ' + result.reasons.join('. ');
-        hint.textContent += ' Конкретная сборка не обновляется автоматически; для автообновлений выберите «Рекомендуемая».';
+        hint.textContent += select.hasAttribute('data-history') ?
+          ' Эта сборка добавится в историю. Источник обновлений сохранится.' :
+          ' Конкретная сборка не обновляется автоматически. Для автообновлений выберите «Рекомендуемая».';
       }
     });
   }

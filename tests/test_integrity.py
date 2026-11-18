@@ -6,6 +6,8 @@ import shutil
 import sqlite3
 import stat
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -349,13 +351,20 @@ def test_check_shows_ipatool_build_drift_and_age(monkeypatch, tmp_path, capsys):
     stamp = bin_dir / "ipatool.src-sha256"
     # как deploy/install.sh: cat UPSTREAM patches/*.patch | sha256sum
     stamp.write_text(hashlib.sha256(b"URL=x\nCOMMIT=1\na\nb\n").hexdigest() + "\n", encoding="ascii")
+    (bin_dir / "ipatool-auth.src-sha256").write_text(
+        hashlib.sha256(b"URL=y\npackage main\n").hexdigest() + "\n", encoding="ascii")
     built = 1792000000                                                # 2026-10-14 UTC
     os.utime(stamp, (built, built))
     monkeypatch.setattr(jobs, "now_iso", lambda: "2026-11-09T03:00:00+00:00")
+    assert cli.main(["check"]) == 0
+    assert capsys.readouterr().out.count("исполняемый файл отсутствует") == 2
+    binary = bin_dir / "ipatool"
+    binary.touch()
+    binary.chmod(0o755)
     assert cli.main(["check"]) == 0                                   # сборка на код возврата не влияет
     out = capsys.readouterr().out
     assert "ipatool: собран 2026-10-14 из выложенных исходников" in out
-    assert "ipatool-auth: не собран" in out and "после DSA openssl или раз в квартал" in out
+    assert "ipatool-auth: исполняемый файл отсутствует" in out and "после DSA openssl или раз в квартал" in out
     (src / "patches" / "03-c.patch").write_bytes(b"c\n")
     monkeypatch.setattr(jobs, "now_iso", lambda: "2027-01-20T03:00:00+00:00")
     assert cli.main(["check", "--json"]) == 0
@@ -382,6 +391,91 @@ def test_cli_check_reports_unavailable_archive(monkeypatch, tmp_path, clock, cap
     cfg.archive.rename(tmp_path / "gone")
     assert cli.main(["check"]) == 2
     assert "недоступен" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("failure", [OSError, sqlite3.OperationalError])
+def test_read_failures_never_print_shelf_paths(monkeypatch, tmp_path, clock, capsys, failure):
+    cfg = cli_env(monkeypatch, tmp_path)
+    version, token = cli_shelf(cfg, clock, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise failure(f"could not read {version}")
+    if failure is OSError:
+        monkeypatch.setattr(integrity.ipa, "sha256", broken)
+    else:
+        monkeypatch.setattr(integrity.people, "all_accounts", broken)
+    assert cli.main(["check", "--deep"]) == 2
+    assert cli.main(["restore-report", "--deep", "--db", str(cfg.db), "--archive", str(cfg.archive),
+                     "--secrets-dir", str(tmp_path), "--cookie-key", str(tmp_path / "key")]) == 2
+    out = capsys.readouterr()
+    assert token not in out.err and not out.out
+    assert ("Apple ID №" if failure is OSError else "SQLite") in out.err
+
+
+def test_restore_set_detects_source_drift_and_resumes_with_verified_files(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    version, token = cli_shelf(cfg, clock, tmp_path)
+    out = tmp_path / "set"
+    args = ["restore-set", "--out", str(out)]
+    original = integrity.shutil.copyfile
+    with closing(store.connect(cfg.db)) as c:
+        digest = c.execute("SELECT sha256 FROM versions").fetchone()[0]
+
+        def change_while_copying(src, dest):
+            result = original(src, dest)
+            if src.name == "app.ipa":
+                c.execute("UPDATE versions SET sha256=?", ("b" * 64,))
+            return result
+        with monkeypatch.context() as m:
+            m.setattr(integrity.shutil, "copyfile", change_while_copying)
+            assert cli.main(args) == 2 and not out.exists()
+        assert "архив изменился во время копирования" in capsys.readouterr().err
+        c.execute("UPDATE versions SET sha256=?", (digest,))
+
+    copied = []
+
+    def record(src, dest):
+        copied.append(src.name)
+        return original(src, dest)
+    monkeypatch.setattr(integrity.shutil, "copyfile", record)
+    assert cli.main(args) == 0 and copied == ["appshelf.db"]
+    assert not (tmp_path / ".set.appshelf-partial").exists()
+    assert {p.name for p in out.iterdir()} == {"appshelf.db", "pub"}
+    assert (out / "pub" / token / version.name / "app.ipa").read_bytes() == (version / "app.ipa").read_bytes()
+    assert cli.main(["check", "--deep", "--db", str(out / "appshelf.db"), "--archive", str(out / "pub")]) == 0
+
+
+def test_simultaneous_daily_backups_share_lock_and_write_valid_snapshot(monkeypatch, tmp_path, clock, capsys):
+    cfg = cli_env(monkeypatch, tmp_path)
+    cli_shelf(cfg, clock, tmp_path)
+    share = tmp_path / "share"
+    share.mkdir()
+    monkeypatch.setenv("APPSHELF_BACKUP_DIR", str(share))
+    monkeypatch.setattr(jobs, "now_iso", clock.iso)
+    first, second, release = Event(), Event(), Event()
+    original = integrity.daily_backup
+
+    def pause(*args):
+        if first.is_set():
+            second.set()
+        else:
+            first.set()
+            assert release.wait(2)
+        return original(*args)
+    monkeypatch.setattr(integrity, "daily_backup", pause)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(cli.main, ["backup", "--daily"])
+        try:
+            assert first.wait(2)
+            b = pool.submit(cli.main, ["backup", "--daily"])
+            assert not second.wait(0.05)
+        finally:
+            release.set()
+        assert a.result(timeout=3) == b.result(timeout=3) == 0
+    [snapshot] = share.glob("*.db")
+    with closing(integrity.open_ro(snapshot)) as c:
+        assert c.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert (cfg.status_dir / integrity.STAMP).read_text().strip() == clock.iso()
 
 
 # --- Android-полки -------------------------------------------------------------

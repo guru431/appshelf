@@ -131,23 +131,31 @@ rm -f /var/lib/appshelf/web-auth /var/lib/appshelf/ipatool.lock
 
 # bin/ipatool собран из выложенных UPSTREAM и патчей? Сборка — отдельно: Docker, минуты
 want="$(cat "$R/ipatool/UPSTREAM" "$R"/ipatool/patches/*.patch | sha256sum | cut -d' ' -f1)"
-if [ "$want" != "$(cat "$R/bin/ipatool.src-sha256" 2>/dev/null || true)" ]; then
+if [ ! -f "$R/bin/ipatool" ] || [ ! -x "$R/bin/ipatool" ] ||
+   [ "$want" != "$(cat "$R/bin/ipatool.src-sha256" 2>/dev/null || true)" ]; then
   echo "ВНИМАНИЕ: bin/ipatool собран не из выложенных ipatool/UPSTREAM и патчей — нужна пересборка:" >&2
   echo "  на своей машине: bash deploy/build-ipatool.sh" >&2
 fi
 want_auth="$(cat "$R/ipatool/auth/UPSTREAM" "$R"/ipatool/auth/*.go | sha256sum | cut -d' ' -f1)"
-if [ "$want_auth" != "$(cat "$R/bin/ipatool-auth.src-sha256" 2>/dev/null || true)" ]; then
+if [ ! -f "$R/bin/ipatool-auth" ] || [ ! -x "$R/bin/ipatool-auth" ] ||
+   [ "$want_auth" != "$(cat "$R/bin/ipatool-auth.src-sha256" 2>/dev/null || true)" ]; then
   echo "ВНИМАНИЕ: native-клиент входа требует сборки: bash deploy/build-ipatool.sh" >&2
 fi
 
 restart_and_check() {
-  systemctl restart appshelf-web
+  code=000
+  systemctl restart appshelf-web || return 1
   # Type=simple: restart возвращается раньше, чем uvicorn загрузил приложение — ждём ответа.
   # От www-data — так к сокету ходит Apache; /healthz без пароля.
-  code=000
-  for _ in $(seq 1 20); do
-    code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null || true)
+  local deadline=$(( ${EPOCHREALTIME/./} + 10000000 )) remaining limit
+  while :; do
+    remaining=$(( deadline - ${EPOCHREALTIME/./} ))
+    (( remaining >= 1000 )) || return 1
+    printf -v limit '%d.%06d' "$(( remaining / 1000000 ))" "$(( remaining % 1000000 ))"
+    code=$(sudo -u www-data curl -s -o /dev/null -w "%{http_code}" --max-time "$limit" \
+      --unix-socket /run/appshelf/web.sock http://localhost/healthz 2>/dev/null) || code=000
     if [ "$code" = 200 ]; then return 0; fi
+    (( deadline - ${EPOCHREALTIME/./} > 500000 )) || return 1
     sleep 0.5
   done
   return 1
@@ -159,8 +167,8 @@ if restart_and_check; then
   exit 0
 fi
 echo "ОШИБКА: appshelf-web не ответил 200 на /healthz за 10 с (от www-data, последний код $code)" >&2
-systemctl status appshelf-web --no-pager 2>&1 | tail -n 15 >&2
-journalctl -u appshelf-web -n 20 --no-pager >&2
+systemctl status appshelf-web --no-pager 2>&1 | tail -n 15 >&2 || true
+journalctl -u appshelf-web -n 20 --no-pager >&2 || true
 # Автооткат — только если база годится прежнему коду, по правилу store.connect: схема не новее его SCHEMA_VERSION
 # или её переход записал в state schema_readable_by не новее (иначе прежний код не стартует: MigrationError).
 DATA="$(sed -n 's/^APPSHELF_DATA=//p' "$ENV_FILE" | tail -n 1 | tr -d "\"'")"
@@ -175,6 +183,7 @@ PY
 then
   restore_previous
   install_units
+  systemctl reset-failed appshelf-web || true
   if restart_and_check; then
     echo "Возвращён прежний код: appshelf-web отвечает. Новая версия НЕ выложена — причина выше." >&2
   else

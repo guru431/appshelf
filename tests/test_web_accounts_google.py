@@ -35,18 +35,20 @@ def test_accounts_page_lists_google_and_add_google(gweb, conn, cfg, clock):
 
 
 def test_web_link_both_apple_400_and_cookie_after_link(gweb, conn, cfg, clock):
-    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, name="Пётр")
-    uid, gid = google_only(conn, clock)
+    petr = make_account(conn, clock, email="petr@example", role="member", legacy=False, name="Иван Петров")
+    uid, gid = google_only(conn, clock, name="Иван Петров")
     for u in (1, petr.user_id, uid):
         sign_in(gweb.client, cfg, conn, clock, u)
     page = gweb.client.get("/apple").text
     assert f"/apple/link?a=1&amp;b={uid}" in page and f"/apple/link?a={petr.user_id}&amp;b={uid}" in page
     assert f"b={petr.user_id}" not in page                                      # у обоих Apple ID — кнопки нет
+    assert all(email in page for email in ("owner@example", petr.email, people.get_google(conn, gid).email))
     r = gweb.client.post("/apple/link", data={"a": 1, "b": petr.user_id})
     assert r.status_code == 400 and "У обоих есть Apple ID — их не связать" in r.text
     assert gweb.client.post("/apple/link", data={"a": uid, "b": uid}).status_code == 404
     confirm = gweb.client.get(f"/apple/link?a={uid}&b=1")
-    assert "Связать «Мария» с «Иван Петров»?" in confirm.text and "Связку не отменить" in confirm.text
+    assert "Связку не отменить" in confirm.text
+    assert "owner@example" in confirm.text and people.get_google(conn, gid).email in confirm.text
     r = gweb.client.post("/apple/link", data={"a": uid, "b": 1}, follow_redirects=False)   # порядок полей не важен
     assert (r.status_code, r.headers["location"]) == (303, "/apple")
     assert people.get_user(conn, uid) is None and people.get_google(conn, gid).user_id == 1

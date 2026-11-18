@@ -1,6 +1,15 @@
 {% extends "base.html" %}
 {% from "help_parts.html" import ios_steps, dialog, help_button, tip %}
 {% block main %}
+{% macro version_qr(a, v) %}
+<button type="button" class="sm secondary qr-toggle" data-qr-toggle aria-controls="qr-{{ a.app_id }}-{{ v['id'] }}"
+  aria-expanded="false" aria-label="Показать QR-код для {{ a.name }} {{ v['version'] }}" title="QR-код для iPhone">
+  <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+    <path fill-rule="evenodd" d="M3 3h7v7H3zM5 5v3h3V5zM14 3h7v7h-7zM16 5v3h3V5zM3 14h7v7h-7zM5 16v3h3v-3z"/>
+    <path d="M13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z"/>
+  </svg>
+</button>
+{% endmacro %}
 {% if ios_other %}<div class="banner"><p>Установка работает только в Safari — откройте эту страницу в Safari.</p>
   <button type="button" class="secondary" data-copy="{{ cfg.public_base ~ here }}">Скопировать адрес</button></div>{% endif %}
 {% for b in banners %}<div class="banner">{{ b }}</div>{% endfor %}
@@ -45,10 +54,15 @@
       {{ help_button() }}
     </div>
       {% if a.previous %}<span class="meta">предыдущая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.previous['dir'], 'manifest.plist') }}">{{ a.previous['version'] }}</a>
-        {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}</span>{% endif %}</div>
-    {% if device == 'desktop' %}<div class="app-qr" id="qr-{{ a.app_id }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}" alt="QR-код установки {{ a.name }} на iPhone" width="196" height="196" loading="lazy"></div>{% endif %}
+        {%- if a.previous['pinned'] %} <span class="tag">закреплена</span>{% endif %}
+        {% if device == 'desktop' %}{{ version_qr(a, a.previous) }}{% endif %}</span>{% endif %}</div>
+    {% if device == 'desktop' %}<div class="app-qr" id="qr-{{ a.app_id }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}&amp;version={{ a.current['id'] }}" alt="QR-код установки {{ a.name }} на iPhone" width="196" height="196" loading="lazy"></div>{% endif %}
     {% endif %}
-    {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ a.kept['size'] | mb }} МБ</div>{% endif %}
+    {% if a.kept %}<div class="meta">сохранённая: <a href="itms-services://?action=download-manifest&amp;url={{ public_url(a.kept['dir'], 'manifest.plist') }}">{{ a.kept['version'] }}</a> · {{ a.kept['size'] | mb }} МБ
+      {% if device == 'desktop' %}{{ version_qr(a, a.kept) }}{% endif %}</div>{% endif %}
+    {% if device == 'desktop' %}{% for v in [a.previous, a.kept] if v %}
+    <div class="app-qr" id="qr-{{ a.app_id }}-{{ v['id'] }}" hidden><img src="/apps/{{ a.app_id }}/qr.png?account={{ acct.id }}&amp;version={{ v['id'] }}" alt="QR-код установки {{ a.name }} {{ v['version'] }} на iPhone" width="196" height="196" loading="lazy"></div>
+    {% endfor %}{% endif %}
     {% if a.status == 'queued' %}{% set r = (waiting.get(a.app_id) or ('Ждёт входа в Apple ID' if acct.session != 'ok' else 'Ожидает обработчика')).replace('В очереди — ', '', 1) %}
     <div class="meta">в очереди · {{ r[:1] | lower }}{{ r[1:] }}</div>
     {% elif a.status == 'downloading' %}<div class="meta busy">скачивается…</div>

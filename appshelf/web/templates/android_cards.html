@@ -172,11 +172,13 @@
     {% else %}<p class="err">Цепочка ротации ключа не подтверждена. Новая подпись может потребовать удаления приложения вместе с данными. Сохраните нужные данные до установки.</p>{% endif %}
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/accept-signer') }}">
       <input type="hidden" name="version_id" value="{{ a.pending['id'] }}">
+      <input type="hidden" name="digest" value="{{ a.pending['sha256'] }}">
       <label class="check"><input type="checkbox" name="confirm" value="1" required>Принять новую подпись {{ a.name }}; понимаю риск потери данных</label>
       <p class="install"><button class="danger">Принять новую подпись</button></p>
     </form>
     <form method="post" action="{{ post_url(prefix ~ '/apps/' ~ a.package ~ '/reject-signer') }}">
-      <input type="hidden" name="version_id" value="{{ a.pending['id'] }}"><button class="secondary">Отклонить эту версию</button>
+      <input type="hidden" name="version_id" value="{{ a.pending['id'] }}">
+      <input type="hidden" name="digest" value="{{ a.pending['sha256'] }}"><button class="secondary">Отклонить эту версию</button>
     </form>
     <p class="hint">Отклонённый файл больше не предлагается; другие новые сборки проверяются обычным образом.</p>
   </dialog>

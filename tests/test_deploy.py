@@ -24,7 +24,57 @@ def test_code_group_reaches_server_as_one_shell_word():
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     check = text.index('[[ ! "$GROUP" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]]')
     assert check < text.index('git -C "$D" archive --format=tar.gz HEAD') and "%q" not in text
-    assert text.rstrip().endswith("""install.sh" '"$GROUP\"""")
+    assert 'install.sh" "$1"' in text and """bash '"$GROUP" || {""" in text
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+def test_failed_health_rolls_back_even_when_diagnostics_fail(tmp_path):
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    previous = tmp_path / "previous"
+    (previous / "appshelf").mkdir(parents=True)
+    (previous / "appshelf" / "store.py").write_text("SCHEMA_VERSION = 11\n", encoding="utf-8")
+    env_file = tmp_path / "appshelf.env"
+    env_file.touch()
+    env = {**os.environ, "OLD": previous.as_posix(), "ENV_FILE": env_file.as_posix(), "R": tmp_path.as_posix()}
+    stub = """
+rolled_back=0
+systemctl() {
+  case "$1" in
+    restart) [ "$rolled_back" = 1 ];;
+    status) return 3;;
+    reset-failed) return 0;;
+  esac
+}
+journalctl() { return 1; }
+restore_previous() { rolled_back=1; echo restored; }
+install_units() { echo units; }
+sudo() {
+  if [ "$2" = www-data ]; then printf 200; else cat >/dev/null; fi
+}
+"""
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c", stub + text[text.index("restart_and_check()"):]],
+                            env=env, capture_output=True, text=True, encoding="utf-8", timeout=5)
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == ["restored", "units"]
+    assert "Возвращён прежний код" in result.stderr
+
+
+@pytest.mark.skipif(not BASH, reason="deployment scripts require Bash")
+def test_curl_receives_deadline_and_partial_response_is_not_success():
+    text = (DEPLOY / "install.sh").read_text(encoding="utf-8")
+    restart = re.search(r"(?ms)^restart_and_check\(\) \{.*?^\}", text).group()
+    stub = """
+systemctl() { return 0; }
+sudo() {
+  [[ "$*" == *"--max-time 0."* ]] || { printf 200; return 0; }
+  printf 200  # headers arrived, curl timed out before the body completed
+  return 28
+}
+"""
+    result = subprocess.run([BASH, "-euo", "pipefail", "-c",
+                             stub + restart.replace("10000000", "200000") + "\nrestart_and_check"],
+                            capture_output=True, timeout=5)
+    assert result.returncode == 1
 
 
 def test_new_code_goes_live_only_after_checks_and_pip():

@@ -8,8 +8,9 @@ from PIL import Image
 from starlette.testclient import TestClient
 
 from apk_factory import cert_sha, make_apk
-from appshelf import jobs, people
-from appshelf.android import db, fetch, net, rustore
+from appshelf import ipa, jobs, people
+from appshelf.android import db, fdroid_index, fetch, net, rustore
+from appshelf.android.search import Option
 from appshelf.config import GB
 from appshelf.android.sources import Latest
 from appshelf.web.app import create_app
@@ -310,14 +311,16 @@ def test_change_source_to_store_page(web, conn, tmp_path):
     r = web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": f"https://apkpure.com/x/{PKG}"},
                         follow_redirects=False)
     assert r.status_code == 303
-    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
+    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "link"
+    queued = conn.execute("SELECT payload FROM android_jobs WHERE status='queued'").fetchone()
+    assert json.loads(queued["payload"])["source_change"]["source"] == "apkpure"
     r = web.client.post(f"/android/apps/{PKG}/source",
                         data={"source": "link", "ref": "https://f-droid.org/packages/ru.other/"})
     assert r.status_code == 400 and "ru.other" in r.text
     r = web.client.post(f"/android/apps/{PKG}/source",
                         data={"source": "link", "ref": f"https://play.google.com/store/apps/details?id={PKG}"})
     assert r.status_code == 400
-    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "apkpure"
+    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "link"
 
 
 def test_card_shows_source_and_notices(web, conn, tmp_path):
@@ -335,7 +338,7 @@ def test_card_shows_source_and_notices(web, conn, tmp_path):
     r = web.client.post("/android/apps/ru.f/source", data={"source": "appgallery", "ref": ""}, follow_redirects=False)
     assert r.status_code == 303
     app = db.get_app(conn, shelf(conn).id, "ru.f")
-    assert (app["source"], app["source_ref"]) == ("appgallery", "ru.f")
+    assert (app["source"], app["source_ref"]) == ("fdroid", "ru.f")
     assert conn.execute("SELECT kind FROM android_jobs WHERE status='queued'").fetchone()["kind"] == "check"
 
 
@@ -457,7 +460,8 @@ def test_pending_signer_card_and_accept(web, conn, tmp_path):
     page = web.client.get("/android").text
     assert "подпись сменилась" in page and "Принять новую подпись" in page and cert_sha(b"CERT-B")[-4:] in page
     pending = db.list_apps(conn, shelf(conn).id)[0].pending
-    web.client.post(f"/android/apps/{PKG}/accept-signer", data={"version_id": pending["id"], "confirm": "1"})
+    web.client.post(f"/android/apps/{PKG}/accept-signer",
+                    data={"version_id": pending["id"], "digest": pending["sha256"], "confirm": "1"})
     view = db.list_apps(conn, shelf(conn).id)[0]
     assert (view.current["version_code"], view.pending, view.signer) == (2, None, cert_sha(b"CERT-B"))
     assert "подпись сменилась" not in web.client.get("/android").text
@@ -468,13 +472,63 @@ def test_change_source_keeps_versions(web, conn, tmp_path):
     r = web.client.post(f"/android/apps/{PKG}/source", data={"source": "rustore", "ref": ""}, follow_redirects=False)
     assert r.status_code == 303
     app = db.get_app(conn, shelf(conn).id, PKG)
-    assert (app["source"], app["source_ref"], app["status"]) == ("rustore", PKG, "queued")
+    assert (app["source"], app["source_ref"], app["status"]) == ("link", URL, "queued")
     assert db.list_apps(conn, shelf(conn).id)[0].current["version_code"] == 1
     job = conn.execute("SELECT kind, package, payload FROM android_jobs WHERE status='queued'").fetchone()
-    assert (job["kind"], job["package"], json.loads(job["payload"])) == ("check", PKG, {"previous": ["link", URL, "", ""]})
+    assert (job["kind"], job["package"], json.loads(job["payload"])) == (
+        "check", PKG, {"source_change": {"source": "rustore", "ref": PKG, "ack": False}})
     assert web.client.post(f"/android/apps/{PKG}/source", data={"source": "link", "ref": "http://x/a.apk"}
                            ).status_code == 400
     assert web.client.post(f"/android/apps/{PKG}/source", data={"source": "upload", "ref": ""}).status_code == 400
+    web.sources.apks[PKG] = web.sources.apks[URL]
+    work(web, conn)
+    assert db.get_app(conn, shelf(conn).id, PKG)["source"] == "rustore"
+    assert db.list_apps(conn, shelf(conn).id)[0].current["version_code"] == 1
+
+
+@pytest.mark.parametrize("current", [False, True])
+def test_failed_first_download_keeps_previous_update_source(web, conn, tmp_path, current):
+    if current:
+        add_link(web, conn, tmp_path)
+    else:
+        web.client.post("/android/add/rustore", data={"package": PKG})
+        web.sources.fail[PKG] = net.SourceError("нет в RuStore")
+        work(web, conn)
+    sid = shelf(conn).id
+    old = db.get_app(conn, sid, PKG)
+    web.free["bytes"] = 0
+    assert web.client.post(f"/android/apps/{PKG}/source", data={"source": "fdroid"},
+                           follow_redirects=False).status_code == 303
+    work(web, conn)
+    card = db.get_app(conn, sid, PKG)
+    assert (card["source"], card["source_ref"], card["source_etag"]) == (
+        old["source"], old["source_ref"], old["source_etag"])
+    assert card["status"] == ("ok" if current else "error")
+    if current:
+        assert card["check_result"] == "error"
+    assert fetch.NOT_CHANGED in conn.execute("SELECT error FROM android_jobs ORDER BY id DESC LIMIT 1").fetchone()[0]
+
+
+@pytest.mark.parametrize("by_link", [False, True])
+def test_explicit_fdroid_build_adds_history_to_existing_card(web, conn, tmp_path, by_link):
+    add_link(web, conn, tmp_path, version_code=3, version_name="3.0")
+    path = make_apk(tmp_path / "old.apk", version_code=1, version_name="1.0")
+    web.sources.apks[PKG + "@1"] = path
+    if by_link:
+        endpoint, data = "/android/add/link", {"url": f"https://f-droid.org/archive/{PKG}_1.apk"}
+    else:
+        builds = (fdroid_index.Build("3.0", 3, "new.apk", ipa.sha256(web.sources.apks[URL]), "", ()),
+                  fdroid_index.Build("1.0", 1, "old.apk", ipa.sha256(path), "", ()))
+        web.sources.found = [Option("fdroid_archive", PKG, PKG, "Пример", builds=builds)]
+        html = search_results(web, PKG)
+        assert "уже сохранена" in html and f'value="{PKG}@1"' in html
+        endpoint = "/android/add/source"
+        data = {"source": "fdroid_archive", "package": PKG, "ref": PKG + "@1"}
+    assert web.client.post(endpoint, data=data, follow_redirects=False).status_code == 303
+    work(web, conn)
+    view = db.list_apps(conn, shelf(conn).id)[0]
+    assert view.source == "link" and view.current["version_code"] == 3
+    assert [v["version_code"] for v in view.versions] == [3, 1]
 
 
 def test_retry_and_check_queue_once(web, conn, tmp_path):

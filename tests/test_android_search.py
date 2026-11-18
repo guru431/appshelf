@@ -44,6 +44,25 @@ def test_partial_source_failure_keeps_other_results(monkeypatch):
     assert any(o.source == "fdroid_archive" for o in result.options)
 
 
+def test_appgallery_card_id_resolves_before_package_search(monkeypatch):
+    src = setup_search(monkeypatch)
+    resolved, checked = [], []
+    monkeypatch.setattr(appgallery, "package_of", lambda http, app_id: resolved.append(app_id) or PKG)
+
+    def lookup(http, host, package):
+        checked.append(package)
+        return SimpleNamespace(name="Example", version_name="2.0")
+    monkeypatch.setattr(appgallery, "info", lookup)
+    url = "https://appgallery.huawei.com/app/C102312137"
+    result = src.search_all(url)
+    assert resolved == ["C102312137"] and checked == [PKG]
+    assert any(o.source == "appgallery" and o.package == PKG for o in result.options)
+    monkeypatch.setattr(appgallery, "package_of",
+                        lambda *a: (_ for _ in ()).throw(net.SourceError("AppGallery не нашёл карточку")))
+    result = src.search_all(url)
+    assert not result.options and "AppGallery не нашёл карточку" in result.errors[0]
+
+
 def test_izzy_search_keeps_repository_and_version_choices(monkeypatch):
     src = setup_search(monkeypatch)
     src.izzy_catalog = src.fdroid_archive

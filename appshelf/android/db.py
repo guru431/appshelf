@@ -6,6 +6,7 @@
 Транзакции и удаление каталогов после COMMIT — как в store."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -14,7 +15,18 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..ipa import sha256
 from ..store import AppGone, rmtree_logged, tx, version_snapshot
+
+SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def apk_name(package: str, version_name: str) -> str:
+    return f"{package}-{SAFE_RE.sub('_', version_name) or 'v'}.apk"
+
+
+class PendingUnavailable(Exception):
+    pass
 
 # <пакет>-<versionCode>[-N]; версия, ждущая решения по подписи, — <пакет>-<versionCode>-p<случайное>: каталог полки
 # Apache отдаёт по /d/, а имя без секрета угадывается по versionCode из источника (переименование — accept_pending)
@@ -23,11 +35,18 @@ PENDING_DIR_RE = re.compile(r"-p[0-9a-f]{32}$")
 PLAY_OK = "SELECT id FROM google_accounts WHERE play = 'ok'"
 # Google-аккаунт задания Play: из payload add, иначе — карточки Play («Повторить», проверка); у аккаунта нет
 # подключения — задание ждёт (spec §9). Аккаунта нет вовсе — задание идёт и падает ошибкой «удалён»
-JOB_ACCOUNT = """COALESCE(CASE WHEN json_valid(j.payload) AND json_extract(j.payload, '$.source') = 'play'
-                               THEN json_extract(j.payload, '$.account') END,
-                          (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
-                               AND a.package = j.package AND a.source = 'play'))"""
-RUNNABLE = f"(j.kind = 'copy' OR NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok'))"
+JOB_ACCOUNT = """CASE
+    WHEN j.kind = 'add' AND (CASE WHEN json_valid(j.payload)
+        THEN json_extract(j.payload, '$.source') = 'play' ELSE 0 END)
+        THEN COALESCE(json_extract(j.payload, '$.account'),
+                      (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
+                       AND a.package = j.package AND a.source = 'play'))
+    WHEN j.kind = 'check' AND NOT (CASE WHEN json_valid(j.payload)
+        THEN json_type(j.payload, '$.source_change') IS NOT NULL ELSE 0 END)
+        THEN (SELECT a.google_account_id FROM android_apps a WHERE a.shelf_id = j.shelf_id
+              AND a.package = j.package AND a.source = 'play')
+    END"""
+RUNNABLE = f"NOT EXISTS (SELECT 1 FROM google_accounts g WHERE g.id = {JOB_ACCOUNT} AND g.play != 'ok')"
 WHATS_NEW_MAX = 2000
 # Управляющие символы (кроме перевода строки и табуляции) и невидимые символы направления текста
 WHATS_NEW_JUNK = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
@@ -232,6 +251,35 @@ def downloadable_version(c, shelf_id: int, package: str, version_id: int = 0):
                      (version_id, shelf_id, package)).fetchone()
 
 
+def copy_preview(c, source, target, package):
+    original = get_app(c, source.id, package)
+    current = get_app(c, target.id, package) if target else None
+    incoming = [dict(v) for v in c.execute(
+        "SELECT * FROM android_versions WHERE shelf_id=? AND package=? AND role!='pending' "
+        "ORDER BY (role='current') DESC,version_code DESC,id", (source.id, package))]
+    saved = [dict(v) for v in c.execute(
+        "SELECT * FROM android_versions WHERE shelf_id=? AND package=? ORDER BY id",
+        (target.id, package))] if target else []
+    hashes = {v["sha256"] for v in saved}
+    pending = any(v["role"] == "pending" for v in saved)
+    signer = current["signer"] if current else ""
+    rows = []
+    for v in incoming:
+        denied = target is not None and rejected_apk(c, target.id, package, v["sha256"])
+        different = bool(signer and signer != v["signer"])
+        state = ("Уже есть по SHA-256" if v["sha256"] in hashes else "Ранее отклонена" if denied else
+                 "Ждёт решения по существующей подписи" if different and pending else
+                 "Проверка новой подписи; возможно потребуется решение" if different else "Будет добавлена")
+        rows.append({"v": v, "state": state,
+                     "add": v["sha256"] not in hashes and not denied and not (different and pending)})
+    fields = ("name", "source", "source_ref", "source_page", "google_account_id", "paid", "signer")
+    snapshot = [dict((k, original[k]) for k in fields), dict((k, current[k]) for k in fields) if current else None,
+                rows, saved]
+    digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+    return {"original": original, "target": current, "rows": rows, "total": sum(r["v"]["size"] for r in rows if r["add"]),
+            "count": sum(r["add"] for r in rows), "snapshot": digest, "saved": saved}
+
+
 def apps_to_check(c) -> list[sqlite3.Row]:
     """Ночная проверка: все полки; свой файл (upload) не проверяется, Google Play — только аккаунтом с действующим
     подключением."""
@@ -302,7 +350,7 @@ def updated_packages(c, shelf_id: int) -> set[str]:
         (updated_key(shelf_id, ""), shelf_id))}
 
 
-def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str) -> str:
+def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str, *, keep_current: bool = False) -> str:
     """Новее current — текущая; старая сборка — kept. Другой ключ — pending до решения человека.
     Первая версия задаёт подпись приложения. Карточки нет — AppGone."""
     with tx(c):
@@ -316,7 +364,8 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
                                                "AND role='pending'", (shelf_id, package))]
             c.execute("DELETE FROM android_versions WHERE shelf_id=? AND package=? AND role='pending'",
                       (shelf_id, package))
-        elif (current := current_version(c, shelf_id, package)) is not None and v.version_code <= current["version_code"]:
+        elif (current := current_version(c, shelf_id, package)) is not None and (
+                keep_current or v.version_code <= current["version_code"]):
             role = "kept"
         else:
             role = "current"
@@ -332,17 +381,24 @@ def add_version(c, root: Path, shelf_id: int, package: str, v: NewApk, now: str)
     return role
 
 
-def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
+def accept_pending(c, root: Path, shelf_id: int, package: str, expected: tuple[int, str] | None = None) -> bool:
     """Принять pending: новая — current с ротацией, старая — kept; последняя версия и её ключ не понижаются.
     Каталог со случайным именем получает обычное <пакет>-<versionCode>: принятая версия скачивается по ссылкам полки.
     Переименование — последним шагом транзакции; не записалась строка — каталог возвращается на место."""
     renamed = None
     try:
         with tx(c):
-            p = c.execute("SELECT id, signer, version_code, dir FROM android_versions WHERE shelf_id=? AND package=? "
+            p = c.execute("SELECT * FROM android_versions WHERE shelf_id=? AND package=? "
                           "AND role='pending'", (shelf_id, package)).fetchone()
-            if p is None:
+            if p is None or expected is not None and expected != (p["id"], p["sha256"]):
                 return False
+            path = root / p["dir"] / apk_name(package, p["version_name"])
+            try:
+                intact = path.stat().st_size == p["size"] and sha256(path) == p["sha256"]
+            except OSError:
+                intact = False
+            if not intact:
+                raise PendingUnavailable
             current = current_version(c, shelf_id, package)
             role = "kept" if current is not None and p["version_code"] <= current["version_code"] else "current"
             old = []
@@ -354,7 +410,7 @@ def accept_pending(c, root: Path, shelf_id: int, package: str) -> bool:
                 name = version_dir(c, shelf_id, root, package, p["version_code"])
             c.execute("UPDATE android_versions SET role=?, dir=? WHERE id=?", (role, name, p["id"]))
             c.execute("DELETE FROM state WHERE key=?", (pending_mail_key(shelf_id, package),))
-            if name != p["dir"] and (root / p["dir"]).is_dir():
+            if name != p["dir"]:
                 (root / p["dir"]).replace(root / name)
                 renamed = (root / name, root / p["dir"])
     except BaseException:
@@ -442,13 +498,15 @@ def rejected_code(c, shelf_id: int, package: str, source: str, version_code: int
     return [source, version_code] in _rejected(c, shelf_id, package)["codes"]
 
 
-def reject_pending(c, root: Path, shelf_id: int, package: str, version_id: int) -> bool:
+def reject_pending(c, root: Path, shelf_id: int, package: str, version_id: int, digest: str | None = None) -> bool:
     """Удалить только выбранную pending; отказ относится к хэшу файла, а не версии или ключу. Версия источника
     запоминается, чтобы ночная проверка не качала тот же файл каждую ночь."""
+    if not 0 < version_id <= (1 << 63) - 1:
+        return False
     with tx(c):
         row = c.execute("SELECT dir, sha256, source, version_code FROM android_versions WHERE id=? AND shelf_id=? "
                         "AND package=? AND role='pending'", (version_id, shelf_id, package)).fetchone()
-        if row is None:
+        if row is None or digest is not None and row["sha256"] != digest:
             return False
         rejected = _rejected(c, shelf_id, package)
         hashes = set(rejected["sha256"]) | {row["sha256"]}

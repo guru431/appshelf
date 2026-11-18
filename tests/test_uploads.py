@@ -336,6 +336,21 @@ def test_pending_list_and_owner_cancel(web, conn, cfg, clock, acct):
     assert web.client.get(f"/android/uploads?person={member.user_id}").json()["uploads"] == []
 
 
+def test_resume_checks_participant_reserve_without_losing_parts(web, conn, clock, acct, monkeypatch):
+    monkeypatch.setattr(uploads, "USER_RESERVED", 10)
+    monkeypatch.setattr(uploads, "CHUNK_SIZE", 4)
+    first = web.client.post("/android/uploads", json=payload(b"abcdefgh")).json()
+    url = f"/android/uploads/{first['id']}"
+    assert post_part(web.client, url, acct.user_id, 0, b"abcd").status_code == 200
+    clock.advance(int(uploads.EMPTY_TTL.total_seconds()) + 1)
+    second = web.client.post("/android/uploads", json=payload(b"123456", client_id="b" * 32)).json()
+    assert post_part(web.client, url, acct.user_id, 1, b"efgh").status_code == 429
+    assert web.client.get(url, params={"person": acct.user_id}).json()["parts"] == {
+        "0": hashlib.sha256(b"abcd").hexdigest()}
+    assert web.client.post(f"/android/uploads/{second['id']}/cancel").status_code == 200
+    assert post_part(web.client, url, acct.user_id, 1, b"efgh").status_code == 200
+
+
 def test_cancel_by_client_id_without_session(web, conn, acct):
     raw = b"cancel me"
     item = web.client.post("/android/uploads", json=payload(raw)).json()

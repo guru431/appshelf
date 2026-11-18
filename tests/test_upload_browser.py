@@ -86,6 +86,42 @@ def browser_context(browser, server, width=390):
 
 
 @pytest.mark.integration
+def test_owner_sees_other_local_upload_and_its_latest_progress(upload_server, local_chromium):
+    playwright, executable = local_chromium
+    transfer = {"id": "a" * 32, "filename": "member.apk", "person": "Мария", "mine": False,
+                "received": 8192, "size": 40960, "updated_at": "2026-11-18T10:00:00+00:00"}
+    with playwright.sync_playwright() as pw:
+        browser = pw.chromium.launch(executable_path=executable, headless=True)
+        context = browser_context(browser, upload_server)
+        try:
+            page = context.new_page()
+            page.route("**/android/uploads?*", lambda route: route.fulfill(json={"uploads": [transfer]}))
+            page.goto(upload_server.base + "/android/add")
+            row = page.locator("[data-pending-list] .row")
+            playwright.expect(row).to_contain_text("10:00 UTC")
+            page.evaluate("""session => new Promise((resolve, reject) => {
+              const req = indexedDB.open('appshelf-apk-uploads', 1);
+              req.onerror = () => reject(req.error);
+              req.onsuccess = () => {
+                const tx = req.result.transaction('uploads', 'readwrite');
+                tx.objectStore('uploads').put({key: 'from-member', owner: 2, session, state: 'paused'});
+                tx.oncomplete = () => { req.result.close(); resolve(); };
+                tx.onerror = () => reject(tx.error);
+              };
+            })""", transfer["id"])
+            cancel = row.get_by_role("button", name="Отменить загрузку member.apk")
+            cancel.focus()
+            transfer.update(received=20480, updated_at="2026-11-18T10:02:00+00:00")
+            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            playwright.expect(row).to_contain_text("10:02 UTC")
+            playwright.expect(row).to_contain_text("20 КБ")
+            playwright.expect(cancel).to_be_focused()
+        finally:
+            context.close()
+            browser.close()
+
+
+@pytest.mark.integration
 @pytest.mark.timeout(45)
 @pytest.mark.parametrize("width,theme", [(320, "light"), (320, "dark"), (1280, "dark")])
 def test_resumable_browser_pause_reload_and_retry(upload_server, conn, tmp_path, local_chromium, width, theme):

@@ -77,6 +77,21 @@ def test_repeated_code_submit_gets_first_login(make_web, cfg, conn, acct, clock)
     assert "Срок шага истёк" in wb.client.post("/login/code", data={"code": "123456"}).text
 
 
+def test_completed_code_cannot_sign_in_after_logout_everywhere(make_web, cfg, conn, acct):
+    wb = make_web(cfg, conn)
+    tool = wb.tools.setdefault(1, FakeTool())
+    tool.errors["login"] = AuthCodeRequired("auth_code_required", "")
+    wb.client.post("/login", data={"email": "owner@example", "password": "example-password"})
+    before = dict(wb.client.cookies)
+    assert wb.client.post("/login/code", data={"code": "123456"}, follow_redirects=False).status_code == 303
+    assert wb.client.post(f"/logout-all/{acct.user_id}", follow_redirects=False).status_code == 303
+    wb.client.cookies.clear()
+    for name, value in before.items():
+        wb.client.cookies.set(name, value, domain=HOST)
+    r = wb.client.post("/login/code", data={"code": "123456"}, follow_redirects=False)
+    assert r.status_code == 400 and not wb.client.cookies.get(AUTH) and len(tool.calls) == 2
+
+
 def test_code_step_with_other_code_does_not_join_finished_login(make_web, cfg, conn, acct):
     # знающий пароль попал в окно шага 1 и получил тот же flow_id: без верного кода чужой вход ему не достаётся
     wb = make_web(cfg, conn)

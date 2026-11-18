@@ -132,6 +132,8 @@ class Catalog:
                     wait()  # отказ бюджета вызывающего (поиск) — не сбой каталога: его не запоминаем
                     try:
                         self._refresh()
+                        if self.clock() >= self._until:
+                            raise SourceError("срок действия каталога F-Droid истёк во время обновления")
                         self._error = None
                         return self._apps
                     except (FetchError, SourceError) as e:
@@ -177,12 +179,18 @@ class Catalog:
             apps = parse_v2(body)
         else:
             apps = _parse_v1(entry)
+        checked_at = self.wall_clock()
         try:
-            self._save_cache(apps, timestamp)
+            self._save_cache(apps, timestamp, checked_at)
         except (OSError, IpatoolError, ValueError, KeyError):
             raise SourceError("не удалось сохранить локальный кэш F-Droid; прежнее поколение сохранено") from None
         self._apps, self._timestamp = apps, timestamp
-        self._until, self.stale = self.clock() + TTL, False
+        self._until, self.stale = self._deadline(timestamp, checked_at), False
+
+    def _deadline(self, timestamp: int, checked_at: float) -> float:
+        now = self.wall_clock()
+        max_age_left = timestamp / 1000 + MAX_AGE - now
+        return self.clock() + max(0, min(TTL - max(0, now - checked_at), max_age_left))
 
     def _load_cache(self):
         try:
@@ -197,13 +205,11 @@ class Catalog:
                                 str(a.get("whats_new", "")), str(a.get("whats_new_version", "")))
                           for p, a in data["apps"].items()}
             self._timestamp = int(data["timestamp"])
-            age = max(0, self.wall_clock() - float(data["checked_at"]))
-            self._until = self.clock() + max(0, min(TTL - age,
-                self._timestamp / 1000 + MAX_AGE - self.wall_clock()))
+            self._until = self._deadline(self._timestamp, float(data["checked_at"]))
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             raise SourceError("локальный кэш F-Droid повреждён; восстановите его из доверенной копии") from None
 
-    def _save_cache(self, apps, timestamp):
+    def _save_cache(self, apps, timestamp, checked_at):
         if self.cache is None:
             return
         self.cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -213,7 +219,7 @@ class Catalog:
                 if int(saved["timestamp"]) > timestamp:
                     raise SourceError("откат версии каталога F-Droid")
             data = {"schema": 1, "repo": self.repo, "signer": self.signer, "timestamp": timestamp,
-                    "checked_at": self.wall_clock(), "apps": {p: asdict(a) for p, a in apps.items()}}
+                    "checked_at": checked_at, "apps": {p: asdict(a) for p, a in apps.items()}}
             fd, name = tempfile.mkstemp(dir=self.cache.parent, suffix=".partial")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as output:

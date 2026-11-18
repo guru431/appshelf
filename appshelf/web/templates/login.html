@@ -44,7 +44,8 @@
     <button>Продолжить</button>
   </form>
   {% if cfg.google_enabled and not add %}
-  <p><a class="btn secondary" style="width: 100%; min-height: 50px; margin-top: 10px" href="/google/start?{{ {'next': next} | urlencode }}">Войти через Google</a></p>
+  {% set google_params = {'next': next, 'add': 1, 'person': google_retry} if google_retry is not none else {'next': next} %}
+  <p><a class="btn secondary" style="width: 100%; min-height: 50px; margin-top: 10px" href="/google/start?{{ google_params | urlencode }}">{{ 'Добавить Google' if google_retry is not none else 'Войти через Google' }}</a></p>
   {% endif %}
   {% endif %}
   </div>

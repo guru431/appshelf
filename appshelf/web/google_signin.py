@@ -36,7 +36,7 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
         return PlainTextResponse("not found", status_code=404)
 
     @app.get("/google/start")
-    def start(request: Request, next: str = "/", add: int = 0):
+    def start(request: Request, next: str = "/", add: int = 0, person: int | None = None):
         """Поток — в cookie, браузер — на страницу Google. add=1 — «Добавить Google» из панели: маршрут открыт без
         входа, вошедших ищем сами; никого нет или Sec-Fetch-Site не подтверждает свою навигацию —
         обычный вход: иначе чужая страница заводила бы участников от имени вошедшего."""
@@ -45,7 +45,10 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
         add_uid = None
         if add and request.headers.get("sec-fetch-site") in ("same-origin", "none"):
             found = w.person(request)
-            add_uid = found[4].id if found is not None else None
+            if found is not None:
+                add_uid = found[4].id if person is None else person if any(u.id == person for u in found[0]) else None
+            if person is not None and add_uid is None:
+                return login_page(w, request, error=SIGNED_OUT, status_code=403, next_=next)
         flow = google.new_flow(safe_next(next) if len(next) <= MAX_NEXT else "/", add_uid, w.epoch())
         resp = RedirectResponse(google.auth_url(cfg.google_client_id, redirect_uri, flow), status_code=303)
         w.set_cookie(resp, google.COOKIE, google.flow_cookie(w.key, flow), google.FLOW_TTL)
@@ -81,13 +84,14 @@ def register_routes(app: FastAPI, w: WebCtx, http) -> None:
         flow = google.read_flow(w.key, w.cookie(request, google.COOKIE), w.epoch())
 
         def refuse(text: str, status_code: int):
-            resp = login_page(w, request, error=text, status_code=status_code, next_=flow.next if flow else "/")
+            resp = login_page(w, request, error=text, status_code=status_code, next_=flow.next,
+                              google_retry=flow.add_uid)
             w.delete_cookie(resp, google.COOKIE)
             return resp
 
         # ответ Google в чужом браузере, повтор, подмена state — потока нет или он не тот: к Google не идём
         if flow is None or not hmac.compare_digest(state.encode(), flow.state.encode()):
-            return refuse(EXPIRED, 400)
+            return login_page(w, request, error=EXPIRED, status_code=400)
         if error or not code:
             return refuse(CANCELLED if error == "access_denied" else NO_ANSWER, 400)
         try:

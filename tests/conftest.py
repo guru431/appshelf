@@ -1,5 +1,6 @@
+import shutil
 import sqlite3
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -96,10 +97,22 @@ def cfg(tmp_path) -> Config:
 
 
 @pytest.fixture
-def conn(cfg):
+def conn(cfg, request):
+    if request.node.get_closest_marker("integration") is None and not cfg.db.exists():
+        cfg.db.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(request.getfixturevalue("empty_db_template"), cfg.db)
     c = store.connect(cfg.db)
     yield c
     c.close()
+
+
+@pytest.fixture(scope="session")
+def empty_db_template(tmp_path_factory):
+    """Each fast test opens its own DB. The worker initializes the common empty schema once."""
+    path = tmp_path_factory.getbasetemp() / "empty.sqlite"
+    with closing(store.connect(path)) as c:
+        c.execute("PRAGMA journal_mode=DELETE")
+    return path
 
 
 @pytest.fixture

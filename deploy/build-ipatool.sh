@@ -32,13 +32,23 @@ trap '"${BUILD[@]}" "sudo -n rm -rf -- $W" || true' EXIT
 "${BUILD[@]}" "sudo -n bash $W/deploy/build-ipatool-docker.sh"
 
 "${BUILD[@]}" "tar -C $W -cf - bin" | "${SSH[@]}" '
-  set -e
+  sudo flock -n -E 75 /run/appshelf-deploy.lock bash -c '"'"'
+  set -euo pipefail
+  export LC_COLLATE=C
+  shopt -s nullglob
   R=/var/_sh/appshelf; T="$R/bin/.incoming"; C="$R/bin/ipatool-auth-cache"; S="$R/bin/.ipatool-auth-cache"
   sudo rm -rf "$T" "$S" "$R/bin/.ipatool-auth-preparing"   # последнее — копия helper от прежних сборок
   # 0711: appshelf исполняет проверяемые копии, но не видит распакованного архива
   sudo install -d -o root -g root -m 0711 "$T"
   trap "sudo rm -rf $T $S" EXIT
   sudo tar --no-same-owner -xf - -C "$T"
+  want=$(cat "$R/ipatool/UPSTREAM" "$R"/ipatool/patches/*.patch | sha256sum)
+  want_auth=$(cat "$R/ipatool/auth/UPSTREAM" "$R"/ipatool/auth/*.go | sha256sum)
+  if [ "${want%% *}" != "$(cat "$T/bin/ipatool.src-sha256")" ] ||
+     [ "${want_auth%% *}" != "$(cat "$T/bin/ipatool-auth.src-sha256")" ]; then
+    echo "ОШИБКА: исходники на сервере сменились во время сборки — запустите сборку заново" >&2
+    exit 1
+  fi
   # root: appshelf бинарник только исполняет — подменённый ipatool перехватывал бы пароли Apple ID
   sudo install -o root -g root -m 0755 "$T/bin/ipatool" "$T/ipatool"
   sudo install -o root -g root -m 0755 "$T/bin/ipatool-auth" "$T/ipatool-auth"
@@ -71,4 +81,9 @@ trap '"${BUILD[@]}" "sudo -n rm -rf -- $W" || true' EXIT
   sudo install -o root -g root -m 0644 "$T/bin/ipatool.src-sha256" "$R/bin/ipatool.src-sha256"
   sudo mv -f "$T/ipatool-auth" "$R/bin/ipatool-auth"
   sudo install -o root -g root -m 0644 "$T/bin/ipatool-auth.src-sha256" "$R/bin/ipatool-auth.src-sha256"
-  echo "OK: $R/bin/ipatool"'
+  echo "OK: $R/bin/ipatool"
+  '"'"'' || {
+  rc=$?
+  if [ "$rc" -eq 75 ]; then echo "appshelf: на сервере уже идёт выкладка или установка ipatool" >&2; fi
+  exit "$rc"
+}

@@ -44,8 +44,8 @@
 <div class="card list">
 {% for l in links %}
 <div class="row">
-  <div class="body"><div class="title">«{{ l.gone.name }}» → «{{ l.keep.name }}»</div><div class="meta">Google-аккаунты и Android-полка перейдут к «{{ l.keep.name }}»</div></div>
-  <div class="act"><a class="btn sm tint" href="/apple/link?a={{ l.keep.id }}&amp;b={{ l.gone.id }}">Связать</a></div>
+  <div class="body"><div class="title">{{ l.gone_label }} → {{ l.keep_label }}</div><div class="meta">Google-аккаунты и Android-полка перейдут к {{ l.keep_label }}</div></div>
+  <div class="act"><a class="btn sm tint" href="/apple/link?a={{ l.keep }}&amp;b={{ l.gone }}">Связать</a></div>
 </div>
 {% endfor %}
 </div>

@@ -21,7 +21,7 @@ The web UI is in Russian.
   `apps.apple.com/…/id…` link or ID.
 - A catalog of ~480 apps removed from the App Store (banks and their clones, VK, Mail.ru and more):
   appshelf checks which of them your Apple ID holds a license for.
-- iPhone catalog with an "Install" button (from a computer — a QR code next to it); the current and the previous
+- iPhone catalog with an "Install" button and a desktop QR code for each saved version. The current and the previous
   version are kept, and one of them can be pinned to survive later updates. iOS does not install over an installed
   app — offload it first (see "Updating an installed app"). Installing works only from Safari: opened in Chrome,
   Firefox, Edge, Opera or Yandex Browser for iOS, the catalog and sign-in offer to copy the address.
@@ -578,7 +578,8 @@ hints, search and filters; guests cannot manage the shelf.
 - **From my shelf** — "Сравнить и добавить в публичную" lets the owner select an app already downloaded on their personal
   Android shelf; it is in the app's "⋯" menu, including on eligible personal cards. It copies
   accepted saved APKs without downloading them again. A comparison shows versions, content hashes, pins and possible
-  signature decisions before confirmation; repeat copying adds missing builds while preserving the public update
+  signature decisions. Select the builds to copy and review their total size. If the versions change before copying
+  starts, the server asks for a new confirmation. Repeat copying adds missing builds while preserving the public update
   source. Pending and paid builds are excluded. The public shelf has the same retention policy; personal pins are
   not inherited. Deleting the personal copy leaves the public copy intact. New personal downloads are never
   automatically published. Guests and people pick an older version in the card's "Версия" (Version) list; download
@@ -593,7 +594,8 @@ hints, search and filters; guests cannot manage the shelf.
   PIN): a phone camera opens it in the browser rather than in a messenger's in-app browser, whose guest cookie never
   reaches Chrome. The database keeps only a salt and a hash (PBKDF2-SHA256, 200,000 iterations), the
   PIN itself is stored nowhere. After a right PIN the guest's browser remembers the shelf for 90 days (a cookie
-  signed with `cookie-key`).
+  signed with `cookie-key`). "Забыть доступ на этом устройстве" (Forget access on this device) clears access in
+  this browser. Guests must enter the PIN when they next open the shelf.
 - **Changing the PIN** invalidates all guest cookies and gives the public shelf a new directory token: APK links
   shared before stop working. While a download runs, the PIN is not changed — "try again in a minute".
 - **Brute force.** 20 wrong PINs from one address in an hour close that address for an hour (IPv6 — by its /64).
@@ -705,8 +707,16 @@ taken from a database of any schema version, including one newer than the code a
 on a share are set by the mount: the snapshot is open to the same users as the archive (Apple ID addresses and names
 are in the IPAs themselves too).
 
-A file restore set is a database snapshot and an IPA/APK archive copy. Checking that pair confirms file consistency;
-sign-ins and automatic updates need a separate check.
+A file restore set is a database snapshot and an IPA/APK archive copy. Checking that pair confirms file consistency.
+Sign-ins and automatic updates need a separate check.
+
+`appshelf restore-set --out /backup/appshelf/2026-11-18` prepares both components. Use a new directory in private
+storage outside the served archive. The command moves `appshelf.db` and `pub/` into that directory after checking
+the snapshot, SHA-256 hashes and archive consistency. Retry with the same path after a failure. The command keeps
+its working copy in the sibling directory `.<name>.appshelf-partial` and reuses files that match.
+Keep `appshelf.env` and `cookie-key` separately.
+
+You can also perform these steps manually.
 
 1. Database snapshot — with the command, not a file copy while running (WAL): consistent, a single file, mode 0600.
    The directory must be new or empty:

@@ -183,6 +183,23 @@ def test_catalog_rollback_and_failed_replace_preserve_generation(tmp_path, monke
     assert list(tmp_path.glob("*.partial")) == []
 
 
+def test_live_and_disk_cache_expire_at_signed_index_deadline(tmp_path):
+    wall = [1800000000 + index.MAX_AGE - 30]
+    clock = [100]
+    http = FakeHttp(raw={ARCHIVE + "entry.jar": (200, {}, catalog([build(2, "new")]))})
+    kwargs = {"archive": True, "cache_dir": tmp_path, "wall_clock": lambda: wall[0], "clock": lambda: clock[0]}
+    live = index.Catalog(http, **kwargs)
+    disk = index.Catalog(http, **kwargs)
+    assert live.info(PKG)[1].code == disk.info(PKG)[1].code == 2
+    http.raw[ARCHIVE + "entry.jar"] = net.FetchError("offline")
+    wall[0] += 31
+    clock[0] += 31
+    for cached in (live, disk):
+        assert cached.search("telegram")[0].package == PKG and cached.stale
+        with pytest.raises(net.FetchError, match="offline"):
+            cached.info(PKG)
+
+
 def test_failed_refresh_is_not_repeated_until_retry(tmp_path, monkeypatch):
     """Каталог не прошёл проверку: следующие приложения и поиски не качают его заново до RETRY."""
     checked = []

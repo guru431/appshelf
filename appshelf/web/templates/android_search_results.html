@@ -7,17 +7,20 @@
     <div class="body"><b>{{ s.name }}</b><div class="meta">{% if s.source == 'fourpda' %}4PDA · Тема форума{% else %}{{ sources[s.source] }} · {{ s.version }}<br>{{ s.package or s.ref }}{% if s.related_package %}<br>Вариант автора для {{ s.related_package }}; пакет APK может отличаться{% endif %}{% endif %}</div></div>
     <div class="act">
       {%- if s.source == 'fourpda' %}<a class="btn sm tint" href="{{ post_url('/android/4pda/topic') }}&amp;{{ {'url':s.ref} | urlencode }}">Выбрать APK</a>
-      {%- elif s.package in on_shelf %}<span class="tag">на полке</span>
+      {%- elif s.package in on_shelf and not s.builds %}<span class="tag">на полке</span>
       {%- elif s.reason %}<span class="tag">{{ s.reason }}</span>
       {%- else %}<form method="post" action="{{ post_url(prefix ~ '/add/source') }}" class="source-choice">
         <input type="hidden" name="source" value="{{ s.source }}"><input type="hidden" name="package" value="{{ s.package }}"><input type="hidden" name="name" value="{{ s.name }}"><input type="hidden" name="account" value="{{ s.account }}">
-        {% if s.builds %}<select name="ref" data-fdroid-builds aria-label="Версия {{ s.name }} · {{ sources[s.source] }}">
-        <option value="{{ s.ref }}">Рекомендуемая · {{ s.version }} · автообновления</option>
-        {% for b in s.builds %}<option value="{{ s.package }}@{{ b.code }}" data-min="{{ b.min_sdk }}" data-target="{{ b.target_sdk }}" data-abis="{{ b.abis | join(',') }}">{{ b.name }} ({{ b.code }}) · {{ b.abis | join(', ') or 'универсальная' }}</option>{% endfor %}</select><span class="meta" data-build-hint></span>
+        {% if s.builds %}{% set available = s.builds | rejectattr('sha256', 'in', saved_hashes | default([])) | list %}
+        {% if s.package in on_shelf %}<span class="tag">на полке</span>{% endif %}
+        <select name="ref" data-fdroid-builds{{ ' data-history' if s.package in on_shelf }} aria-label="Версия {{ s.name }} · {{ sources[s.source] }}">
+        {% if s.package not in on_shelf %}<option value="{{ s.ref }}">Рекомендуемая · {{ s.version }} · автообновления</option>{% endif %}
+        {% for b in s.builds %}{% set saved = b.sha256 in (saved_hashes | default([])) %}
+        <option value="{{ s.package }}@{{ b.code }}" data-min="{{ b.min_sdk }}" data-target="{{ b.target_sdk }}" data-abis="{{ b.abis | join(',') }}"{{ ' disabled' if saved }}>{{ b.name }} ({{ b.code }}) · {{ b.abis | join(', ') or 'универсальная' }}{{ ' · уже сохранена' if saved }}</option>{% endfor %}</select><span class="meta" data-build-hint></span>
         {% elif s.versions %}<select name="ref" aria-label="Версия {{ s.name }} · {{ sources[s.source] }}"><option value="{{ s.ref }}">Рекомендуемая · {{ s.version }}</option>{% for version, ref in s.versions %}<option value="{{ ref }}">{{ version }} · сохранить эту версию</option>{% endfor %}</select>
         {% else %}<input type="hidden" name="ref" value="{{ s.ref }}">{% endif %}
         {% if s.source == 'apkpure' %}<label><input type="checkbox" name="ack" value="1"> Понимаю риск APKPure: если пакета нет в RuStore, подпись не с чем сверить</label>{% endif %}
-        <button class="sm tint">Добавить · {{ sources[s.source] }}</button></form>{% endif %}
+        <button class="sm tint"{{ ' disabled' if s.builds and s.package in on_shelf and not available }}>Добавить · {{ sources[s.source] }}</button></form>{% endif %}
     </div>
   </div>
   {%- endfor %}

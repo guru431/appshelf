@@ -1,5 +1,6 @@
 """Shelf mutations retain the page target when another tab changes the cookie."""
 import html
+import hashlib
 import json
 import re
 
@@ -25,8 +26,12 @@ def android_app(conn, cfg, clock, uid):
     db.put_app(conn, shelf.id, PKG, "Shared app", "link", "https://example.org/app.apk", clock.iso())
     root = fetch.shelf_root(cfg, shelf)
     for code, signer in ((1, "a" * 64), (2, "b" * 64)):
+        raw = str(code).encode() * 10
+        folder = root / f"{PKG}-{code}"
+        folder.mkdir(parents=True)
+        (folder / db.apk_name(PKG, str(code))).write_bytes(raw)
         db.add_version(conn, root, shelf.id, PKG, db.NewApk(str(code), code, 24, 35, "", signer,
-                       "link", 10, str(code) * 64, f"{PKG}-{code}", True), clock.iso())
+                       "link", len(raw), hashlib.sha256(raw).hexdigest(), folder.name, True), clock.iso())
     return shelf
 
 
@@ -57,7 +62,8 @@ def test_old_android_tab_keeps_target_for_all_mutations(web, conn, cfg, clock, a
     pending = db.list_apps(conn, mine.id)[0].pending
     web.client.get(f"/who/{other.user_id}", follow_redirects=False)
     response = web.client.request("POST", action, follow_redirects=False,
-                                  data={"source": "fdroid", "version_id": pending["id"], "confirm": "1"})
+                                  data={"source": "fdroid", "version_id": pending["id"],
+                                        "digest": pending["sha256"], "confirm": "1"})
     assert response.status_code == 303
     original = db.get_app(conn, mine.id, PKG)
     untouched = db.list_apps(conn, theirs.id)[0]
@@ -65,7 +71,9 @@ def test_old_android_tab_keeps_target_for_all_mutations(web, conn, cfg, clock, a
     if operation == "remove":
         assert original is None
     elif operation == "source":
-        assert original["source"] == "fdroid"
+        queued = db.take_job(conn)
+        assert original["source"] == "link" and queued["shelf_id"] == mine.id
+        assert json.loads(queued["payload"])["source_change"]["source"] == "fdroid"
     elif operation == "accept-signer":
         assert db.current_version(conn, mine.id, PKG)["version_code"] == 2
     else:
@@ -107,7 +115,9 @@ def test_old_copy_to_public_keeps_explicit_owner_source(web, conn, cfg, clock, a
     assert f"person={acct.user_id}" in next(h for h in re.findall(r'<a[^>]*href="([^"]+)"',
                                                                   web.client.get('/android/public/add').text)
                                           if '/android/public/add/from-shelf' in h)
-    response = web.client.request("POST", action, data={"package": PKG, 'snapshot': preview.context['plan']['snapshot']},
+    plan = preview.context["plan"]
+    response = web.client.request("POST", action, data={"package": PKG, "snapshot": plan["snapshot"],
+                                                       "digest": [r["v"]["sha256"] for r in plan["rows"] if r["add"]]},
                                    follow_redirects=False)
     assert response.status_code == 303
     public = db.public_shelf(conn)
@@ -130,8 +140,9 @@ def test_pending_accept_requires_confirmation_and_exact_version(web, conn, cfg, 
     endpoint = f"/android/apps/{PKG}/accept-signer?person={acct.user_id}"
     response = web.client.request("POST", endpoint, data={"version_id": pending["id"]})
     assert response.status_code == 400 and "Подтвердите" in response.text
-    assert web.client.request("POST", endpoint, data={"version_id": pending["id"] + 1}).status_code == 404
-    assert web.client.request("POST", endpoint, data={"version_id": pending["id"] + 1, "confirm": "1"}).status_code == 404
+    assert web.client.request("POST", endpoint, data={"version_id": pending["id"] + 1, "confirm": "1"}).status_code == 409
+    assert web.client.request("POST", endpoint, data={"version_id": pending["id"], "digest": "0" * 64,
+                                                       "confirm": "1"}).status_code == 409
     assert db.current_version(conn, shelf.id, PKG)["version_code"] == 1
     assert db.list_apps(conn, shelf.id)[0].pending["id"] == pending["id"]
 

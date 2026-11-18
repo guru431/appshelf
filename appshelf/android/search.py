@@ -57,6 +57,7 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     direct_repo = github.parse_ref(query)
     repo_source = "github"
     direct_topic = ""
+    direct_gallery = ""
     if query.startswith(fourpda.BASE + "/"):
         try:
             direct_topic = fourpda.topic_url(query)
@@ -65,7 +66,9 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
     if query.startswith("https://"):
         try:
             kind, ref = links.parse(query)
-            if kind in ("rustore", "play", "appgallery", "apkpure", *fdroid_index.REPOSITORIES):
+            if kind == "appgallery" and links.APPGALLERY_ID_RE.fullmatch(ref):
+                direct_gallery = ref
+            elif kind in ("rustore", "play", "appgallery", "apkpure", *fdroid_index.REPOSITORIES):
                 exact = fdroid_index.split_ref(ref)[0] if kind in fdroid_index.REPOSITORIES else ref
                 query = exact
             elif kind in forge.SOURCES:
@@ -97,7 +100,7 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         src._wait()
         return fn()
 
-    def run(source, detail, fn, *, missing=""):
+    def run(source, detail, fn, *, missing="", report_missing=False):
         # Первый yield обязательно до сетевого запроса: браузер уже видит, чего ждёт.
         yield Update("status", source, "running", detail)
         try:
@@ -105,7 +108,7 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         except (FetchError, SourceError) as exc:
             absent = (isinstance(exc, (play.PlayGone, StatusError)) and getattr(exc, "status", 404) == 404
                       or isinstance(exc, SourceError) and str(exc).startswith(("нет в ", "AppGallery не нашёл")))
-            if absent:
+            if absent and not report_missing:
                 yield Update("status", source, "done", "не найдено")
             else:
                 message = str(exc)
@@ -150,6 +153,16 @@ def events(src, query: str, *, accounts=(), split_packages=(), user_id=None):
         yield from forum()
         yield Update("done", result=snapshot())
         return
+
+    if direct_gallery:
+        package = yield from run("appgallery", f"карточка {direct_gallery} — {DOMAINS['appgallery']}",
+                                 lambda: request(lambda: appgallery.package_of(src.http, direct_gallery)),
+                                 report_missing=True)
+        if not package:
+            yield Update("done", result=snapshot())
+            return
+        exact = query = package
+        candidates[package] = package
 
     found = yield from run("rustore", "поиск — backapi.rustore.ru", lambda: request(
         lambda: [rustore.info(src.http, exact)] if exact else rustore.search(src.http, query)))

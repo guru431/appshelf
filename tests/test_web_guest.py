@@ -16,6 +16,21 @@ URL = "https://bank.example/app.apk"
 PIN = "482913"
 
 
+def test_forget_guest_access_on_one_browser_and_skip_catalog_for_pin(anon, make_web, cfg, conn, shelf, monkeypatch):
+    second = make_web(cfg, conn)
+    enter(anon.client, PIN)
+    enter(second.client, PIN)
+    assert "Забыть доступ на этом устройстве" in anon.client.get("/p").text
+    assert anon.client.post("/p/forget", follow_redirects=False).status_code == 303
+    assert anon.client.cookies.get(GUEST) is None and second.client.cookies.get(GUEST)
+
+    def unexpected(*args):
+        pytest.fail("PIN form should not query application versions")
+    monkeypatch.setattr(db, "list_apps", unexpected)
+    assert 'name="pin"' in anon.client.get("/p").text
+    assert anon.client.post("/p", data={"pin": "000000"}).status_code == 401
+
+
 def test_public_qr_decodes_to_current_apk_link(web, anon, cfg, conn, shelf, tmp_path):
     link = fetch.app_url(cfg, shelf, PKG)
     qr_path = link + "/qr.png"
@@ -180,7 +195,8 @@ def test_guest_right_pin_lists_apps_without_actions(shelf, anon):
     assert "samesite=lax" in cookie and f"max-age={pin.GUEST_DAYS * 86400}" in cookie
     page = anon.client.get("/p").text
     assert "Банк" in page and "Скачать APK" in page and f"/d/{shelf.shelf}/{PKG}-1/{PKG}-1.0.apk" in page
-    assert '<form method="post"' not in page and "Действия" not in page and "/admin" not in page and "/android" not in page
+    assert re.findall(r'<form method="post" action="([^"]+)"', page) == ["/p/forget"]
+    assert "Действия" not in page and "/admin" not in page and "/android" not in page
     assert "Установка неизвестных приложений" in page                          # подсказки по установке
 
 

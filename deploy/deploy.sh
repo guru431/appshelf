@@ -23,7 +23,8 @@ if [[ ! "$GROUP" =~ ^[A-Za-z_][A-Za-z0-9._-]*$ ]]; then
   exit 1
 fi
 git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
-  set -e
+  sudo flock -n -E 75 /run/appshelf-deploy.lock bash -c '"'"'
+  set -euo pipefail
   R=/var/_sh/appshelf
   # каталог кода — root: будь он у appshelf, тот подменил бы .incoming между распаковкой и запуском от root
   sudo chown root:root "$R"
@@ -31,4 +32,9 @@ git -C "$D" archive --format=tar.gz HEAD "${PARTS[@]}" | "${SSH[@]}" '
   sudo rm -rf "$R/.incoming"
   sudo install -d -o root -g root -m 0700 "$R/.incoming"
   sudo tar -xzf - -C "$R/.incoming"
-  sudo bash "$R/.incoming/deploy/install.sh" '"$GROUP"
+  bash "$R/.incoming/deploy/install.sh" "$1"
+  '"'"' bash '"$GROUP" || {
+  rc=$?
+  if [ "$rc" -eq 75 ]; then echo "appshelf: на сервере уже идёт выкладка или установка ipatool" >&2; fi
+  exit "$rc"
+}

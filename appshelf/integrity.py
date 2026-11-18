@@ -14,14 +14,15 @@ import plistlib
 import re
 import shutil
 import sqlite3
+import tempfile
 from collections import Counter, defaultdict
 from contextlib import closing, suppress
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timezone
 from importlib.metadata import version as package_version
 from pathlib import Path
 
-from . import ipa, jobs, people, store, webauth
+from . import apk, ipa, jobs, people, store, webauth
 from .android import db as android_db, fetch as android_fetch
 from .config import TOKEN_RE, Config
 
@@ -127,16 +128,16 @@ def open_ro(path: Path, any_schema: bool = False) -> sqlite3.Connection:
     """База только на чтение (URI mode=ro): ни перехода схемы, ни записи в WAL. Схема — ровно этой версии appshelf;
     any_schema — любой (снимку не нужно её читать: после отката кода база бывает новее)."""
     if not path.is_file():
-        raise DbError(f"базы {path} нет")
+        raise DbError("файл базы не найден")
     c = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
     c.row_factory = sqlite3.Row
     try:
         version = c.execute("PRAGMA user_version").fetchone()[0]
         if version != store.SCHEMA_VERSION and not any_schema:
-            raise DbError(f"{path}: схема версии {version}, а этой версии appshelf нужна {store.SCHEMA_VERSION}")
-    except sqlite3.DatabaseError as e:
+            raise DbError(f"схема версии {version}, а этой версии appshelf нужна {store.SCHEMA_VERSION}")
+    except sqlite3.DatabaseError:
         c.close()
-        raise DbError(f"{path}: не база SQLite ({e})") from e
+        raise DbError("не удалось прочитать заголовок базы SQLite") from None
     except BaseException:
         c.close()
         raise
@@ -161,7 +162,10 @@ def check(cfg: Config, c, deep: bool = False, homes: bool = False) -> Report:
         if acct.shelf_next:
             owned.add(acct.shelf_next)
             rep.add("shelf_next", acct.id)
-        _shelf(cfg, acct, rows.pop(acct.id, []), deep, rep)
+        try:
+            _shelf(cfg, acct, rows.pop(acct.id, []), deep, rep)
+        except OSError:
+            raise jobs.ArchiveUnavailable(f"не удалось прочитать архив Apple ID №{acct.id}") from None
     for aid, vs in rows.items():
         rep.add("no_account", aid, detail=f"строк: {len(vs)}")
     apks = defaultdict(list)
@@ -174,7 +178,10 @@ def check(cfg: Config, c, deep: bool = False, homes: bool = False) -> Report:
         if shelf.shelf_next:
             owned.add(shelf.shelf_next)
             rep.add("shelf_next", None, shelf=shelf.id)
-        _android_shelf(cfg, shelf, apks.pop(shelf.id, []), deep, rep)
+        try:
+            _android_shelf(cfg, shelf, apks.pop(shelf.id, []), deep, rep)
+        except OSError:
+            raise jobs.ArchiveUnavailable(f"не удалось прочитать архив Android-полки №{shelf.id}") from None
     for sid, versions in apks.items():
         rep.add("no_android_shelf", None, detail=f"строк: {len(versions)}", shelf=sid)
     for p in sorted(cfg.archive.iterdir()):
@@ -268,8 +275,9 @@ def _manifest(cfg: Config, acct, vd: Path, v, rep: Report) -> str | None:
     if not m.is_file():
         rep.add("no_manifest", aid, path)
         return None
+    raw = m.read_bytes()
     try:
-        item = plistlib.loads(m.read_bytes())["items"][0]
+        item = plistlib.loads(raw)["items"][0]
         urls = {a["kind"]: a["url"] for a in item["assets"]}
         bundle, version = str(item["metadata"]["bundle-identifier"]), str(item["metadata"]["bundle-version"])
     except Exception as e:  # битый plist или не та структура
@@ -394,6 +402,111 @@ def daily_backup(db: Path, dest: Path, work: Path, day: str, keep: int) -> Path:
     return final
 
 
+def _restore_inventory(cfg: Config, c) -> dict[Path, str]:
+    accounts = {a.id: a for a in people.all_accounts(c)}
+    shelves = {s.id: s for s in android_db.all_shelves(c)}
+    if any(a.shelf_next for a in accounts.values()) or any(s.shelf_next for s in shelves.values()):
+        raise BackupError("переносится каталог полки — повторите после переноса")
+    files = {}
+    for v in c.execute("SELECT * FROM versions"):
+        acct = accounts.get(v["account_id"])
+        if (acct is None or not TOKEN_RE.fullmatch(cfg.shelf_token(acct))
+                or not store.DIR_RE.fullmatch(v["dir"])):
+            raise BackupError("некорректная запись IPA в базе — сначала выполните appshelf check")
+        folder = Path(cfg.shelf_token(acct)) / v["dir"]
+        files.update({folder / "app.ipa": v["sha256"], folder / "icon.png": "", folder / "manifest.plist": ""})
+    for v in c.execute("SELECT * FROM android_versions"):
+        shelf = shelves.get(v["shelf_id"])
+        if (shelf is None or not TOKEN_RE.fullmatch(shelf.shelf)
+                or not android_db.ANDROID_DIR_RE.fullmatch(v["dir"]) or not apk.PACKAGE_RE.fullmatch(v["package"])):
+            raise BackupError("некорректная запись APK в базе — сначала выполните appshelf check")
+        folder = Path(shelf.shelf) / v["dir"]
+        files.update({folder / android_fetch.apk_name(v["package"], v["version_name"]): v["sha256"],
+                      folder / "icon.png": ""})
+    return files
+
+
+def _clean_restore_archive(root: Path, files: dict[Path, str]) -> None:
+    """Remove obsolete files from this command's private staging archive before reuse."""
+    dirs = {root / parent for file in files for parent in file.parents}
+    paths = {root / file for file in files}
+
+    def prune(folder: Path) -> None:
+        for entry in folder.iterdir():
+            if entry.resolve() != entry:
+                raise BackupError("в рабочем каталоге набора обнаружена ссылка")
+            if entry.is_dir():
+                prune(entry)
+                if entry not in dirs:
+                    entry.rmdir()
+            elif entry not in paths:
+                entry.unlink()
+    prune(root)
+
+
+def prepare_restore(cfg: Config, out: Path) -> Path:
+    """Copy the snapshot's archive files and atomically publish a verified, resumable recovery set."""
+    out = out.parent.resolve() / out.name
+    stage = out.with_name(f".{out.name}.appshelf-partial")
+    outside_archive(cfg, out)
+    outside_archive(cfg, stage)
+    cfg.tmp_dir.mkdir(parents=True, exist_ok=True)
+    with jobs.hold(cfg.locks_dir / "restore-set.lock"), tempfile.TemporaryDirectory(dir=cfg.tmp_dir) as tmp:
+        if out.exists() or out.is_symlink():
+            raise BackupError("для набора нужен новый каталог назначения")
+        marker = stage / ".appshelf-restore"
+        if not stage.exists() and not stage.is_symlink():
+            stage.mkdir(mode=0o700)
+            marker.touch(mode=0o600, exist_ok=False)
+        if (not stage.is_dir() or stage.resolve() != stage or marker.is_symlink() or not marker.is_file()
+                or os.name != "nt" and (stage.stat().st_uid != os.geteuid() or stage.stat().st_mode & 0o077)):
+            raise BackupError("нужен закрытый рабочий каталог, созданный командой restore-set")
+        archive = stage / "pub"
+        archive.mkdir(exist_ok=True)
+        if archive.resolve() != archive:
+            raise BackupError("в рабочем каталоге набора обнаружена ссылка")
+        snapshot = backup(cfg.db, Path(tmp))
+        with closing(open_ro(snapshot)) as c:
+            files = _restore_inventory(cfg, c)
+        _clean_restore_archive(archive, files)
+        source = jobs._archive(cfg).resolve()
+        part = stage / ".file.partial"
+        if part.is_symlink() or (part.exists() and not part.is_file()):
+            raise BackupError("в рабочем каталоге набора обнаружен посторонний объект")
+        part.unlink(missing_ok=True)
+        try:
+            for relative, digest in files.items():
+                src, target = source / relative, archive / relative
+                if not src.is_file() or src.resolve() != src:
+                    raise BackupError("файл архива недоступен или изменился — повторите подготовку")
+                expected = digest or ipa.sha256(src)
+                if target.is_file() and ipa.sha256(target) == expected:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, part)
+                if ipa.sha256(part) != expected:
+                    raise BackupError("содержимое архива изменилось или повреждено — повторите подготовку")
+                os.replace(part, target)
+            with closing(open_ro(snapshot)) as c:
+                report = check(replace(cfg, pub_dir=archive), c, deep=True)
+            if not report.ok:
+                raise BackupError(f"набор не прошёл проверку архива ({len(report.problems)} замечаний)")
+            with closing(open_ro(cfg.db)) as live:
+                live.execute("BEGIN")
+                if _restore_inventory(cfg, live) != files:
+                    raise BackupError("архив изменился во время копирования — повторите подготовку")
+            shutil.copyfile(snapshot, part)
+            if ipa.sha256(part) != ipa.sha256(snapshot):
+                raise BackupError("копия снимка базы не совпала с проверенным файлом")
+            part.chmod(0o600)
+            os.replace(part, stage / "appshelf.db")
+        finally:
+            part.unlink(missing_ok=True)
+        os.rename(stage, out)
+        (out / marker.name).unlink()
+    return out
+
+
 def builds(cfg: Config, today: date) -> list[str]:
     """Собраны ли bin/ipatool и bin/ipatool-auth из выложенных исходников и когда — для appshelf check, на его код
     возврата не влияет. Отпечаток — как в deploy/install.sh: SHA-256 подряд UPSTREAM и патчей (у ipatool-auth —
@@ -412,6 +525,10 @@ def builds(cfg: Config, today: date) -> list[str]:
         except FileNotFoundError:  # исходников этой сборки в выложенном коде нет — сверять не с чем
             continue
         stamp = bin_dir / f"{name}.src-sha256"
+        executable = cfg.ipatool_bin if name == "ipatool" else bin_dir / name
+        if not executable.is_file() or not os.access(executable, os.X_OK):
+            lines.append(f"{name}: исполняемый файл отсутствует или недоступен — пересоберите")
+            continue
         try:
             built = datetime.fromtimestamp(stamp.stat().st_mtime, timezone.utc).date()
             same = stamp.read_text(encoding="ascii", errors="replace").strip() == h.hexdigest()

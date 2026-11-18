@@ -12,7 +12,7 @@ from apk_factory import make_apk, png_bytes
 from android_fakes import FakeHttp
 from appshelf.android.sources import Sources
 from test_web_android import work
-from appshelf import people
+from appshelf import ipa, people
 from helpers import sign_in
 from test_version_removal import saved_versions
 
@@ -183,8 +183,26 @@ def test_short_screen_menu_settings_and_device_profile(web, conn, cfg, clock, tm
                 page.get_by_role('button', name='Сбросить', exact=True).click()
                 assert page.evaluate("localStorage.getItem('appshelf-device-profile')") is None
                 page.goto('https://apps.example/android/public/add/from-shelf?person=1&package=ru.example.app')
-                assert page.get_by_role('button', name='Добавить версии: 2').is_visible()
+                submit = page.get_by_role('button', name='Добавить выбранные версии')
+                choices = page.locator('#copy-versions input[name=digest]')
+                assert submit.is_visible() and choices.count() == 2
+                choices.first.uncheck()
+                assert submit.is_enabled()
+                choices.last.uncheck()
+                assert submit.is_disabled() and page.locator('#copy-versions output').inner_text() == "0.0"
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            personal = db.shelf_for_user(conn, 1)
+            db.put_app(conn, personal.id, package, "Device choice", "fdroid", package, clock.iso())
+            db.add_version(conn, fetch.shelf_root(cfg, personal), personal.id, package,
+                           db.NewApk("9", 9, 36, 35, "arm64-v8a", "0" * 64,
+                                     "fdroid", 10, "a" * 64, f"{package}-9"), clock.iso())
+            page.evaluate("""localStorage.setItem('appshelf-device-profile',
+                JSON.stringify({sdk: 36, abi: 'arm64-v8a'}))""")
+            page.goto('https://apps.example/android/add?q=device')
+            history = page.locator('[data-fdroid-builds][data-history]')
+            playwright.expect(history.locator(f'option[value="{package}@9"]')).to_be_disabled()
+            playwright.expect(history).to_have_value(package + '@7')
+            assert 'Источник обновлений сохранится' in page.locator('[data-build-hint]').inner_text()
             assert not errors
         finally:
             browser.close()
@@ -553,8 +571,14 @@ def test_android_version_picker_updates_download_details_and_qr(web, make_web, c
             folder = root / f"{pkg}-{code}"
             folder.mkdir(parents=True)
             (folder / "icon.png").write_bytes(png_bytes(40))
+            digest = str(code) * 64
+            if code == 1:
+                apk_path = folder / db.apk_name(pkg, "1.0")
+                with apk_path.open("wb") as output:
+                    output.truncate(10485760)
+                digest = ipa.sha256(apk_path)
             db.add_version(conn, root, shelf.id, pkg, db.NewApk(f"{code}.0", code, 23 if code == 1 else 28,
-                           22 if code == 1 else 35, "", signer, "link", 10485760, str(code) * 64,
+                           22 if code == 1 else 35, "", signer, "link", 10485760, digest,
                            folder.name, True), clock.iso())
         assert db.accept_pending(conn, root, shelf.id, pkg)
     pin.set_pin(conn, "482913", clock.iso())

@@ -198,6 +198,31 @@ def test_state_mismatch_refused(gw, conn, cfg, clock):
     assert people.google_by_sub(conn, "g-1") is None and not gw.client.cookies.get(AUTH)
 
 
+@pytest.mark.parametrize("older_first", [False, True])
+def test_callback_in_old_tab_preserves_current_login(gw, conn, clock, older_first):
+    invite(gw, conn, clock)
+    old, new = start(gw.client), start(gw.client)
+    gw.http.token = id_token(nonce=new["nonce"][0], sub="g-1", aud=CID)
+    for flow in ((old, new) if older_first else (new, old)):
+        r = gw.client.get("/google/callback", params={"code": "c", "state": flow["state"][0]},
+                          follow_redirects=False)
+        assert r.status_code == (400 if flow is old else 303)
+    assert gw.client.cookies.get(AUTH) and people.google_by_sub(conn, "g-1") is not None
+
+
+def test_cancelled_add_google_can_be_retried_for_same_participant(gw, conn, cfg, clock):
+    sign_in(gw.client, cfg, conn, clock, 1)
+    flow = start(gw.client, "/apple", 1)
+    page = gw.client.get("/google/callback", params={"state": flow["state"][0], "error": "access_denied"})
+    assert page.status_code == 400 and 'add=1&amp;person=1' in page.text and "Добавить Google" in page.text
+    retry = gw.client.get("/google/start", params={"next": "/apple", "add": 1, "person": 1},
+                          headers={"Sec-Fetch-Site": "same-origin"}, follow_redirects=False)
+    q = parse_qs(urlsplit(retry.headers["location"]).query)
+    gw.http.token = id_token(nonce=q["nonce"][0], sub="g-1", aud=CID)
+    result = gw.client.get("/google/callback", params={"code": "c", "state": q["state"][0]}, follow_redirects=False)
+    assert result.status_code == 303 and people.google_by_sub(conn, "g-1").user_id != 1
+
+
 def test_bad_id_token_is_google_error(gw, conn, cfg, clock, capsys):
     invite(gw, conn, clock)
     r = google_login(gw, email_verified=False)

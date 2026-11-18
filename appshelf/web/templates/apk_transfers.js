@@ -390,7 +390,9 @@
         return item && typeof item.id === 'string' && typeof item.filename === 'string' &&
           typeof item.updated_at === 'string' && Number.isFinite(item.received) && Number.isFinite(item.size);
       })) throw new Error('invalid pending uploads');
-      var local = new Set((await read()).map(function (r) { return r.session; }));
+      var local = new Set((await read()).filter(function (r) {
+        return r.owner === currentUser && r.state !== 'done';
+      }).map(function (r) { return r.session; }));
       items = value.uploads.filter(function (item) { return !local.has(item.id); });
     } catch (error) {
       failure.hidden = false; section.hidden = false; return;
@@ -399,13 +401,21 @@
     var ids = new Set(items.map(function (item) { return item.id; }));
     pendingRows.forEach(function (row, id) { if (!ids.has(id)) { row.remove(); pendingRows.delete(id); } });
     items.forEach(function (item) {
-      if (pendingRows.has(item.id)) return;
+      var progress = size(item.received) + ' из ' + size(item.size) + (item.mine ? '' : ' · ' + item.person) +
+        ' · ' + item.updated_at.slice(0, 16).replace('T', ' ') + ' UTC';
+      var existing = pendingRows.get(item.id);
+      if (existing) {
+        var line = existing.querySelector('[data-pending-progress]');
+        line.textContent = progress;
+        return;
+      }
       var row = document.createElement('div'), body = document.createElement('div'), title = document.createElement('b');
-      var meta = document.createElement('div'), button = document.createElement('button');
+      var meta = document.createElement('div'), error = document.createElement('div');
+      var button = document.createElement('button');
       row.className = 'row'; body.className = 'body'; meta.className = 'meta';
       title.textContent = item.filename;
-      meta.textContent = size(item.received) + ' из ' + size(item.size) + (item.mine ? '' : ' · ' + item.person) +
-        ' · ' + item.updated_at.slice(0, 16).replace('T', ' ') + ' UTC';
+      meta.textContent = progress; meta.setAttribute('data-pending-progress', '');
+      error.className = 'meta err';
       button.type = 'button'; button.className = 'secondary sm'; button.textContent = 'Отменить';
       button.setAttribute('aria-label', 'Отменить загрузку ' + item.filename);
       button.onclick = async function () {
@@ -417,12 +427,11 @@
           if (result.ok || result.status === 404) {
             row.remove(); pendingRows.delete(item.id); section.hidden = !pendingRows.size; return;
           }
-          meta.textContent = await problem(result) || 'Не удалось отменить загрузку (HTTP ' + result.status + ')';
-          meta.className = 'meta err';
-        } catch (error) { meta.textContent = 'Нет связи с сервером. Повторите отмену позже'; meta.className = 'meta err'; }
+          error.textContent = await problem(result) || 'Не удалось отменить загрузку (HTTP ' + result.status + ')';
+        } catch (_) { error.textContent = 'Нет связи с сервером. Повторите отмену позже'; }
         button.disabled = false;
       };
-      body.append(title, meta); row.append(body, button); list.append(row); pendingRows.set(item.id, row);
+      body.append(title, meta, error); row.append(body, button); list.append(row); pendingRows.set(item.id, row);
     });
     section.hidden = !pendingRows.size;
   }

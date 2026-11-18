@@ -69,7 +69,8 @@ def log_login_error(e: IpatoolError, step: int) -> None:
 
 
 def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", next_: str = "/", error: str = "",
-               status_code: int = 200, action: str = "/login", add: bool = False, link: str = ""):
+               status_code: int = 200, action: str = "/login", add: bool = False, link: str = "",
+               google_retry: int | None = None):
     """Форма входа. Страницы входа открыты без cookie, но человек может быть уже вошедшим: «Добавить Apple ID»
     рисуется с шапкой, а приглашение предупреждает, что новый Apple ID станет другим участником."""
     if not hasattr(request.state, "user"):  # middleware сюда не заходил — вошедших ищем сами
@@ -82,7 +83,7 @@ def login_page(w: WebCtx, request: Request, *, step: int = 1, email: str = "", n
         public_pin = not add and pin.is_set(c) and android_db.public_shelf(c) is not None
     return w.page(request, "login.html", "apple" if add else "login", status_code, step=step, email=email,
                   next=safe_next(next_), error=error, action=action, add=add, link=link,
-                  invited=bool(w.cookie(request, INVITE_COOKIE)), public_pin=public_pin)
+                  invited=bool(w.cookie(request, INVITE_COOKIE)), public_pin=public_pin, google_retry=google_retry)
 
 
 def signed_in(w: WebCtx, request: Request, resp, user, aid: int | None, how: str = ""):
@@ -227,7 +228,7 @@ def complete(w: WebCtx, request: Request, intent: Intent, info: dict, next_: str
             store.enqueue_once(c, aid, "check_removed", None, now)
         user = people.get_user(c, uid)
     if done is not None:
-        done((uid, aid))
+        done((uid, aid, user.epoch))
     # первый вход владельца — его регистрация, а не новое устройство
     return admitted(w, request, user, aid, next_, "" if intent.owner else f"Apple ID {intent.email}")
 
@@ -318,10 +319,13 @@ def register_routes(app: FastAPI, w: WebCtx) -> None:
         try:
             intent, info = w.flow.finish(flow_id, code)
         except LoginFinished as e:  # браузер бросил ответ первого запроса вместе с cookie входа
-            uid, aid = e.outcome
+            uid, aid, epoch = e.outcome
             with w.conn() as c:
                 user = people.get_user(c, uid)
-            return admitted(w, request, user, aid, next) if user is not None else again(EXPIRED_STEP, 400)
+                account = people.get_account(c, aid)
+            if user is None or user.epoch != epoch or account is None or account.user_id != uid:
+                return again(EXPIRED_STEP, 400)
+            return admitted(w, request, user, aid, next)
         except LoginCodeMismatch as e:  # чужой запрос с тем же flow_id — как неверный код
             w.limiter.fail()
             w.limiter.email_fail(e.email)
