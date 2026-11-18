@@ -1,7 +1,5 @@
 import re
 
-from starlette.testclient import TestClient
-
 from appshelf import people, store
 from helpers import HOST, current_shelf, make_account, seed_app, set_session, sign_in
 
@@ -14,7 +12,7 @@ def petr(conn, clock):
 
 def member_client(web, cfg, conn, clock):
     p = petr(conn, clock)
-    client = TestClient(web.app, base_url=BASE)
+    client = web.new_browser()
     sign_in(client, cfg, conn, clock, p.user_id)
     return p, client
 
@@ -71,7 +69,7 @@ def test_people_show_their_numbers(web, conn, clock):
 def test_disabled_invite_stops_working(web, conn, clock):
     token = people.create_link(conn, people.INVITE, "все", None, clock.iso())
     web.client.post(f"/admin/invites/{people.list_invites(conn)[0]['id']}/disable")
-    assert TestClient(web.app, base_url=BASE).get(f"/join/{token}").status_code == 400
+    assert web.new_browser().get(f"/join/{token}").status_code == 400
     assert "отключена" in web.client.get("/admin").text
 
 
@@ -85,7 +83,7 @@ def test_delete_invite_removes_it_from_list(web, conn, cfg, clock):
     r = web.client.post(f"/admin/invites/{invite_id}/delete", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/admin"
     assert "Кирилл-дубль" not in web.client.get("/admin").text and people.list_invites(conn) == []
-    assert TestClient(web.app, base_url=BASE).get(f"/join/{token}").status_code == 400
+    assert web.new_browser().get(f"/join/{token}").status_code == 400
     assert people.get_user(conn, p.user_id) is not None and people.invite_of(conn, p.user_id) is None
 
 
@@ -93,7 +91,7 @@ def test_login_link_for_member(web, conn, cfg, clock):
     p = petr(conn, clock)
     r = web.client.post(f"/admin/users/{p.user_id}/login-link")
     [link] = re.findall(rf"{re.escape(BASE)}/l/[\w-]+", r.text)
-    anon = TestClient(web.app, base_url=BASE)
+    anon = web.new_browser()
     assert "Войти как Пётр" in anon.get(link.removeprefix(BASE)).text
     assert anon.post(link.removeprefix(BASE), follow_redirects=False).status_code == 303
     assert "petr@example" in anon.get("/").text
@@ -137,7 +135,7 @@ def test_delete_member_can_disable_their_invite(web, conn, cfg, clock):
     assert "Отключить приглашение «Пете»" in page and " checked>" in page   # пришёл им один — галочка сразу
     web.client.post(f"/admin/users/{p.user_id}/delete", data={"disable_invite": "1"})
     assert people.get_user(conn, p.user_id) is None and people.active_invite(conn, token) is None
-    assert TestClient(web.app, base_url=BASE).get(f"/join/{token}").status_code == 400
+    assert web.new_browser().get(f"/join/{token}").status_code == 400
 
 
 def test_shared_invite_is_not_disabled_silently(web, conn, cfg, clock):

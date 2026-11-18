@@ -165,6 +165,15 @@ def make_web(clock, request):
         # Browser tests start the app's lifespan in their own HTTP server.
         if not request.node.get_closest_marker("integration"):
             clients.enter_context(wb.client)
+
+        def new_browser():
+            # Another cookie jar on the same running server, with its existing lifespan.
+            client = ShelfClient(wb.app, base_url=wb.client.base_url)
+            client.portal = wb.client.portal
+            clients.callback(client.close)
+            return client
+
+        wb.new_browser = new_browser
         return wb
     with ExitStack() as clients:
         yield make

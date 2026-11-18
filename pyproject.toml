@@ -33,7 +33,6 @@ include = ["appshelf*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Шесть процессов укладываются в 60 с; профиль показывает повторную сборку маршрутов FastAPI.
 # --dist loadfile оставляет весь модуль на одном процессе.
 addopts = "-n 6 --dist loadfile -m 'not integration and not manual'"
 # pytest-timeout: зависший тест падает за 30 с со стеком, а не держит прогон

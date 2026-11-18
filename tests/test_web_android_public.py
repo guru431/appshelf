@@ -80,12 +80,12 @@ def fast_hash(monkeypatch):
 
 
 @pytest.fixture
-def member(make_web, cfg, conn, clock, acct):
+def member(web, cfg, conn, clock):
     """Другой браузер: вошёл только участник, владелец — нет."""
     petr = make_account(conn, clock, email="petr@example", role="member", legacy=False)
-    wb = make_web(cfg, conn)
-    sign_in(wb.client, cfg, conn, clock, petr.user_id)
-    return wb
+    client = web.new_browser()
+    sign_in(client, cfg, conn, clock, petr.user_id)
+    return client
 
 
 def work(web, conn):
@@ -104,21 +104,21 @@ def add_public(web, conn, tmp_path, url=URL, **apk):
 
 
 def test_member_sees_public_shelf_read_only(web, member, conn, tmp_path):
-    assert member.client.get("/android/public/add?q=example").status_code == 403
-    assert member.client.get("/android/public/search?q=example").status_code == 403
-    assert member.client.post("/android/public/add/source", data={"source": "github", "ref": "example/app"}).status_code == 403
+    assert member.get("/android/public/add?q=example").status_code == 403
+    assert member.get("/android/public/search?q=example").status_code == 403
+    assert member.post("/android/public/add/source", data={"source": "github", "ref": "example/app"}).status_code == 403
     shelf = add_public(web, conn, tmp_path)
-    r = member.client.get("/android/public")
+    r = member.get("/android/public")
     assert r.status_code == 200 and f"/d/{shelf.shelf}/{PKG}-1/{PKG}-1.0.apk" in r.text
     assert "Действия" not in r.text and "/android/public/add" not in r.text and "Гостевой доступ" not in r.text
-    assert 'href="/android/public"' in member.client.get("/android").text                 # вкладка «Публичная»
+    assert 'href="/android/public"' in member.get("/android").text                 # вкладка «Публичная»
     for path, data in (("/android/public/add/rustore", {"package": "ru.other", "name": ""}),
                        ("/android/public/add/link", {"url": URL, "name": ""}),
                        (f"/android/public/apps/{PKG}/remove", {}), (f"/android/public/apps/{PKG}/check", {}),
                        (f"/android/public/apps/{PKG}/source", {"source": "rustore", "ref": ""}),
                        ("/android/public/pin", {"pin": "123456"}), ("/android/public/pin/reopen", {})):
-        assert member.client.post(path, data=data).status_code == 403, path
-    r = member.client.post("/android/public/add/upload", data={"name": ""}, files={"file": ("a.apk", b"x")})
+        assert member.post(path, data=data).status_code == 403, path
+    r = member.post("/android/public/add/upload", data={"name": ""}, files={"file": ("a.apk", b"x")})
     assert r.status_code == 403
     assert conn.execute("SELECT COUNT(*) FROM android_jobs WHERE status='queued'").fetchone()[0] == 0
     assert db.get_app(conn, shelf.id, PKG) is not None and not pin.is_set(conn)
@@ -158,7 +158,7 @@ def test_public_add_pages_mark_add_tab_current(web, conn, tmp_path):
 def test_remove_from_public_warns_about_guests(web, member, conn, tmp_path):
     shelf = add_public(web, conn, tmp_path)
     assert f'href="/android/public/apps/{PKG}/remove"' in web.client.get("/android/public").text
-    assert member.client.get(f"/android/public/apps/{PKG}/remove").status_code == 403
+    assert member.get(f"/android/public/apps/{PKG}/remove").status_code == 403
     page = web.client.get(f"/android/public/apps/{PKG}/remove")
     assert page.status_code == 200 and "пропадёт с публичной полки и у гостей" in page.text
     assert 'href="/android/public"' in page.text and "<li>1.0 · " in page.text
@@ -233,7 +233,7 @@ def test_copy_failure_does_not_reveal_owner_shelf_token(web, member, cfg, conn, 
     app = db.get_app(conn, db.public_shelf(conn).id, PKG)
     assert job["status"] == "error" and "недоступен" in job["error"] and "недоступен" in app["last_error"]
     assert mine.shelf not in job["error"] and mine.shelf not in app["last_error"]
-    assert mine.shelf not in member.client.get("/android/public").text
+    assert mine.shelf not in member.get("/android/public").text
 
 
 def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn, clock, tmp_path):
@@ -245,15 +245,14 @@ def test_copy_only_owner_shelf_even_when_member_is_active(web, member, cfg, conn
     web.client.get(f"/who/{uid}")
     assert "Личное приложение" in web.client.get("/android/public/add").text
     assert web.client.post("/android/public/add/from-shelf", data={"package": "ru.foreign"}).status_code == 404
-    assert member.client.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 403
+    assert member.post("/android/public/add/from-shelf", data={"package": PKG}).status_code == 403
     assert web.client.post(COPY, data=copy_data(web)).status_code == 200
     job = db.take_job(conn)
     assert json.loads(job["payload"])["from_shelf"] == mine.id
 
 
 @pytest.mark.parametrize("existing", [False, True])
-def test_copy_history_makes_old_versions_available_to_public_guests(web, member, make_web, cfg, conn, clock,
-                                                                  tmp_path, existing):
+def test_copy_history_makes_old_versions_available_to_public_guests(web, member, conn, clock, tmp_path, existing):
     mine = add_personal(web, conn, tmp_path)
     if existing:
         web.client.post(COPY, data=copy_data(web))
@@ -278,8 +277,8 @@ def test_copy_history_makes_old_versions_available_to_public_guests(web, member,
     assert view.current["version_code"] == 3 and view.pending is None
     assert {v["sha256"] for v in view.versions} == {v["sha256"] for v in db.list_apps(conn, mine.id)[0].versions}
     pin.set_pin(conn, "482913", clock.iso())
-    guest = make_web(cfg, conn)
-    guest.client.post("/p", data={"pin": "482913"})
+    guest = web.new_browser()
+    guest.post("/p", data={"pin": "482913"})
 
     class VersionOptions(HTMLParser):
         def __init__(self, html):
@@ -292,7 +291,7 @@ def test_copy_history_makes_old_versions_available_to_public_guests(web, member,
             if tag == "option" and "data-link" in attrs:
                 self.links.append(attrs["data-link"])
 
-    for client, page in ((web.client, "/android/public"), (member.client, "/android/public"), (guest.client, "/p")):
+    for client, page in ((web.client, "/android/public"), (member, "/android/public"), (guest, "/p")):
         links = VersionOptions(client.get(page).text).links
         assert len(links) == 3
         old = client.get(links[-1], follow_redirects=False)
@@ -419,13 +418,12 @@ def test_pin_change_before_shelf_creation_revokes_guest_cookie(web, conn, clock)
     assert pin.try_pin(conn, "ip:x", "111111", clock.iso()).result == "ok"
 
 
-def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, clock, tmp_path, make_web,
-                                                               monkeypatch):
+def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, clock, tmp_path, monkeypatch):
     shelf = add_public(web, conn, tmp_path)
     web.client.post("/android/public/pin", data={"pin": "482913"})
-    guest = make_web(cfg, conn)
-    guest.client.post("/p", data={"pin": "482913"})
-    old_cookie = guest.client.cookies.get(GUEST)
+    guest = web.new_browser()
+    guest.post("/p", data={"pin": "482913"})
+    old_cookie = guest.cookies.get(GUEST)
     real_replace = fetch.os.replace
 
     def interrupted(src, dst):
@@ -441,16 +439,16 @@ def test_pin_and_pending_rotation_survive_failure_before_rename(web, cfg, conn, 
     assert pending.shelf == shelf.shelf and pending.shelf_next
     assert pin.try_pin(conn, "ip:x", "111111", clock.iso()).result == "ok"
     assert not pin.guest_ok(web.app.state.w.key, old_cookie, pin.epoch(conn), clock.iso())
-    assert guest.client.get("/p").status_code == 503
-    assert guest.client.post("/p", data={"pin": "111111"}).status_code == 503
+    assert guest.get("/p").status_code == 503
+    assert guest.post("/p", data={"pin": "111111"}).status_code == 503
     old_link = f"/apk/{shelf.shelf}/{PKG}.apk"
-    assert guest.client.get(old_link).status_code == 404
+    assert guest.get(old_link).status_code == 404
     jobs.move_shelves(cfg, conn)
     new = db.public_shelf(conn)
     assert new.shelf == pending.shelf_next and new.shelf_next == ""
     assert not (cfg.archive / shelf.shelf).exists()
-    guest.client.post("/p", data={"pin": "111111"})
-    page = guest.client.get("/p").text
+    guest.post("/p", data={"pin": "111111"})
+    page = guest.get("/p").text
     assert f"/d/{new.shelf}/" in page and f"/d/{shelf.shelf}/" not in page
 
 
@@ -467,8 +465,8 @@ def test_reopen_button_only_for_owner(web, member, conn, clock):
         pin.try_pin(conn, f"ip:198.51.100.{i}", "000000", clock.iso())
     page = web.client.get("/android/public").text
     assert "Ввод PIN закрыт до" in page and 'action="/android/public/pin/reopen"' in page
-    assert "/android/public/pin/reopen" not in member.client.get("/android/public").text
-    assert member.client.post("/android/public/pin/reopen").status_code == 403 and pin.closed_until(conn, clock.iso())
+    assert "/android/public/pin/reopen" not in member.get("/android/public").text
+    assert member.post("/android/public/pin/reopen").status_code == 403 and pin.closed_until(conn, clock.iso())
     r = web.client.post("/android/public/pin/reopen", follow_redirects=False)
     assert r.status_code == 303 and pin.closed_until(conn, clock.iso()) == ""
 
